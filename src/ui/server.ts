@@ -88,7 +88,31 @@ function chooseFolderMac(): string | null {
   return r.stdout.trim().replace(/\/$/, '');
 }
 
+function localOrigin(req: http.IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin || Array.isArray(origin)) return !origin;
+  try {
+    const u = new URL(origin);
+    const port = String(req.socket.localPort ?? '');
+    const hostOk = u.hostname === '127.0.0.1' || u.hostname === 'localhost';
+    const portOk = u.port === '' || u.port === port;
+    return u.protocol === 'http:' && hostOk && portOk;
+  } catch {
+    return false;
+  }
+}
+
+function insideDir(parent: string, child: string): boolean {
+  const base = path.resolve(parent);
+  const target = path.resolve(child);
+  return target === base || target.startsWith(base + path.sep);
+}
+
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+  if (!localOrigin(req)) {
+    send(res, 403, { error: '只接受本机这个页面的请求' });
+    return;
+  }
   if (req.method === 'GET' && url.pathname === '/api/state') {
     const raw = url.searchParams.get('root') || lastRoot() || process.cwd();
     const root = resolveProjectRoot(raw);
@@ -297,7 +321,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     let target = st.worktree && st.worktreeExists ? st.worktree : root;
     if (body.file) {
       const dir = resolveDeskDir(st.root, st.fileSide, st.fileRel, st.worktree);
-      target = path.join(dir, body.file);
+      const next = path.resolve(dir, body.file);
+      if (!insideDir(dir, next)) {
+        send(res, 400, { error: '文件不在这个文件夹里' });
+        return;
+      }
+      target = next;
     } else if (body.side) {
       target = st.filePath;
     }

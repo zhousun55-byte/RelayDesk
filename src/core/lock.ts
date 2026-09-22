@@ -99,6 +99,22 @@ export function releaseLock(wt: string): void {
   if (fs.existsSync(p)) fs.rmSync(p);
 }
 
+/** 交接期间占住这把锁，盖住审计和门禁的等待。只放自己写下的那把。 */
+export function holdForHandoff(wt: string, agent: string): void {
+  const existing = readLock(wt);
+  if (existing && !isAppLock(existing) && pidAlive(existing.pid) && existing.pid !== process.pid) {
+    throw new Error(
+      `「${existing.agent}」的会话仍在运行（pid ${existing.pid}）。handoff 前须等它退出。`
+    );
+  }
+  writeLock(wt, agent, 'cli');
+}
+
+export function releaseLockIfOwner(wt: string): void {
+  const lock = readLock(wt);
+  if (lock && lock.pid === process.pid) releaseLock(wt);
+}
+
 /**
  * CLI 活锁检查：pid 活 → 拒绝；pid 死 → 清除（陈旧）。App 软锁不看 pid，此处直接放行——
  * 是否拒绝由各命令语义决定（run/open/rollback 用 assertNoAppSoftLock 拒绝；

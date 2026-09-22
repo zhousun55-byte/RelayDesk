@@ -5,10 +5,19 @@ import { RELAY_IDENTITY, commitAll, git, gitOk, repoRootAt } from '../core/git';
 import { blockingMainStatus, SIDE_PATHS } from '../core/side';
 import { loadRelayConfig } from '../core/config';
 import { appendEvent, lastGate, readEvents } from '../core/journal';
+import type { JournalEvent } from '../core/types';
 import { assertNoLiveLock, isAppLock, readLock, releaseLock } from '../core/lock';
 import { globToRegExp } from '../core/protected';
 import { buildMergeMessage } from '../core/handoff';
 import { clearSession, requireSession } from '../core/session';
+
+function lastHandoff(events: JournalEvent[]): Extract<JournalEvent, { type: 'handoff' }> | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type === 'handoff') return ev;
+  }
+  return null;
+}
 
 /** 简易 glob 的正则构造见 core/protected.ts；merge 自身的 diff 语义不变。 */
 export function mergeCommand(): Command {
@@ -43,6 +52,28 @@ export function mergeCommand(): Command {
     if ((!g || g.status === 'fail') && !opts.force) {
       const why = !g ? 'journal 中没有门禁记录（未执行过 handoff？）' : `门禁未通过（${g.command}）`;
       throw new Error(`${why}。确认接受后可用 relay merge --force。`);
+    }
+    if (!opts.force) {
+      const hand = lastHandoff(events);
+      if (hand) {
+        const after = gitOk(wt, [
+          'diff',
+          '--name-only',
+          `${hand.checkpoint}..HEAD`,
+          '--',
+          '.',
+          ':(exclude).relay',
+        ]).trim();
+        if (after) {
+          throw new Error('检查点之后又有业务改动。先再交接，门禁才对得上这次的内容。');
+        }
+      }
+      const wtDirty = blockingMainStatus(git(wt, ['status', '--porcelain']).stdout)
+        .split('\n')
+        .filter((line) => line.slice(3).trim() !== '.relay/session.lock')
+        .join('\n')
+        .trim();
+      if (wtDirty) throw new Error('隔离现场还有没提交的改动。先交接。');
     }
 
     // 保护路径：命中 → 拒绝（除非 --force）
@@ -81,12 +112,16 @@ export function mergeCommand(): Command {
     }
 
     // 剥离会话文件（协议三）：只允许 config.json 进主线
-    const strip = ['.relay/task.md', '.relay/handoff.md', '.relay/journal.jsonl', '.relay/ONBOARD.md', ...SIDE_PATHS];
+    const strip = ['.relay/task.md', '.relay/handoff.md', '.relay/journal.jsonl', '.relay/ONBOARD.md'];
     if (!opts.keepAudits) strip.push('.relay/audits');
     for (const p of strip) {
       git(root, ['reset', '-q', 'HEAD', '--', p]);
       const abs = path.join(root, p);
       if (fs.existsSync(abs)) fs.rmSync(abs, { recursive: true, force: true });
+    }
+    // 群聊文件如果被 squash 带进暂存，只撤出暂存。不删工作区里已经在用的记录。
+    for (const p of SIDE_PATHS) {
+      git(root, ['reset', '-q', 'HEAD', '--', p]);
     }
 
     const staged = git(root, ['diff', '--cached', '--name-only']).stdout;

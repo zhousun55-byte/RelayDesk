@@ -1,7 +1,8 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { Command } from 'commander';
 import { commitAll, gitOk, repoRootAt } from '../core/git';
-import { appendEvent, checkpoints, readEvents } from '../core/journal';
+import { appendEvent, checkpoints, journalPath, readEvents } from '../core/journal';
 import { assertNoAppSoftLock, assertNoLiveLock } from '../core/lock';
 import { requireSession } from '../core/session';
 
@@ -38,8 +39,14 @@ export function rollbackCommand(): Command {
       throw new Error(`${sha} 不是有效检查点。relay rollback 查看可选列表。`);
     }
 
+    const journalFile = journalPath(wt);
+    const prior = fs.existsSync(journalFile) ? fs.readFileSync(journalFile) : null;
     gitOk(wt, ['reset', '--hard', target.sha]);
     gitOk(wt, ['clean', '-fd']);
+    if (prior) {
+      fs.mkdirSync(path.dirname(journalFile), { recursive: true });
+      fs.writeFileSync(journalFile, prior);
+    }
     appendEvent(wt, {
       ts: new Date().toISOString(),
       type: 'rollback',
