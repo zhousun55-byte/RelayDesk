@@ -246,12 +246,24 @@ function fillWinList(box, rows) {
   });
 }
 
+function recordedWho(s) {
+  const legs = s.legs || [];
+  const here = legs.find((l) => l.state === "here" && l.who);
+  if (here) return here.who;
+  const hand = legs.find((l) => l.id === "hand" && l.who);
+  if (hand) return hand.who;
+  const work = legs.find((l) => l.id === "work" && l.who);
+  return work ? work.who : "";
+}
+
 function renderWindows(s) {
   const all = knownWindows(s);
   const front = all.find((w) => w.on) || all[0];
   const rest = all.filter((w) => w !== front);
-  const brain = brainText((front && front.brain) || s.llmHint || s.llmLabel || "");
-  if (has("who-win")) $("who-win").textContent = front ? front.label : s.who || "未识别";
+  const onTalk = document.body.classList.contains("on-talk");
+  const brain = onTalk ? brainText((front && front.brain) || s.llmHint || s.llmLabel || "") : "";
+  const recorded = recordedWho(s);
+  if (has("who-win")) $("who-win").textContent = onTalk ? (front ? front.label : s.who || "未识别") : recorded || "还没上岗";
   if (has("who-brain")) $("who-brain").textContent = brain;
   const fold = $("win-fold");
   const more = $("win-rest");

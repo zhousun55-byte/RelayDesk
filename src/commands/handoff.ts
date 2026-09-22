@@ -53,6 +53,15 @@ async function finishHandoff(
   // 1. 检查点先行：尊重 .gitignore 后 add -A（协议二）。agent 新建的未跟踪文件先入库，
   //    之后审计 / 事实段 / 保护路径一律比 base..checkpointSha 两份提交——
   //    不再有「未跟踪文件只有文件名、没有内容」的盲区，两份事实不会不一致。
+  const pending = git(wt, ['status', '--porcelain']).stdout
+    .split('\n')
+    .map((line) => line.slice(3).trim())
+    .filter((file) => file !== '' && !file.startsWith('.relay'));
+  const already = git(wt, ['diff', '--name-only', `${base}..HEAD`, '--', '.', ':(exclude).relay']).stdout.trim();
+  if (pending.length === 0 && already === '') {
+    throw new Error('还没有改动。先在窗口里做，再交接。');
+  }
+
   const iso = new Date().toISOString();
   const committed = commitAll(wt, `relay: checkpoint ${agent} ${iso}`);
   const checkpointSha = committed ?? gitOk(wt, ['rev-parse', 'HEAD']);

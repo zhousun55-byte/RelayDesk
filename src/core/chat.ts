@@ -139,7 +139,7 @@ export function buildLegs(
   };
   const has = (type: JournalEvent['type']) => events.some((e) => e.type === type);
   const work = has('open') || has('run') || phase === 'working' || phase === 'handed';
-  const hand = has('handoff') || phase === 'handed';
+  const hand = has('handoff');
   const lastAudit = [...events].reverse().find((e) => e.type === 'audit');
   const review = lastAudit?.status === 'ok';
   const merge = has('merge');

@@ -20,6 +20,16 @@ test('群聊：同一窗口换模型，两条人话能分开', () => {
   assert.equal(lines[4].who, 'Cursor · GLM 5.3');
 });
 
+test('只打开窗口时，总结不是当前步，交接上没有人', () => {
+  const legs = buildLegs('working', [
+    { ts: 't0', type: 'start', task: 'x', branch: 'b', commit: 's' },
+    { ts: 't1', type: 'open', agent: 'cursor', tier: 'strong', llm: 'grok-4.7' },
+  ]);
+  assert.equal(legs.find((l) => l.id === 'work')?.state, 'here');
+  assert.equal(legs.find((l) => l.id === 'hand')?.who, '');
+  assert.equal(legs.find((l) => l.id === 'merge')?.state, 'wait');
+});
+
 test('接力条：干活到总结，没有开会', () => {
   const legs = buildLegs('idle', []);
   assert.deepEqual(

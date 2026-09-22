@@ -424,8 +424,6 @@ export function loadDeskState(
   const g = lastGate(events);
   const a = lastAudit(events);
   const run = lastRun(events);
-  const handed = exists && dirtyCount === 0 && g?.status === 'pass' && events.some((e) => e.type === 'handoff');
-  const phase: DeskPhase = handed ? 'handed' : 'working';
 
   let latestAudit: DeskState['latestAudit'] = null;
   if (a) {
@@ -435,6 +433,12 @@ export function loadDeskState(
   const handoff = exists ? readSafe(path.join(wt, '.relay', 'handoff.md')) : null;
   const base = session.baseCommit;
   const head = exists ? git(wt, ['rev-parse', 'HEAD']).stdout : '';
+  const businessDiff =
+    exists && head ? git(wt, ['diff', '--name-only', `${base}..${head}`, '--', '.', ':(exclude).relay']) : null;
+  const business = businessDiff && businessDiff.code === 0 ? businessDiff.stdout.trim() : '';
+  const handed =
+    exists && dirtyCount === 0 && g?.status === 'pass' && events.some((e) => e.type === 'handoff') && business !== '';
+  const phase: DeskPhase = handed ? 'handed' : 'working';
   const diff =
     exists && head
       ? git(wt, ['diff', `${base}..${head}`, '--', '.', ':(exclude).relay']).stdout
