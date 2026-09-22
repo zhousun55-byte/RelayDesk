@@ -10,6 +10,7 @@ const PATTERNS: RegExp[] = [
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
   /\b(api[_-]?key|secret|token|access[_-]?token)\s*[:=]\s*['"]?[^\s'"]{12,}['"]?/gi,
+  /"(?:api[_-]?key|apiKey|secret|token|access[_-]?token)"\s*:\s*"[^"]+"/gi,
 ];
 
 export function redactSecrets(text: string): string {

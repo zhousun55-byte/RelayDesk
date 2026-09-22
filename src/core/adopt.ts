@@ -33,5 +33,14 @@ export function adoptProject(root: string): string {
     fs.writeFileSync(configPath, JSON.stringify(defaultRelayConfig(), null, 2) + '\n');
   }
   ensureRelayGitignore(gitRoot);
+  const watch = ['.relay/config.json', '.gitignore'];
+  const porcelain = git(gitRoot, ['status', '--porcelain']).stdout;
+  const pending = watch.filter((name) => porcelain.split('\n').some((line) => line.slice(3).trim() === name));
+  if (pending.length > 0) {
+    const add = git(gitRoot, ['add', '--', ...pending]);
+    if (add.code !== 0) throw new Error(`配置没放进仓库：${add.stderr || add.stdout}`);
+    const commit = git(gitRoot, [...RELAY_IDENTITY, 'commit', '-m', 'relay: init']);
+    if (commit.code !== 0) throw new Error(`配置没提交：${commit.stderr || commit.stdout}`);
+  }
   return gitRoot;
 }

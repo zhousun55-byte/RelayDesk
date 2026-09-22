@@ -424,7 +424,7 @@ export function loadDeskState(
   const g = lastGate(events);
   const a = lastAudit(events);
   const run = lastRun(events);
-  const handed = exists && dirtyCount === 0 && g !== null;
+  const handed = exists && dirtyCount === 0 && g?.status === 'pass' && events.some((e) => e.type === 'handoff');
   const phase: DeskPhase = handed ? 'handed' : 'working';
 
   let latestAudit: DeskState['latestAudit'] = null;

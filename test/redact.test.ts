@@ -11,6 +11,7 @@ test('redactSecrets：API key / GitHub token / 私钥块替换为 [REDACTED]', (
     'MIIBOgIBAAJBAK8=',
     '-----END RSA PRIVATE KEY-----',
     'api_key=supersecretvalue99',
+    '"apiKey": "jsonsecretvalue99"',
   ].join('\n');
   const out = redactSecrets(raw);
   assert.ok(!out.includes('sk-abcdefghijklmnopqrstuvwxyz012345'));

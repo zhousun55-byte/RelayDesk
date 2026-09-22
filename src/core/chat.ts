@@ -62,7 +62,7 @@ function baton(from: string, to: string, ts: string): ChatLine {
 
 export function mdSection(md: string, title: string): string {
   const esc = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`##\\s+${esc}\\s*\\n([\\s\\S]*?)(?=\\n##\\s+|$)`);
+  const re = new RegExp(`##\\s+${esc}[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s+|$)`);
   return (md.match(re)?.[1] ?? '').trim();
 }
 
@@ -140,7 +140,8 @@ export function buildLegs(
   const has = (type: JournalEvent['type']) => events.some((e) => e.type === type);
   const work = has('open') || has('run') || phase === 'working' || phase === 'handed';
   const hand = has('handoff') || phase === 'handed';
-  const review = has('audit') || phase === 'handed';
+  const lastAudit = [...events].reverse().find((e) => e.type === 'audit');
+  const review = lastAudit?.status === 'ok';
   const merge = has('merge');
   const here = phase === 'working' ? 'work' : phase === 'handed' ? 'merge' : '';
   const mark = (id: string, done: boolean): 'done' | 'here' | 'wait' => {

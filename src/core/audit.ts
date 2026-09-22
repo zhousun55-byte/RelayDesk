@@ -25,7 +25,9 @@ function stamp(): string {
 
 /** 截断后的已提交 diff（base..checkpoint，不含 .relay）：二进制只记一行；每文件限行；总量限行。锁文件/生成物靠调用方用 .gitignore 处理。 */
 function truncatedDiff(worktree: string, base: string, checkpoint: string): string {
-  const raw = git(worktree, ['diff', `${base}..${checkpoint}`, '--', '.', ':(exclude).relay']).stdout;
+  const rawResult = git(worktree, ['diff', `${base}..${checkpoint}`, '--', '.', ':(exclude).relay']);
+  if (rawResult.code !== 0) return `（读取失败：${rawResult.stderr || rawResult.code}）`;
+  const raw = rawResult.stdout;
   if (raw === '') return '';
   const parts = raw.split(/(?=^diff --git )/m).filter((s) => s.trim() !== '');
   const out: string[] = [];
@@ -80,10 +82,12 @@ export async function runAudit(
 
   // 排除 .relay 自身：会话文件是框架产物，不是 agent 的业务改动
   const range = `${base}..${checkpointSha}`;
+  const stat = git(worktree, ['diff', '--stat', range, '--', '.', ':(exclude).relay']);
   const diffstat =
-    git(worktree, ['diff', '--stat', range, '--', '.', ':(exclude).relay']).stdout || '（无业务改动）';
+    stat.code === 0 ? stat.stdout || '（无业务改动）' : `（读取失败：${stat.stderr || stat.code}）`;
   const committedDiff = truncatedDiff(worktree, base, checkpointSha);
-  const porcelain = git(worktree, ['status', '--porcelain']).stdout;
+  const workStatus = git(worktree, ['status', '--porcelain']);
+  const porcelain = workStatus.code === 0 ? workStatus.stdout : `（读取失败：${workStatus.stderr || workStatus.code}）`;
 
   const facts = [
     '# 审计报告（relay）',

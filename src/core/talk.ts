@@ -44,10 +44,6 @@ function roomKey(root: string): string {
   return path.resolve(root);
 }
 
-function productRoot(): string {
-  return path.resolve(__dirname, '../../..');
-}
-
 export function talkPath(root: string): string {
   return path.join(path.resolve(root), '.relay', 'talk.jsonl');
 }
@@ -458,7 +454,6 @@ export function kickReply(root: string, windowId: string): void {
   asking.add(key);
   bringFront(app);
   writeTalkMd(root);
-  const product = productRoot();
   const history = formatTalkHistory(root);
   const mentioned = (lastHuman(readTalkRows(root))?.at ?? []).includes(windowId);
   const prompt = [
@@ -471,9 +466,9 @@ export function kickReply(root: string, windowId: string): void {
   ].join('\n\n');
   const child = spawn(
     claudeBin(),
-    ['-p', prompt, '--output-format', 'text', '--model', 'opus', '--add-dir', product],
+    ['-p', prompt, '--output-format', 'text', '--model', 'opus'],
     {
-      cwd: root,
+      cwd: os.tmpdir(),
       env: {
         ...process.env,
         PATH: `${path.join(os.homedir(), '.local/bin')}:${process.env.PATH ?? ''}`,

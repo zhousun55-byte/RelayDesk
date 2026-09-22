@@ -31,6 +31,10 @@ test('接力条：干活到总结，没有开会', () => {
 test('总结与自审：handoff 正文抽得出来，没有就不编', () => {
   const md = `## 本段业务改动\n加了一行演示。\n\n## 建议的下一步（模型生成，非事实）\n下一棒看 HELLO。\n`;
   assert.equal(mdSection(md, '本段业务改动'), '加了一行演示。');
+  assert.equal(
+    mdSection('## 本段业务改动（相对上一检查点，不含 .relay）\n加了一行。\n\n## 门禁\n通过\n', '本段业务改动'),
+    '加了一行。'
+  );
   const papers = buildPapers({
     phase: 'handed',
     handoff: md,
