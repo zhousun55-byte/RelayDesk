@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>接力</title>
+    <link rel="stylesheet" href="/desk.css" />
+  </head>
+  <body>
+    <div class="hall">
+      <article class="room">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+
+        <header class="room-bar">
+          <button type="button" class="room-name" id="room-name">接力</button>
+          <div class="fold" id="room-menu">
+            <div class="fold-in"></div>
+          </div>
+          <nav class="room-nav">
+            <button type="button" id="talk-door">群聊</button>
+          </nav>
+        </header>
+
+        <div class="leaf" id="leaf">
+          <aside class="history" id="history">
+            <p class="label">对话</p>
+            <div id="past"></div>
+          </aside>
+          <div class="leaf-main">
+          <section class="stage">
+            <div class="pile" id="pile" aria-label="叠着的窗口"></div>
+            <div class="who-card" id="who-card">
+              <p class="who-win" id="who-win"></p>
+            <p class="who-brain" id="who-brain"></p>
+            <button type="button" id="win-fold" hidden></button>
+            <div id="win-rest" hidden></div>
+            <p class="task-label" id="task" hidden></p>
+            </div>
+          </section>
+          <div class="sheets">
+            <section class="sheet work-sheet">
+              <section class="dockets" id="dockets"></section>
+              <footer class="composer" id="work-composer">
+                <div class="clips" id="work-clips"></div>
+                <div class="actions" id="actions"></div>
+              </footer>
+              <section class="relay-sec">
+                <p class="label">接力</p>
+                <ol class="track" id="track" aria-label="接力" role="progressbar" aria-valuemin="0" aria-valuemax="4" aria-valuenow="0"></ol>
+              </section>
+            </section>
+            <section class="sheet talk-sheet">
+              <div class="talk-who" id="talk-who"></div>
+              <div class="talk" id="talk"></div>
+              <footer class="talk-bar" id="talk-bar">
+                <div class="at-list" id="at-list" hidden></div>
+                <div class="composer-box" id="composer-box">
+                  <div class="clips" id="clips"></div>
+                  <div class="composer-row">
+                    <button type="button" id="talk-add" aria-label="上传">+</button>
+                    <input type="file" id="talk-file" hidden multiple />
+                    <textarea id="talk-input" rows="1" placeholder="消息" autocomplete="off"></textarea>
+                    <button type="button" id="talk-open" class="quiet">稿</button>
+                    <button type="button" id="talk-send">发送</button>
+                  </div>
+                </div>
+              </footer>
+            </section>
+          </div>
+          </div>
+          <aside class="shelf" id="shelf">
+            <p class="label">文件夹</p>
+            <div class="sides" id="rail-sides"></div>
+            <p class="path" id="rail-crumb"></p>
+            <div id="rail-files"></div>
+            <pre id="rail-preview"></pre>
+          </aside>
+        </div>
+
+        <section class="fold" id="cabinet">
+          <div class="fold-in cabinet-in">
+            <div class="sides" id="sides"></div>
+            <p class="path" id="crumb"></p>
+            <div class="drawer">
+              <div id="filelist"></div>
+              <pre id="preview"></pre>
+            </div>
+          </div>
+        </section>
+
+        <p id="toast" class="toast" hidden></p>
+        <p id="current-path" class="sr" data-root=""></p>
+      </article>
+    </div>
+    <script src="/desk.js"></script>
+  </body>
+</html>
