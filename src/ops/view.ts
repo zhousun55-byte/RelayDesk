@@ -3,6 +3,7 @@ import path from 'node:path';
 import { loadRelayConfig } from '../core/config';
 import { envValue } from '../core/env';
 import { errorMessage } from '../core/errors';
+import { gateConfigured } from '../core/gate';
 import { currentBranch, git, mergeBase, mergeInProgress, shortSha } from '../core/git';
 import {
   checkpoints,
@@ -101,6 +102,11 @@ function readText(p: string): string | null {
   }
 }
 
+/** 检查点的说法：「手动终端工具 交接后」「任务开始时」。 */
+function checkpointWords(c: CheckpointInfo): string {
+  return c.label === '交接' ? `${agentLabel(c.agent)} 交接后` : '任务开始时';
+}
+
 function who(ev: { agent?: string; llm?: string }): string {
   const a = ev.agent ? agentLabel(findAgent(ev.agent) ?? ev.agent) : '接力台';
   return ev.llm ? `${a} · ${ev.llm}` : a;
@@ -151,7 +157,8 @@ export function buildTimeline(events: JournalEvent[]): TimelineItem[] {
         const a = pendingAudit?.type === 'audit' ? pendingAudit : null;
         const size = ev.empty ? '没有改动' : ev.files !== undefined ? `${ev.files} 个文件 +${ev.added ?? 0} −${ev.removed ?? 0}` : '有改动';
         const parts = [size];
-        if (g) parts.push(g.status === 'pass' ? `检查通过` : `检查没过`);
+        const checked = g && gateConfigured(g) ? g : null;
+        if (checked) parts.push(checked.status === 'pass' ? `检查通过` : `检查没过`);
         out.push({
           ts: ev.ts,
           kind: ev.type,
@@ -161,7 +168,7 @@ export function buildTimeline(events: JournalEvent[]): TimelineItem[] {
           size,
           sha: ev.checkpoint,
           ...(a ? { report: a.report } : {}),
-          ...(g ? { ok: g.status === 'pass' } : {}),
+          ...(checked ? { ok: checked.status === 'pass' } : {}),
           ...(ev.note || ev.selfNote ? { detail: [ev.note ? `留言：${ev.note}` : '', ev.selfNote ? `自述：${ev.selfNote}` : ''].filter(Boolean).join('\n') } : {}),
         });
         pendingGate = null;
@@ -180,9 +187,11 @@ export function buildTimeline(events: JournalEvent[]): TimelineItem[] {
           ...(ev.commit ? { sha: ev.commit } : {}),
         });
         break;
-      case 'rollback':
-        out.push({ ts: ev.ts, kind: ev.type, text: `退回到 ${shortSha(ev.to)}`, sha: ev.to });
+      case 'rollback': {
+        const cp = checkpoints(events).find((c) => c.sha === ev.to);
+        out.push({ ts: ev.ts, kind: ev.type, text: `退回到${cp ? `「${checkpointWords(cp)}」` : ` ${shortSha(ev.to)}`}`, sha: ev.to });
         break;
+      }
       case 'merge':
         out.push({ ts: ev.ts, kind: ev.type, text: '合回正式文件夹', sha: ev.commit });
         break;
@@ -213,7 +222,7 @@ export function buildTimeline(events: JournalEvent[]): TimelineItem[] {
     }
   }
   // 单独跑的检查（relay gate）没有对应交接，也列出来。
-  if (pendingGate?.type === 'gate') {
+  if (pendingGate?.type === 'gate' && gateConfigured(pendingGate)) {
     out.push({ ts: pendingGate.ts, kind: 'gate', text: pendingGate.status === 'pass' ? '检查通过' : '检查没过', ok: pendingGate.status === 'pass' });
   }
   return out;
@@ -299,7 +308,9 @@ export function loadTaskView(root: string, session: SessionState, cfg: RelayConf
     phaseText = events.some((e) => e.type === 'handoff') ? '目前没有要合回的改动。选一个工人上岗接着干。' : '还没有改动。选一个工人上岗开始干活。';
   } else if (gateEv?.status === 'fail') {
     phase = 'blocked';
-    phaseText = `检查没通过（${gateEv.command}）。让工人修好再交接；确定没问题也可以强制合回。`;
+    phaseText =
+      `检查没通过（${gateEv.command}）${hits.length ? `，还改到了不许改的文件：${hits.join('、')}` : ''}。` +
+      '让工人修好再交接；确定没问题也可以强制合回。';
   } else if (hits.length) {
     phase = 'blocked';
     phaseText = `改到了不许改的文件：${hits.join('、')}。让工人改回来，或者强制合回。`;
@@ -332,7 +343,7 @@ export function loadTaskView(root: string, session: SessionState, cfg: RelayConf
     gate: gateEv ? { status: gateEv.status, command: gateEv.command, ...(gateEv.detail ? { detail: gateEv.detail } : {}), ts: gateEv.ts } : null,
     audit: auditEv ? { path: auditEv.report, status: auditEv.status, ts: auditEv.ts } : null,
     handoffDoc: lastHandoff(events) ? readText(path.join(wt, '.relay', 'handoff.md')) : null,
-    checkpoints: checkpoints(events, session.startCommit),
+    checkpoints: checkpoints(events, session.startCommit).map((c) => ({ ...c, who: checkpointWords(c) })),
     timeline: buildTimeline(events),
     stray,
     conflicts,

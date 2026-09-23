@@ -7,6 +7,7 @@ import { loadAutoSettings, normalizeAutoSettings, type AutoSettings } from '../c
 import { listMembers, loadDetected, resolveTeam, type Member } from '../core/detect';
 import { errorMessage, RelayError } from '../core/errors';
 import { git, mergeBase, mergeInProgress, shortSha } from '../core/git';
+import { gateConfigured } from '../core/gate';
 import { findHarness, locateCached } from '../core/harness';
 import { appendEvent, lastFixReview, lastGate, lastHandoff, lastReview, pendingSyncConflicts, reviewsSinceAuto } from '../core/journal';
 import { chat } from '../core/llm';
@@ -547,7 +548,7 @@ class AutoRunner {
         note: `全自动第 ${round} 轮`,
         ...(finalText?.trim() ? { selfNoteFallback: `（没写 NOTE.md，这是它最后说的话）${finalText.trim().slice(0, 1500)}` } : {}),
       });
-      const gate = r.gate ? (r.gate.status === 'pass' ? '，检查通过' : '，检查没过') : '';
+      const gate = r.gate && gateConfigured(r.gate) ? (r.gate.status === 'pass' ? '，检查通过' : '，检查没过') : '';
       this.end(st, 'ok', r.empty ? '没有改动' : `${r.files} 个文件 +${r.added} −${r.removed}${gate}`);
     } catch (e) {
       this.end(st, 'fail', errorMessage(e));

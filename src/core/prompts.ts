@@ -1,6 +1,7 @@
 import type { ReviewTarget } from './journal';
 import { agentLabel } from './registry';
 import type { Tier } from './types';
+import { stampLocal } from './time';
 
 /** 唯一喂给工人的一句话：让它先去读上岗说明。桌面工人会被复制到剪贴板。 */
 export const ONBOARD_HINT = '请先完整阅读当前文件夹里的 .relay/ONBOARD.md（接力上岗说明），然后按里面的要求开始工作。';
@@ -46,7 +47,7 @@ export function buildOnboard(input: OnboardInput): string {
   s.push(
     `# 上岗说明（接力台）`,
     '',
-    `> 生成于 ${input.generatedAt}。这一棒是你：**${me}**。`,
+    `> 生成于 ${stampLocal(input.generatedAt)}。这一棒是你：**${me}**。`,
     '',
     '## 任务',
     input.taskBody.trim() || input.taskTitle,

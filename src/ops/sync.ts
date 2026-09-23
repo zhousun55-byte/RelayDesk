@@ -35,11 +35,11 @@ export function syncMain(dir: string): SyncResult {
   if (git(wt, ['merge-base', '--is-ancestor', main, 'HEAD']).code === 0) {
     return { status: 'up-to-date', main, conflicts: [] };
   }
-  const r = git(wt, [...RELAY_IDENTITY, 'merge', '--no-ff', '--no-verify', '--no-edit', '-m', `relay: 同步主线 ${shortSha(main)}`, main]);
+  const r = git(wt, [...RELAY_IDENTITY, 'merge', '--no-ff', '--no-verify', '--no-edit', '-m', `接力：同步主线 ${shortSha(main)}`, main]);
   if (r.code === 0) {
     const commit = gitOk(wt, ['rev-parse', 'HEAD']);
     appendEvent(wt, { ts: new Date().toISOString(), type: 'sync', main, commit, worktree: wt });
-    commitAll(wt, 'relay: sync');
+    commitAll(wt, '接力：记下同步');
     return { status: 'merged', main, conflicts: [] };
   }
   const conflicts = unmergedFiles(wt);
@@ -61,5 +61,5 @@ export function abortSync(dir: string): void {
   if (r.code !== 0) throw new RelayError(`撤销失败：${r.stderr || r.stdout}`, 'git');
   const last = [...events].reverse().find((e) => e.type === 'sync');
   appendEvent(wt, { ts: new Date().toISOString(), type: 'sync', main: last?.type === 'sync' ? last.main : '', aborted: true, worktree: wt });
-  commitAll(wt, 'relay: 撤销同步');
+  commitAll(wt, '接力：撤销同步');
 }

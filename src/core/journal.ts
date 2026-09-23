@@ -170,6 +170,8 @@ export interface CheckpointInfo {
   agent: string;
   ts: string;
   label: string;
+  /** 给人看的说法（「Claude Code 交接后」「任务开始时」），网页用。 */
+  who?: string;
 }
 
 /** 可以退回的点：任务开始时 + 每次有改动的交接。 */

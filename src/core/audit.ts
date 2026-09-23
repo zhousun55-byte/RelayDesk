@@ -6,6 +6,7 @@ import { loadDetected } from './detect';
 import { apiUsable, chat } from './llm';
 import { redactSecrets } from './redact';
 import type { ApiSpec, RelayConfig } from './types';
+import { stampLocal } from './time';
 
 export interface AuditResult {
   /** 报告在工作副本里的相对路径（.relay/audits/...）。 */
@@ -132,7 +133,7 @@ export async function runAudit(input: AuditInput): Promise<AuditResult> {
     '',
     `- 任务：${input.taskTitle}`,
     `- 范围：\`${base.slice(0, 9)}..${checkpoint.slice(0, 9)}\`（已提交的业务改动，不含 .relay）`,
-    `- 时间：${new Date().toISOString()}`,
+    `- 时间：${stampLocal(new Date())}`,
     '',
     '## 事实（git 生成，以这里为准）',
     '',

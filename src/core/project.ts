@@ -69,7 +69,7 @@ export function ensureProjectCommitted(root: string): string | null {
   if (dirty.length === 0) return null;
   const add = git(root, ['add', '--', ...dirty]);
   if (add.code !== 0) throw new RelayError(`接力配置没能放进 git：${add.stderr || add.stdout}`, 'git');
-  const c = relayCommit(root, 'relay: 接力配置', ['--', ...dirty]);
+  const c = relayCommit(root, '接力：项目设置', ['--', ...dirty]);
   if (c.code !== 0) throw new RelayError(`接力配置没能提交：${c.stderr || c.stdout}`, 'git');
   return headSha(root);
 }
@@ -101,7 +101,7 @@ export function setupProject(dir: string): { root: string; actions: string[] } {
   if (headSha(root) === null) {
     const add = git(root, ['add', '-A']);
     if (add.code !== 0) throw new RelayError(`没能记录现有文件：${add.stderr || add.stdout}`, 'git');
-    const c = relayCommit(root, 'relay: 建立项目（现有文件存为第一版）', ['--allow-empty']);
+    const c = relayCommit(root, '接力：建立项目（现有文件存为第一版）', ['--allow-empty']);
     if (c.code !== 0) throw new RelayError(`第一版没能存下：${c.stderr || c.stdout}`, 'git');
     actions.push('把现有文件存为第一版');
   } else if (ensureProjectCommitted(root)) {

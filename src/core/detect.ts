@@ -7,7 +7,7 @@ import { findHarness, HARNESSES, harnessForCommand, locateCached, clearLocateCac
 import { apiUsable } from './llm';
 import { relayHome } from './paths';
 import { scanProviders, toApiSpec, type DetectedProvider } from './providers';
-import { agentKind, agentLabel, loadRegistry, registryPath, saveRegistry } from './registry';
+import { agentKind, agentLabel, agentModel, loadRegistry, registryPath, saveRegistry } from './registry';
 import type { AgentConfig } from './types';
 
 /**
@@ -249,6 +249,7 @@ export interface Member {
 }
 
 export function memberModel(a: AgentConfig, report: DetectReport | null): string | undefined {
+  if (a.kind === 'api') return agentModel(a);
   if (a.model?.trim()) return a.model.trim();
   const h = harnessOf(a);
   if (h) {

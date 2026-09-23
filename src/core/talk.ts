@@ -8,7 +8,7 @@ import { fillTemplate } from './launch';
 import { chat } from './llm';
 import { redactSecrets } from './redact';
 import { startRun } from './runner';
-import { agentKind, agentLabel, canTalk, findAgent, OUT_PLACEHOLDER } from './registry';
+import { agentKind, agentLabel, agentModel, canTalk, findAgent, OUT_PLACEHOLDER } from './registry';
 import type { AgentConfig } from './types';
 
 /**
@@ -249,7 +249,8 @@ export function talkStatus(root: string): { current: { agent: string; label: str
 }
 
 function speakerName(agent: AgentConfig): string {
-  return `${agentLabel(agent)}${agent.model ? ` · ${agent.model}` : ''}`;
+  const m = agentModel(agent);
+  return `${agentLabel(agent)}${m ? ` · ${m}` : ''}`;
 }
 
 async function runRound(root: string, context: () => TalkContext): Promise<void> {
@@ -270,7 +271,8 @@ async function runRound(root: string, context: () => TalkContext): Promise<void>
       const who = speakerName(agent);
       const prompt = buildTalkPrompt({ speaker: who, root, rows: readTalk(root, 80), context: ctx });
       const text = await askAgent(agent, prompt, root);
-      appendTalk(root, { kind: 'ai', who, agent: agent.name, ...(agent.model ? { model: agent.model } : {}), text });
+      const m = agentModel(agent);
+      appendTalk(root, { kind: 'ai', who, agent: agent.name, ...(m ? { model: m } : {}), text });
     } catch (e) {
       appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agentLabel(agent ?? name)} 没回上来：${errorMessage(e)}`, error: true });
     }

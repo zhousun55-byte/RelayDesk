@@ -239,7 +239,7 @@ test('合回提交说明：按 journal 列出谁什么时候干了什么', () =>
     baseCommit: 'abcdef1234',
     events: [start, open('cursor'), hand('cursor', 'C1', { files: 2 }), { ts: T, type: 'take', files: ['a'] }],
   });
-  assert.ok(msg.startsWith('relay: 做滤镜\n'));
+  assert.ok(msg.startsWith('接力：做滤镜\n'));
   assert.ok(msg.includes('Cursor'));
   assert.ok(msg.includes('2 个文件'));
   assert.ok(msg.includes('收进 1 个文件'));
@@ -293,4 +293,53 @@ test('讨论记录：兼容旧格式，跳过旧版残留的「正在说」', ()
   );
   assert.equal(rows[1].model, 'opus');
   assert.equal(rows[1].agent, 'claude');
+});
+
+test('没配置检查命令：交接文档、合回说明、时间线都不说成「通过」', () => {
+  const none = { ts: T, type: 'gate', agent: 'cursor', status: 'pass', command: '(未配置)' } as JournalEvent;
+  const doc = buildHandoffDoc({
+    taskTitle: '做滤镜',
+    branch: 'relay/x',
+    agent: 'cursor',
+    tier: 'strong',
+    base: 'aaaaaaaaaaaa',
+    checkpoint: 'bbbbbbbbbbbb',
+    empty: false,
+    diffstat: ' a.txt | 2 +-',
+    gate: { status: 'pass', command: '(未配置)', detail: '' },
+    auditPath: '.relay/audits/x.md',
+    auditStatus: 'ok',
+    modelNote: null,
+    protectedHits: [],
+    modelNext: null,
+    ts: T,
+  });
+  assert.ok(doc.includes('没配置检查命令'));
+  assert.ok(!doc.includes('✅ 通过'));
+  const msg = buildMergeMessage({ taskTitle: '做滤镜', branch: 'relay/x', baseCommit: 'abcdef1234', events: [start, open('cursor'), none, hand('cursor', 'C1', { files: 1 })] });
+  assert.ok(!msg.includes('未配置'));
+  assert.ok(!msg.includes('检查 通过'));
+  const items = buildTimeline([start, open('cursor'), none, hand('cursor', 'C1', { files: 1, added: 1, removed: 0 })]);
+  assert.doesNotMatch(items[2].text, /检查/);
+  assert.equal(items[2].ok, undefined, '没配置检查就不挂「检查通过」的标签');
+});
+
+test('合回说明：写上审查结论，能力用「强 / 弱」，时间用本地时间', () => {
+  const review = { ts: T, type: 'review', agent: 'codex', verdict: 'fix', summary: '色温太冷', issues: ['调暖'], checkpoint: 'C1', round: 1 } as JournalEvent;
+  const msg = buildMergeMessage({ taskTitle: '做滤镜', branch: 'relay/x', baseCommit: 'abcdef1234', events: [start, open('cursor', 'weak'), hand('cursor', 'C1', { files: 1 }), review] });
+  assert.match(msg, /Codex 审查：要修改（1 条），色温太冷/);
+  assert.ok(msg.includes('（弱）'));
+  assert.ok(!msg.includes('weak') && !msg.includes('strong'));
+  assert.ok(!msg.includes('T00:00:00.000Z'), '不写世界标准时间的原始格式');
+});
+
+test('时间线：退回写成「退回到 某某 交接后」，而不是一串编号', () => {
+  const items = buildTimeline([start, open('cursor'), hand('cursor', 'C1', { files: 1 }), { ts: T, type: 'rollback', to: 'C1' } as JournalEvent]);
+  assert.equal(items[items.length - 1].text, '退回到「Cursor 交接后」');
+});
+
+test('接口工人：模型只认接口里填的那个，改了接口模型不会留下旧名字', () => {
+  const a = normalizeAgent({ name: 'ds', kind: 'api', model: '旧模型', api: { baseUrl: 'https://api.example.com', model: '新模型', apiKeyEnv: 'K' } });
+  assert.equal(a.model, '新模型');
+  assert.equal(a.api?.model, '新模型');
 });

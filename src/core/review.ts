@@ -2,6 +2,7 @@
  * 全自动流水线里的审查：把「任务 + 全部改动 + 检查结果 + 上一轮意见」交给另一个 AI，
  * 让它只输出一个 JSON 结论。解析要宽容（模型爱加代码块、前后说废话）。
  */
+import { gateConfigured } from './gate';
 
 export interface Verdict {
   verdict: 'pass' | 'fix';
@@ -105,7 +106,9 @@ export function buildReviewRequest(r: ReviewInput): string {
   if (r.previous?.issues.length) {
     s.push(`## 上一轮 ${r.previous.reviewer} 提的问题（逐条看有没有改好）`, ...r.previous.issues.map((x, i) => `${i + 1}. ${x}`), '');
   }
-  if (r.gate) {
+  if (r.gate && !gateConfigured(r.gate)) {
+    s.push('## 检查命令', '这个项目没配置检查命令，没有自动检查。需要跑的检查请你自己跑。', '');
+  } else if (r.gate) {
     s.push(
       '## 检查命令',
       r.gate.status === 'pass' ? `\`${r.gate.command}\`：通过` : `\`${r.gate.command}\`：**没通过**\n\n\`\`\`\n${(r.gate.detail ?? '').slice(-3000)}\n\`\`\``,

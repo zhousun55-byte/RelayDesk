@@ -10,6 +10,17 @@ export interface GateResult {
 
 export const GATE_NONE = '(未配置)';
 
+/** 项目有没有配置检查命令（没配置时记录里写的是 GATE_NONE，不能说成「通过」）。 */
+export function gateConfigured(g: { command: string }): boolean {
+  return g.command !== GATE_NONE;
+}
+
+/** 给人看的检查结果。 */
+export function gateText(g: { status: 'pass' | 'fail'; command: string }): string {
+  if (!gateConfigured(g)) return '没配置检查命令，没有检查';
+  return g.status === 'pass' ? `通过（${g.command}）` : `没通过（${g.command}）`;
+}
+
 /**
  * 跑项目的检查命令（门禁）。异步执行，不会卡住接力台。
  * 没配置 = 通过（并写明没配置）。超时算失败。

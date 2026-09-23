@@ -72,6 +72,11 @@ export function agentKind(a: Pick<AgentConfig, 'kind'>): AgentKind {
 }
 
 /** 显示名：自己填的 > 常见工具名 > 名字本身。只给名字时会去工人名单里查。 */
+/** 工人在用的模型：接口工人以接口里填的为准。 */
+export function agentModel(a: Pick<AgentConfig, 'kind' | 'model' | 'api'>): string | undefined {
+  return ((a.kind === 'api' ? a.api?.model : a.model) ?? '').trim() || undefined;
+}
+
 export function agentLabel(a: Pick<AgentConfig, 'name' | 'label'> | string | undefined | null): string {
   if (!a) return '未登记';
   if (typeof a === 'string') {
@@ -145,7 +150,8 @@ export function normalizeAgent(input: unknown): AgentConfig {
       throw new RelayError('密钥环境变量名只能是英文、数字、下划线（例如 DEEPSEEK_API_KEY）。密钥本身不要填在这里。', 'bad-agent');
     }
     agent.api = { baseUrl: baseUrl.replace(/\/+$/, ''), model: apiModel, apiKeyEnv, ...(format ? { format } : {}), ...(keyFrom ? { keyFrom } : {}) };
-    agent.model = model ?? apiModel;
+    // 接口工人的模型就是接口里填的那个；不另存一份，免得改了接口模型后两边对不上。
+    agent.model = apiModel;
   } else {
     const cmd = optText(o.cmd, '启动命令', 500) ?? '';
     if (!cmd) throw new RelayError('启动命令不能空。', 'bad-agent');

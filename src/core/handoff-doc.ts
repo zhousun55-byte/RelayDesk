@@ -1,5 +1,6 @@
-import type { GateResult } from './gate';
+import { gateConfigured, gateText, type GateResult } from './gate';
 import { shortSha } from './git';
+import { stampLocal } from './time';
 import { agentLabel } from './registry';
 import type { JournalEvent, Tier } from './types';
 
@@ -51,14 +52,14 @@ export interface HandoffDocInput {
 export function buildHandoffDoc(input: HandoffDocInput): string {
   const who = `${agentLabel(input.agent)}${input.llm ? ` · ${input.llm}` : ''}${input.tier ? `（${input.tier === 'weak' ? '弱' : '强'}）` : ''}`;
   const gate = input.gate
-    ? `${input.gate.status === 'pass' ? '✅ 通过' : '❌ 没通过'}（命令：${input.gate.command}）` +
+    ? (!gateConfigured(input.gate) ? '没配置检查命令，这一段没有检查。' : `${input.gate.status === 'pass' ? '✅ 通过' : '❌ 没通过'}（命令：${input.gate.command}）`) +
       (input.gate.status === 'fail' && input.gate.detail.trim() ? `\n\n\`\`\`\n${input.gate.detail.slice(-1500)}\n\`\`\`` : '')
     : '这一段没有改动，没有重跑（沿用上一次的结果）。';
   const sections = [
     `# 交接文档`,
     '',
     HEAD_NOTE,
-    `> 生成时间：${input.ts}`,
+    `> 生成时间：${stampLocal(input.ts)}`,
     '',
     '## 任务',
     input.taskTitle,
@@ -97,27 +98,27 @@ export interface MergeMessageInput {
 /** 合回主线那个提交的说明：按 journal 列出谁在什么时候干了什么（问责链）。 */
 export function buildMergeMessage(input: MergeMessageInput): string {
   const lines: string[] = [];
-  const who = (ev: JournalEvent) => `${agentLabel(ev.agent ?? '?')}${ev.llm ? ` · ${ev.llm}` : ''}${ev.tier ? `（${ev.tier}）` : ''}`;
+  const who = (ev: JournalEvent) => `${agentLabel(ev.agent ?? '?')}${ev.llm ? ` · ${ev.llm}` : ''}${ev.tier ? `（${ev.tier === 'weak' ? '弱' : '强'}）` : ''}`;
   for (const ev of input.events) {
     switch (ev.type) {
       case 'start':
-        lines.push(`- 开始 @ ${ev.ts}`);
+        lines.push(`- 开始 @ ${stampLocal(ev.ts)}`);
         break;
       case 'run':
       case 'open':
-        lines.push(`- ${who(ev)} 上岗 @ ${ev.ts}${ev.overrode ? `（强行接替了 ${ev.overrode}）` : ''}`);
+        lines.push(`- ${who(ev)} 上岗 @ ${stampLocal(ev.ts)}${ev.overrode ? `（强行接替了 ${ev.overrode}）` : ''}`);
         break;
       case 'exit':
         lines.push(`  - 退出，代码 ${ev.code}`);
         break;
       case 'gate':
-        lines.push(`  - 检查 ${ev.status === 'pass' ? '通过' : '没通过'}（${ev.command}）`);
+        if (gateConfigured(ev)) lines.push(`  - 检查 ${gateText(ev)}`);
         break;
       case 'audit':
         lines.push(`  - 审计 ${ev.report}`);
         break;
       case 'handoff':
-        lines.push(`  - 交接，检查点 ${shortSha(ev.checkpoint)}${ev.empty ? '（没有改动）' : ev.files !== undefined ? `（${ev.files} 个文件）` : ''} @ ${ev.ts}`);
+        lines.push(`  - 交接，检查点 ${shortSha(ev.checkpoint)}${ev.empty ? '（没有改动）' : ev.files !== undefined ? `（${ev.files} 个文件）` : ''} @ ${stampLocal(ev.ts)}`);
         break;
       case 'take':
         lines.push(`  - 从正式文件夹收进 ${ev.files.length} 个文件`);
@@ -126,14 +127,20 @@ export function buildMergeMessage(input: MergeMessageInput): string {
         lines.push(`  - 同步主线 ${shortSha(ev.main)}${ev.conflicts?.length ? `（冲突：${ev.conflicts.join('、')}）` : ''}${ev.aborted ? '（已撤销）' : ''}`);
         break;
       case 'rollback':
-        lines.push(`  - 退回到 ${shortSha(ev.to)} @ ${ev.ts}`);
+        lines.push(`  - 退回到 ${shortSha(ev.to)} @ ${stampLocal(ev.ts)}`);
+        break;
+      case 'review':
+        lines.push(`  - ${who(ev)} 审查：${ev.verdict === 'pass' ? '通过' : `要修改（${ev.issues.length} 条）`}${ev.summary ? `，${ev.summary.split('\n')[0].slice(0, 80)}` : ''} @ ${stampLocal(ev.ts)}`);
+        break;
+      case 'auto':
+        if (ev.phase === 'begin') lines.push(`- 全自动开始 @ ${stampLocal(ev.ts)}`);
         break;
       default:
         break;
     }
   }
   return [
-    `relay: ${input.taskTitle.split('\n')[0].slice(0, 60)}`,
+    `接力：${input.taskTitle.split('\n')[0].slice(0, 60)}`,
     '',
     `任务：${input.taskTitle}`,
     `接力分支：${input.branch}（保留备查；完整过程见该分支的 .relay/journal.jsonl 和 audits/）`,

@@ -49,6 +49,6 @@ export function rollback(dir: string, target: string): { to: string; label: stri
     if (r.code !== 0) throw new RelayError(`退回失败：${r.stderr || r.stdout}`, 'git');
   }
   appendEvent(wt, { ts: new Date().toISOString(), type: 'rollback', to: hit.sha, worktree: wt });
-  commitAll(wt, `relay: rollback ${shortSha(hit.sha)}`);
+  commitAll(wt, `接力：退回到 ${shortSha(hit.sha)}`);
   return { to: hit.sha, label: hit.agent, ts: hit.ts };
 }

@@ -137,7 +137,7 @@ export function merge(dir: string, opts: MergeOptions = {}): MergeResult {
   }
 
   appendEvent(wt, { ts: new Date().toISOString(), type: 'merge', ...(commit ? { commit } : {}), squashCommit: commit ?? '(无改动)', worktree: wt });
-  commitAll(wt, `relay: merge-close ${commit ? shortSha(commit) : 'none'}`);
+  commitAll(wt, `接力：合回完成 ${commit ? shortSha(commit) : '（没有提交）'}`);
   releaseLock(wt);
   removeWorktree(root, wt);
   clearSession(root);

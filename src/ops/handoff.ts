@@ -74,7 +74,7 @@ export async function handoff(dir: string, opts: HandoffOptions = {}): Promise<H
 
     // 1. 检查点先行：新建的文件也先入库，之后的审计、统计、保护路径都比两个提交，事实只有一份。
     const iso = new Date().toISOString();
-    const committed = commitAll(wt, `relay: checkpoint ${agent} ${iso}`);
+    const committed = commitAll(wt, `接力：检查点 ${agent} ${iso}`);
     const checkpoint = committed ?? gitOk(wt, ['rev-parse', 'HEAD']);
     const files = diffFiles(wt, base, checkpoint);
     const sum = sumChanges(files);
@@ -162,7 +162,7 @@ export async function handoff(dir: string, opts: HandoffOptions = {}): Promise<H
         ts: new Date().toISOString(),
       })
     );
-    commitAll(wt, `relay: handoff ${shortSha(checkpoint)}`);
+    commitAll(wt, `接力：交接 ${shortSha(checkpoint)}`);
     if (mergeInProgress(wt)) notes.push('同步主线的合并还没收尾，请检查隔离副本。');
 
     if (empty) notes.push('这一段没有业务改动，只是让当前工人下岗。');

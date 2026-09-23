@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { agentEnv } from './env';
 import type { Invocation, StreamFormat } from './harness';
+import { stampLocal } from './time';
 
 /**
  * 无人值守地跑一个 AI 工具：在隔离副本里启动、把它吐出来的事件翻译成一行行中文日志、
@@ -341,7 +342,7 @@ export function startRun(req: RunRequest): RunHandle {
     }
     req.onLine?.(full);
   };
-  fs.appendFileSync(req.logPath, `# ${req.title} · ${new Date().toISOString()}\n$ ${describeArgv(inv.argv)}\n`);
+  fs.appendFileSync(req.logPath, `# ${req.title} · ${stampLocal(new Date())}\n$ ${describeArgv(inv.argv)}\n`);
 
   const parser = makeParser(inv.format);
   const started = Date.now();

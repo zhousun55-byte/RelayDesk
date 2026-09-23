@@ -318,6 +318,7 @@ async function refresh() {
         S.openStop = null;
       }
       render();
+      noticeTaskChange(st.project.task);
     } catch (e) {
       if (e.code === 'offline') setOffline(true);
       else if (e.code === 'no-dir' && S.dir) {
@@ -1181,6 +1182,13 @@ function facts(rows) {
   );
 }
 
+/** 检查结果的说法。没配置检查命令时服务端记的是「(未配置)」，不能说成通过。 */
+function gateLine(g) {
+  if (!g) return '没有改动，沿用上一次';
+  if (g.command === '(未配置)') return '没配置检查命令（不检查）';
+  return g.status === 'pass' ? `✅ 通过（${g.command}）` : `❌ 没通过（${g.command}）`;
+}
+
 function handoffResult(r) {
   return {
     title: '交接好了',
@@ -1189,7 +1197,7 @@ function handoffResult(r) {
         ['谁', r.label],
         ['改动', r.empty ? '没有改动' : `${r.files} 个文件  +${r.added} −${r.removed}`],
         ['检查点', h('span', { class: 'mono' }, short(r.checkpoint))],
-        ['检查', r.gate ? `${r.gate.status === 'pass' ? '✅ 通过' : '❌ 没通过'}（${r.gate.command}）` : '没有改动，沿用上一次'],
+        ['检查', gateLine(r.gate)],
         ['审计', r.audit.status === 'ok' ? '有模型写的阅读面' : `只有事实${r.audit.note ? `（${r.audit.note}）` : ''}`],
       ]),
       (r.notes || []).map((n) => h('p', { class: 'hint', style: 'margin-top:10px' }, n)),
@@ -1198,22 +1206,42 @@ function handoffResult(r) {
   };
 }
 
-function miniFiles(changes) {
+/** 「不许改」的小红标签（项目设置里的保护路径）。 */
+function protectedTag(hits, p) {
+  return hits && hits.includes(p) ? h('span', { class: 'badge bad', style: 'margin-left:8px' }, '不许改') : null;
+}
+
+function miniFiles(changes, hits = []) {
   if (!changes.length) return null;
-  const rows = changes.slice(0, 8).map((f) => h('li', null, h('div', { class: 'file-row', style: 'cursor:default' }, h('span', { class: `st ${f.status}` }, f.status), h('span', { class: 'path' }, f.path), h('span', null))));
+  const rows = changes.slice(0, 8).map((f) => h('li', null, h('div', { class: 'file-row', style: 'cursor:default' }, h('span', { class: `st ${f.status}` }, f.status), h('span', { class: 'path' }, f.path, protectedTag(hits, f.path)), h('span', null))));
   return h('div', { style: 'margin:12px 0' }, h('ul', { class: 'files' }, rows), changes.length > 8 ? h('p', { class: 'hint' }, `…还有 ${changes.length - 8} 个`) : null);
+}
+
+/** 强制合回前要让人看清的全部拦截原因。 */
+function blockReasons(t) {
+  const out = [];
+  if (t.gate && t.gate.status === 'fail' && t.gate.command !== '(未配置)') out.push(`检查没通过（${t.gate.command}）。`);
+  if (t.protectedHits && t.protectedHits.length) out.push(`改到了不许改的文件：${t.protectedHits.join('、')}。`);
+  if (t.pending.length) out.push(`还有 ${t.pending.length} 个改动没交接，合回时不会带上。`);
+  if (t.onShift && t.onShift.kind === 'app') out.push(`${t.onShift.label} 还在岗，它没交接的改动不会带上。`);
+  return out.length ? out : [t.phaseText];
 }
 
 function openMerge(force) {
   const t = S.st && S.st.project.task;
   if (!t) return;
   const keep = h('input', { type: 'checkbox' });
+  const hits = t.protectedHits || [];
+  const ack = force && hits.length ? h('input', { type: 'checkbox' }) : null;
+  const needAck = h('p', { class: 'form-error', hidden: true }, '先勾选上面那一项：确认你知道改到了不许改的文件。');
   dialog({
     title: force ? '仍然合回？' : '合回正式文件夹',
     body: [
       h('p', null, `会把这个任务的改动（${t.totals.files} 个文件，+${t.totals.added} −${t.totals.removed}）作为一个提交放进正式文件夹。隔离副本会删掉，接力分支保留备查。`),
-      force ? h('p', { class: 'form-error' }, t.phaseText) : null,
-      miniFiles(t.changes),
+      force ? h('div', { class: 'form-error' }, h('strong', null, '被拦下的原因：'), blockReasons(t).map((r) => h('div', null, `· ${r}`))) : null,
+      miniFiles(t.changes, hits),
+      ack ? h('label', { class: 'checkline' }, ack, `我知道 ${hits.join('、')} 是不许改的文件，仍然要把它合进正式文件夹`) : null,
+      needAck,
       h('label', { class: 'checkline' }, keep, '把审计报告也留进正式文件夹（.relay/audits/）'),
     ],
     buttons: [
@@ -1223,6 +1251,10 @@ function openMerge(force) {
         cls: force ? 'danger solid' : 'primary',
         keepOpen: true,
         run: async (d) => {
+          if (ack && !ack.checked) {
+            needAck.hidden = false;
+            return;
+          }
           d.busy('正在合回……');
           try {
             const r = await post('/api/merge', { force, keepAudits: keep.checked });
@@ -1319,7 +1351,7 @@ function openRollbackList(t) {
         { class: 'checkline', style: 'padding:6px 0' },
         h('input', { type: 'radio', name: 'cp', checked: i === 0, onchange: () => (picked = c.sha) }),
         h('span', { class: 'num' }, fmtTime(c.ts) || '—'),
-        h('span', null, c.label === '交接' ? `${c.agent} 交接后` : '任务开始时'),
+        h('span', null, c.who || (c.label === '交接' ? `${c.agent} 交接后` : '任务开始时')),
         h('span', { class: 'mono muted' }, short(c.sha))
       )
     )
@@ -1393,6 +1425,48 @@ async function loadDiff(p) {
   render();
 }
 
+/** 不切换开关，重新读一遍已经打开的改动对比。 */
+async function reloadDiff(p) {
+  try {
+    const r = await get('/api/diff', { path: p });
+    if (S.diff && S.diff.path === p) S.diff = { path: p, text: r.diff };
+  } catch (e) {
+    if (S.diff && S.diff.path === p) S.diff = { path: p, error: e.message };
+  }
+  render();
+}
+
+/** 重新读当前文件夹的列表和正在看的文件，不清空界面。 */
+async function refreshFilesQuietly() {
+  const f = S.files;
+  try {
+    const r = await get('/api/files', { side: f.side, sub: f.sub });
+    let preview = f.preview;
+    if (preview && preview.path && !preview.loading) {
+      try {
+        preview = await get('/api/file', { side: f.side, path: preview.path });
+      } catch (e) {
+        preview = { path: preview.path, error: e.message };
+      }
+    }
+    if (S.files.side === f.side && S.files.sub === f.sub) S.files = { ...S.files, list: r.entries, preview };
+  } catch {
+    /* 文件夹可能已经没了（任务合回或放弃），下次刷新会重画 */
+  }
+  render();
+}
+
+/** 任务有了新进展（交接、退回、收进、同步、没交接的改动变了）：打开着的改动对比和文件预览跟着更新。 */
+let taskVer = null;
+function noticeTaskChange(t) {
+  const ver = t ? JSON.stringify([t.branch, t.timeline.length, t.pending]) : null;
+  const changed = taskVer !== null && ver !== taskVer;
+  taskVer = ver;
+  if (!changed || !t) return;
+  if (S.diff && S.diff.path && !S.diff.loading) reloadDiff(S.diff.path);
+  if (S.files && S.files.list && !S.files.loading) refreshFilesQuietly();
+}
+
 async function loadAudit(report) {
   S.audit = { path: report, loading: true };
   render();
@@ -1460,7 +1534,7 @@ function changesPanel(t) {
               'button',
               { type: 'button', class: `file-row${S.diff && S.diff.path === f.path ? ' on' : ''}`, onclick: () => loadDiff(f.path) },
               h('span', { class: `st ${f.status}` }, f.status),
-              h('span', { class: 'path', title: f.orig ? `${f.orig} → ${f.path}` : f.path }, f.orig ? `${f.orig} → ${f.path}` : f.path),
+              h('span', { class: 'path', title: f.orig ? `${f.orig} → ${f.path}` : f.path }, f.orig ? `${f.orig} → ${f.path}` : f.path, protectedTag(t.protectedHits, f.path)),
               h('span', { class: 'num small' }, f.added === null ? h('span', { class: 'muted' }, '二进制') : [h('span', { class: 'plus' }, `+${f.added}`), ' ', h('span', { class: 'minus' }, `−${f.removed}`)])
             )
           )
@@ -1790,6 +1864,7 @@ function clearTalk() {
           try {
             await post('/api/talk/clear');
             await loadTalk();
+            refresh();
           } catch (e) {
             toast(e.message, true);
           }
@@ -1845,7 +1920,7 @@ function workerFromForm() {
   const g = (k) => String(S.keep[`wf-${k}`] ?? '').trim();
   const base = (S.workerForm && S.workerForm.base) || {};
   const kind = g('kind') || 'cli';
-  const a = { name: g('name'), label: g('label'), kind, tier: g('tier') || 'strong', model: g('model'), note: g('note') };
+  const a = { name: g('name'), label: g('label'), kind, tier: g('tier') || 'strong', model: kind === 'api' ? g('apiModel') : g('model'), note: g('note') };
   if (kind === 'api') {
     a.api = { baseUrl: g('apiBase'), model: g('apiModel'), apiKeyEnv: g('apiKey') };
     if (g('apiFormat') === 'anthropic') a.api.format = 'anthropic';
@@ -2111,7 +2186,8 @@ function projectCard(st) {
         },
       });
       S.cfgRoot = null;
-      toast('项目设置已保存（.relay/config.json，下次开始任务时会提交进正式文件夹）。');
+      toast('项目设置已保存，马上生效（存在 .relay/config.json，会随下一次合回或开始任务一起提交）。');
+      loadDoctor();
     });
   return h(
     'section',

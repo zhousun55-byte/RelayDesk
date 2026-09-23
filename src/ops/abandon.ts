@@ -33,7 +33,7 @@ export function abandon(dir: string, opts: { force?: boolean } = {}): AbandonRes
     }
     try {
       appendEvent(wt, { ts: new Date().toISOString(), type: 'abandon', branch: session.branch, worktree: wt });
-      const sha = commitAll(wt, 'relay: abandon');
+      const sha = commitAll(wt, '接力：放弃任务（剩下的东西留底）');
       if (sha) notes.push('隔离副本里剩下的改动已存进接力分支留底。');
     } catch (e) {
       if (!opts.force) throw e;

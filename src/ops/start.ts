@@ -89,7 +89,7 @@ export function startTask(dir: string, input: StartInput): StartResult {
     fs.writeFileSync(path.join(wt, '.relay', 'handoff.md'), buildInitialHandoff(title, branch, base, startedAt));
     // 先记事件再提交：开始那个提交里就带着 journal，退回到开始时账本还在。
     appendEvent(wt, { ts: startedAt, type: 'start', task, branch, commit: base, worktree: wt });
-    const startSha = commitAll(wt, `relay: start ${slug}-${id}`);
+    const startSha = commitAll(wt, `接力：开始任务 ${slug}-${id}`);
     if (!startSha) throw new RelayError('开始提交没有生成。', 'git');
     saveSession({
       repoRoot: root,

@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { RelayError } from '../core/errors';
-import { runGate } from '../core/gate';
+import { gateConfigured, gateText, runGate } from '../core/gate';
 import { shortSha } from '../core/git';
 import { setupProject } from '../core/project';
 import { agentKind, agentLabel, requireAgent } from '../core/registry';
@@ -83,7 +83,7 @@ export function handoffCommand(): Command {
       ok(`${r.label} 交接完成。`);
       info(r.empty ? '这一段没有改动。' : `改动：${r.files} 个文件，+${r.added} −${r.removed}`);
       info(`检查点：${shortSha(r.checkpoint)}（可以退回到这里）`);
-      if (r.gate) info(`检查：${r.gate.status === 'pass' ? c.green('通过') : c.red('没通过')}（${r.gate.command}）`);
+      if (r.gate) info(`检查：${!gateConfigured(r.gate) ? gateText(r.gate) : r.gate.status === 'pass' ? c.green(gateText(r.gate)) : c.red(gateText(r.gate))}`);
       info(`审计：${r.audit.path}${r.audit.status === 'ok' ? '（有模型阅读面）' : r.audit.note ? `（只有事实：${r.audit.note}）` : ''}`);
       notes(r.notes);
       info('下一步：relay run <下一位> 接着干，或 relay merge 合回正式文件夹。');
@@ -127,7 +127,7 @@ export function statusCommand(): Command {
       if (t.pending.length) warn(`还没交接：${t.pending.slice(0, 10).join('、')}${t.pending.length > 10 ? ' …' : ''}`);
       if (t.stray.length) warn(`正式文件夹在任务期间被改了：${t.stray.map((s) => s.path).join('、')}（relay take 可以收进任务）`);
       if (t.mainAhead) warn(`正式文件夹有 ${t.mainAhead} 个新提交（relay sync 可以同步进任务）`);
-      if (t.gate) info(`上次检查：${t.gate.status === 'pass' ? '通过' : '没通过'}（${t.gate.command}）`);
+      if (t.gate) info(`上次检查：${gateText(t.gate)}`);
       if (t.timeline.length) {
         console.log('');
         console.log('经过：');
@@ -216,8 +216,9 @@ export function gateCommand(): Command {
     .action(async () => {
       const ctx = openTask(process.cwd());
       const r = await runGate(ctx.wt, ctx.cfg);
-      if (r.status === 'pass') ok(`检查通过（${r.command}）`);
-      else warn(`检查没通过（${r.command}）`);
+      if (!gateConfigured(r)) warn('这个项目没配置检查命令。在网页「设置」里填，或改 .relay/config.json 的 gate.command。');
+      else if (r.status === 'pass') ok(`检查${gateText(r)}`);
+      else warn(`检查${gateText(r)}`);
       if (r.detail) console.log(r.detail);
       if (r.status === 'fail') process.exitCode = 1;
     });
