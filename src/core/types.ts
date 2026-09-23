@@ -1,31 +1,70 @@
-// relay 锁定协议类型。改这里的字段语义 = 改协议，须重新评审，不要随手加字段。
+// 接力台的数据格式。journal / agents.json / config.json 都要和旧版兼容：只加可选字段，不改旧字段语义。
 
 export type Tier = 'strong' | 'weak';
 
-/** 上岗词喂入方式。默认 file：每次 run 先写 .relay/ONBOARD.md，启动只喂一句「先读这份文件」。 */
+/**
+ * 终端工人的上岗词喂法：
+ * - arg：把一句「先读 .relay/ONBOARD.md」当参数传给命令（claude / codex 这类都支持）；
+ * - stdin：从标准输入喂这句话（非交互的脚本型工人）；
+ * - file：什么都不喂，只在终端里提示人转告。
+ */
 export type PromptMode = 'arg' | 'stdin' | 'file';
 
 /**
- * 客人类型。cli = 终端阻塞 spawn（relay run）；
- * app = 桌面 App 客人（relay open，cmd 是「打开文件夹」模板，须含 {{worktree}} 占位符）。
- * 缺省 cli——旧注册表没有该字段，一律按 cli 处理（向后兼容）。
+ * 工人类型：
+ * - cli：终端工人。relay run 在隔离副本里启动它并等它退出；
+ * - app：桌面工人（Cursor / ZCode …）。cmd 是「打开文件夹」模板，必须含 {{worktree}}；
+ * - api：只接 API 的模型（DeepSeek …）。不能手动上岗；全自动里用内置小代理干活，也能审查、讨论。
+ * 旧名单没有 kind 字段，一律按 cli。
  */
-export type AgentKind = 'cli' | 'app';
+export type AgentKind = 'cli' | 'app' | 'api';
 
-/** 全局注册表 ~/.relay/agents.json 中的一条 agent 配置。 */
+export interface ApiSpec {
+  /** 接口地址，如 https://api.deepseek.com */
+  baseUrl: string;
+  model: string;
+  /** 放密钥的环境变量名。密钥本身永远不写进文件。 */
+  apiKeyEnv: string;
+  /** 接口协议：openai（/chat/completions，默认）或 anthropic（/v1/messages）。 */
+  format?: 'openai' | 'anthropic';
+  /**
+   * 密钥不在环境变量里、而在别的工具的配置文件里（用户同意后才会这样配）。
+   * 形如 mimocode:xiaomi-token-plan-cn。只在调用时读进内存，不复制到任何地方。
+   */
+  keyFrom?: string;
+}
+
+/** 全局工人名单 ~/.relay/agents.json 里的一条。 */
 export interface AgentConfig {
-  /** 唯一名，relay run <name> / relay open <name> 用。 */
+  /** 唯一名（英文、数字、-、_），命令里用它：relay run claude。 */
   name: string;
-  /** 启动命令（含参数，在 worktree 内执行）。kind=app 时是打开模板，{{worktree}} 会被代入 worktree 路径。 */
-  cmd: string;
-  /** 能力分级：strong | weak。只影响提示词与流程强调，绝不自动切人。 */
-  tier: Tier;
-  /** 上岗词喂入方式。 */
-  prompt: { mode: PromptMode };
-  /** 客人类型。缺省 cli（旧注册表兼容）。 */
+  /** 显示名，如「Claude Code」。没有就用 name。 */
+  label?: string;
   kind?: AgentKind;
-  /** 备注（可选），如「Claude 会员，额度易耗尽」。 */
+  /** cli：在隔离副本里执行的命令；app：打开模板（含 {{worktree}}）；api：不用。 */
+  cmd?: string;
+  /** 能力分级。只影响上岗词（前任是 weak 时，下一位必须先自审），绝不自动换人。 */
+  tier: Tier;
+  prompt?: { mode: PromptMode };
+  /** 正在用的模型（自己填，如 grok-4.6）。记进交接记录，方便区分同一个工具换了模型。 */
+  model?: string;
+  /**
+   * 讨论用的命令：从标准输入读题目、把回答打到标准输出。例：claude -p。
+   * 含 {{out}} 时改为从这个临时文件读回答（codex exec -o {{out}}）。
+   */
+  ask?: string;
+  /** kind=api 时的接口配置。 */
+  api?: ApiSpec;
   note?: string;
+  /**
+   * 认得的 AI 编程工具（claude / codex / cursor-agent / zcode …）。有它就能全自动：
+   * 接力台用这个工具的无人值守模式在隔离副本里干活、审查。
+   */
+  harness?: string;
+  /** 全自动时要求的思考强度（如 codex 的 low）。不填用工具自己的默认。 */
+  effort?: string;
+  /** 这一条是「自动识别」加进来的。 */
+  detected?: boolean;
 }
 
 export interface AgentsRegistry {
@@ -33,34 +72,18 @@ export interface AgentsRegistry {
 }
 
 /**
- * 目标项目 .relay/config.json（协议三：可进主线；禁止写入 API key）。
- * task.md / handoff.md / journal.jsonl / audits/ 不在这里管——它们只活在 relay/* 分支。
+ * 项目配置 .relay/config.json（唯一进主线的接力文件；不许写密钥）。
  */
 export interface RelayConfig {
-  /** 项目自定义门禁命令。空字符串 = 未配置。 */
+  /** 检查命令（门禁），如 npm test。空 = 不检查。 */
   gate: { command: string };
-  /** 弱 agent 不得改动的路径；handoff/merge 扫描，命中标红并拒绝 merge（除非 --force）。 */
+  /** 不许改的路径（简易 glob）。改了会标红，合回时拒绝。 */
   protectedPaths: string[];
-  /** 审计用 LLM（OpenAI 兼容）。密钥只放环境变量，apiKeyEnv 只存变量名。 */
-  audit: { baseUrl: string; model: string; apiKeyEnv: string };
+  /** 交接时写「阅读面」的便宜模型。可以不配，事实段照样有。 */
+  audit: ApiSpec;
 }
 
-// ---- journal.jsonl 事件（只追加，不改写历史）----
-
-/** 每条事件的公共字段。 */
-export interface JournalEventBase {
-  /** ISO 8601 时间戳。 */
-  ts: string;
-  type: JournalEventType;
-  agent?: string;
-  /** 同一窗口里正在用的模型。可选；旧 journal 没有此字段。 */
-  llm?: string;
-  tier?: Tier;
-  /** 相关 commit SHA。handoff=检查点；merge=squash 落点；start=主线基准（首提交在会话指针 startCommit）。 */
-  commit?: string;
-  /** worktree 绝对路径。 */
-  worktree?: string;
-}
+// ---- journal.jsonl 事件（只追加，不改写） ----
 
 export type JournalEventType =
   | 'start'
@@ -72,76 +95,132 @@ export type JournalEventType =
   | 'handoff'
   | 'rollback'
   | 'merge'
-  | 'abandon';
+  | 'abandon'
+  | 'take'
+  | 'sync'
+  | 'review'
+  | 'auto';
+
+export interface JournalEventBase {
+  ts: string;
+  type: JournalEventType;
+  agent?: string;
+  /** 这一段用的模型。 */
+  llm?: string;
+  tier?: Tier;
+  commit?: string;
+  worktree?: string;
+}
 
 export interface StartEvent extends JournalEventBase {
   type: 'start';
-  /** 任务全文（完整标题只写 task.md，这里存原文即可）。 */
   task: string;
-  /** relay/<slug>-<id> 分支名。 */
   branch: string;
 }
 
 export interface RunEvent extends JournalEventBase {
   type: 'run';
-  /** --force 接管另一 App 客人未释放的软锁时，记录被覆盖的 agent 名（审计痕迹）。 */
+  /** --force 接管了谁的锁（留痕）。 */
   overrode?: string;
+  /** 全自动流水线派的活（无人值守）。 */
+  auto?: boolean;
+  /** 全自动：第几轮。 */
+  round?: number;
 }
 
-/** App 客人上岗（relay open）。没有配对的 exit 事件：App 段的结束方式只有 relay handoff。 */
+/** 桌面工人上岗。没有 exit：桌面段只以交接收尾。 */
 export interface OpenEvent extends JournalEventBase {
   type: 'open';
-  /** --force 覆盖另一 App 客人未释放的软锁时，记录被覆盖的 agent 名（审计痕迹）。 */
   overrode?: string;
 }
 
 export interface ExitEvent extends JournalEventBase {
   type: 'exit';
-  /** agent 进程退出码。 */
   code: number;
-  /** 额度报错迹象。尽力而为的启发式，供人判断，不作自动切人依据。 */
+  /** 旧字段，恒为 false。 */
   quotaHint: boolean;
 }
 
 export interface AuditEvent extends JournalEventBase {
   type: 'audit';
-  /** 审计报告在 .relay/audits/ 下的相对路径。 */
+  /** 审计报告在工作副本里的相对路径（.relay/audits/...）。 */
   report: string;
-  /** ok = 事实报告 + 阅读面齐全；failed = LLM 阅读面失败，只有事实报告。 */
+  /** ok = 事实 + 模型阅读面；failed = 只有事实（没配模型或模型失败）。 */
   status: 'ok' | 'failed';
 }
 
 export interface GateEvent extends JournalEventBase {
   type: 'gate';
   status: 'pass' | 'fail';
-  /** 实际执行的门禁命令。 */
   command: string;
-  /** 失败时的输出摘要（可选；旧 journal 没有此字段）。 */
   detail?: string;
 }
 
 export interface HandoffEvent extends JournalEventBase {
   type: 'handoff';
-  /** 本次检查点 commit SHA。 */
+  /** 检查点提交（退回目标）。 */
   checkpoint: string;
+  /** 这一段没有任何业务改动。旧 journal 没有这个字段，按有改动算。 */
+  empty?: boolean;
+  files?: number;
+  added?: number;
+  removed?: number;
+  /** 交接时人写的留言。 */
+  note?: string;
+  /** 上一位自己写在 .relay/NOTE.md 里的自述（不是事实）。 */
+  selfNote?: string;
 }
 
 export interface RollbackEvent extends JournalEventBase {
   type: 'rollback';
-  /** 回滚到的检查点 SHA。 */
   to: string;
 }
 
 export interface MergeEvent extends JournalEventBase {
   type: 'merge';
-  /** squash 后落在主线的 commit SHA。 */
   squashCommit: string;
 }
 
 export interface AbandonEvent extends JournalEventBase {
   type: 'abandon';
-  /** 保留备查的 relay/* 分支名。 */
   branch: string;
+}
+
+/** 把正式文件夹里被误改的文件收进了任务。 */
+export interface TakeEvent extends JournalEventBase {
+  type: 'take';
+  files: string[];
+}
+
+/** 把正式文件夹的新提交同步进任务。有冲突时 commit 为空，由下一次交接收尾。 */
+export interface SyncEvent extends JournalEventBase {
+  type: 'sync';
+  main: string;
+  conflicts?: string[];
+  aborted?: boolean;
+}
+
+/** 全自动流水线里，另一个 AI 对最近一次交接的审查结论。 */
+export interface ReviewEvent extends JournalEventBase {
+  type: 'review';
+  /** pass = 可以合回；fix = 要改。 */
+  verdict: 'pass' | 'fix';
+  summary: string;
+  issues: string[];
+  /** 审的是哪个检查点。 */
+  checkpoint: string;
+  round: number;
+  /** 审的是谁的活。 */
+  implementer?: string;
+}
+
+/** 全自动流水线开始 / 结束。 */
+export interface AutoEvent extends JournalEventBase {
+  type: 'auto';
+  phase: 'begin' | 'end';
+  runId: string;
+  status?: string;
+  detail?: string;
 }
 
 export type JournalEvent =
@@ -154,4 +233,8 @@ export type JournalEvent =
   | HandoffEvent
   | RollbackEvent
   | MergeEvent
-  | AbandonEvent;
+  | AbandonEvent
+  | TakeEvent
+  | SyncEvent
+  | ReviewEvent
+  | AutoEvent;

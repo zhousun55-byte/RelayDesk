@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-/** F10：分支名不吃中文/空格/斜杠。取标题里的 ASCII 词；一个都没有就退化为 task。 */
+/** 分支名只用标题里的英文词；一个都没有（全中文）就叫 task。 */
 export function slugify(title: string): string {
   const s = title
     .toLowerCase()
@@ -11,7 +11,7 @@ export function slugify(title: string): string {
   return s.length > 0 ? s : 'task';
 }
 
-/** 4 位十六进制 id，避免同名任务撞分支。 */
+/** 4 位十六进制，避免同名任务撞分支。 */
 export function newId(): string {
   return randomBytes(2).toString('hex');
 }

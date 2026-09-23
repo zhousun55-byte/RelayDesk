@@ -1,23 +1,29 @@
 {
   "name": "agent-relay",
-  "version": "0.2.0",
-  "description": "换人干活的本地命令：隔离分支 + 交接审计 + 主线保持干净",
+  "version": "1.1.0",
+  "private": true,
+  "description": "接力台：让多个 AI 轮流在同一件事上干活——隔离现场、交接记账、主线保持干净",
   "type": "commonjs",
   "bin": {
     "relay": "dist/src/cli.js"
   },
+  "files": [
+    "dist/src",
+    "README.md"
+  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/src/cli.js && mkdir -p dist/src/ui && cp -R src/ui/public dist/src/ui/public",
-    "test": "npm run build && node --test dist/test/*.test.js"
+    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/src/cli.js && cp -R src/web dist/src/web",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "start": "node dist/src/cli.js ui"
   },
   "dependencies": {
     "commander": "^13.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.6.0",
-    "@types/node": "^20.14.0"
+    "@types/node": "^20.14.0",
+    "typescript": "^5.6.0"
   }
 }

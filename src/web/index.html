@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>接力台</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M9 3v26' stroke='%235B6572' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M9 8c0 5 12 3 12 8s-12 3-12 8' fill='none' stroke='%230E7C5A' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='21' cy='16' r='3.4' fill='%23fff' stroke='%230E7C5A' stroke-width='2.4'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <div class="brand" aria-label="接力台">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <path class="glyph-main" d="M9 3v26" />
+          <path class="glyph-branch" d="M9 8c0 5 12 3 12 8s-12 3-12 8" />
+          <circle class="glyph-stop" cx="21" cy="16" r="3.4" />
+        </svg>
+        <span>接力台</span>
+      </div>
+      <div class="project-switch">
+        <button type="button" id="project-btn" class="project-btn" aria-haspopup="true" aria-expanded="false">
+          <span class="project-name" id="project-name">…</span>
+          <span class="project-path" id="project-path"></span>
+          <span class="caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="menu" id="project-menu" hidden></div>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="页面">
+        <button type="button" role="tab" data-view="task" id="tab-task">任务</button>
+        <button type="button" role="tab" data-view="talk" id="tab-talk">讨论<span class="count" id="talk-count"></span></button>
+        <button type="button" role="tab" data-view="settings" id="tab-settings">设置</button>
+      </nav>
+    </header>
+
+    <div class="offline" id="offline" hidden>
+      连不上接力台了。它可能已经关掉：在「多协同工作」文件夹里双击「打开接力台」，或在终端执行 <code>relay ui</code>。
+    </div>
+
+    <main id="view-task" class="view" data-view="task"></main>
+    <main id="view-talk" class="view" data-view="talk" hidden></main>
+    <main id="view-settings" class="view" data-view="settings" hidden></main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <div class="scrim" id="scrim" hidden></div>
+    <div class="dialog" id="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" hidden></div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

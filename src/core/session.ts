@@ -1,32 +1,31 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { RelayError } from './errors';
+import { relayHome, repoKey } from './paths';
 
 /**
- * 活跃会话指针（单任务约束）：存在 ~/.relay/projects/<repoKey>/session.json。
- * 放在仓库外，保证主线的 git status 永远干净（第 2 步验收标准）。
+ * 进行中任务的指针（一个项目同一时间只有一件事）：~/.relay/projects/<项目键>/session.json。
+ * 放在仓库外，正式文件夹的 git status 才能一直干净。
  */
 export interface SessionState {
   repoRoot: string;
+  /** 接力分支 relay/<slug>-<id>。 */
   branch: string;
+  /** 隔离工作副本的绝对路径。 */
   worktree: string;
   taskTitle: string;
-  /** 主线基准：start 时的主线 HEAD，merge 时用于 diff 与防漂移检查。 */
+  /** 开始时正式文件夹的 HEAD。 */
   baseCommit: string;
-  /** relay 分支首提交 SHA（该提交的树里含带 start 事件的 journal）。start 事件里存的 commit 是主线基准。 */
+  /** 接力分支的第一个提交（里面已经有带 start 事件的 journal）。 */
   startCommit: string;
   startedAt: string;
-}
-
-export function relayHome(): string {
-  return path.join(os.homedir(), '.relay');
-}
-
-export function repoKey(repoRoot: string): string {
-  const h = crypto.createHash('sha256').update(repoRoot).digest('hex').slice(0, 8);
-  const name = path.basename(repoRoot).replace(/[^a-zA-Z0-9._-]/g, '_') || 'repo';
-  return `${name}-${h}`;
+  /** 开始时正式文件夹所在的分支（合回的目标）。旧会话没有这个字段。 */
+  mainBranch?: string;
+  /**
+   * 开始时正式文件夹里本来就没提交的文件（路径 → 内容哈希，删除记为 "-"）。
+   * 用来区分「用户自己原有的改动」和「任务期间被 AI 误改的」。旧会话没有这个字段。
+   */
+  mainSnapshot?: Record<string, string>;
 }
 
 function sessionDir(repoRoot: string): string {
@@ -40,18 +39,22 @@ export function sessionPath(repoRoot: string): string {
 export function loadSession(repoRoot: string): SessionState | null {
   const p = sessionPath(repoRoot);
   if (!fs.existsSync(p)) return null;
+  let raw: unknown;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8')) as SessionState;
+    raw = JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch {
-    throw new Error(`会话指针损坏：${p}，请手工修复或删除。`);
+    throw new RelayError(`任务指针损坏：${p}。删除这个文件即可（接力分支还在，不会丢东西）。`, 'bad-session');
   }
+  const s = raw as Partial<SessionState>;
+  if (!s || typeof s.branch !== 'string' || typeof s.worktree !== 'string' || typeof s.baseCommit !== 'string') {
+    throw new RelayError(`任务指针内容不完整：${p}。删除这个文件即可（接力分支还在，不会丢东西）。`, 'bad-session');
+  }
+  return { ...s, repoRoot: s.repoRoot ?? repoRoot, taskTitle: s.taskTitle ?? s.branch } as SessionState;
 }
 
 export function requireSession(repoRoot: string): SessionState {
   const s = loadSession(repoRoot);
-  if (!s) {
-    throw new Error('无活跃任务。用 relay start "任务描述" 开始（单仓库同一时间只有一个任务）。');
-  }
+  if (!s) throw new RelayError('现在没有进行中的任务。先开始一个任务（relay start "要做什么"）。', 'no-task');
   return s;
 }
 
@@ -63,4 +66,22 @@ export function saveSession(s: SessionState): void {
 export function clearSession(repoRoot: string): void {
   const p = sessionPath(repoRoot);
   if (fs.existsSync(p)) fs.rmSync(p);
+}
+
+/** 所有进行中任务的项目根目录（接力台「项目」列表用）。坏指针跳过。 */
+export function listSessionRoots(): string[] {
+  const dir = path.join(relayHome(), 'projects');
+  if (!fs.existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const name of fs.readdirSync(dir)) {
+    const p = path.join(dir, name, 'session.json');
+    if (!fs.existsSync(p)) continue;
+    try {
+      const s = JSON.parse(fs.readFileSync(p, 'utf8')) as { repoRoot?: string };
+      if (typeof s.repoRoot === 'string') out.push(s.repoRoot);
+    } catch {
+      /* 坏指针不影响别的项目 */
+    }
+  }
+  return out;
 }

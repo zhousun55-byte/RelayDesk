@@ -1,23 +1,27 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { RelayError } from './errors';
+import { agentLabel } from './registry';
 
 /**
- * 单写者锁：同一时间只允许一个 agent 写 worktree。两种锁共用一个文件，靠 kind 区分：
- * - cli（缺省，旧锁文件向后兼容）：pid 活锁。relay run 期间持有，进程死即陈旧、可覆盖。
- * - app：软锁。relay open 期间持有，**绝不**用 pid 判断存活（`open` 的 pid 会立刻死），
- *   正常只由 handoff 释放；merge / abandon 遇软锁默认拒绝，--force 收尾时随 worktree 删除清除。
+ * 单写者锁：同一时间只让一个人写隔离副本。三种锁共用 .relay/session.lock，靠 kind 区分：
+ * - cli：终端工人（relay run）。进程活着才算数，进程死了是陈旧锁，可以覆盖；
+ * - app：桌面工人（relay open）。软锁，**不看进程**（打开命令一眨眼就退出了），只有交接才释放；
+ * - op：接力台自己在做交接 / 合回等操作，防止两个操作撞车。进程活着才算数。
+ * 旧版锁文件没有 kind，按 cli 处理。
  */
+export type LockKind = 'cli' | 'app' | 'op';
+
 export interface SessionLock {
   agent: string;
-  /** 写锁的 relay 进程 pid。app 软锁里只是留档，不作活性判断。 */
   pid: number;
   ts: string;
-  kind?: 'cli' | 'app';
-}
-
-/** 拿锁结果。overrode = --force 覆盖了仍持有的 App 软锁时，被覆盖的 agent 名（调用方须写进 journal）。 */
-export interface LockTakeover {
-  overrode?: string;
+  kind?: LockKind;
+  /** op 锁：正在做什么（交接 / 合回 …）。 */
+  op?: string;
+  llm?: string;
+  /** 全自动流水线派的活。 */
+  auto?: boolean;
 }
 
 export function lockPath(wt: string): string {
@@ -25,6 +29,7 @@ export function lockPath(wt: string): string {
 }
 
 export function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -34,112 +39,92 @@ export function pidAlive(pid: number): boolean {
 }
 
 export function readLock(wt: string): SessionLock | null {
-  const p = lockPath(wt);
-  if (!fs.existsSync(p)) return null;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8')) as SessionLock;
+    const raw = JSON.parse(fs.readFileSync(lockPath(wt), 'utf8')) as SessionLock;
+    return raw && typeof raw.agent === 'string' ? raw : null;
   } catch {
     return null;
   }
 }
 
-export function isAppLock(lock: SessionLock): boolean {
-  return lock.kind === 'app';
+export function lockKind(lock: SessionLock): LockKind {
+  return lock.kind ?? 'cli';
 }
 
-function writeLock(wt: string, agent: string, kind: 'cli' | 'app'): void {
+/** 这把锁现在还算不算数（挡不挡别人）。 */
+export function lockActive(lock: SessionLock): boolean {
+  return lockKind(lock) === 'app' || pidAlive(lock.pid);
+}
+
+export function writeLock(wt: string, lock: Omit<SessionLock, 'pid' | 'ts'> & { pid?: number }): void {
   fs.mkdirSync(path.dirname(lockPath(wt)), { recursive: true });
-  fs.writeFileSync(
-    lockPath(wt),
-    JSON.stringify({ agent, pid: process.pid, ts: new Date().toISOString(), kind }, null, 2) + '\n'
-  );
+  const full: SessionLock = { pid: process.pid, ts: new Date().toISOString(), ...lock };
+  fs.writeFileSync(lockPath(wt), JSON.stringify(full, null, 2) + '\n');
 }
 
-/** 拿锁前的公共检查：App 软锁默认拒绝（--force 覆盖并留痕）；cli 活锁一律拒绝；cli 死锁陈旧覆盖。 */
-function checkExisting(wt: string, opts: { force?: boolean }): LockTakeover {
-  const existing = readLock(wt);
-  if (!existing) return {};
-  if (isAppLock(existing)) {
-    if (!opts.force) {
-      throw new Error(
-        `「${existing.agent}」的 App 会话尚未交接（软锁，不看 pid）。` +
-          `先回主仓库执行 relay handoff 完成交接（或 relay abandon --force 放弃），` +
-          `确认要强行接管可加 --force（覆盖会写进 journal）。`
-      );
-    }
-    console.warn(`--force：覆盖「${existing.agent}」仍持有的 App 软锁（将写进 journal）。`);
-    return { overrode: existing.agent };
-  }
-  if (pidAlive(existing.pid)) {
-    throw new Error(
-      `「${existing.agent}」的会话仍在运行（pid ${existing.pid}）。同一时间只允许一个 agent 写 worktree。` +
-        `确认为误锁后可手工删除 ${lockPath(wt)}`
-    );
-  }
-  console.warn(`发现陈旧锁（${existing.agent}，pid ${existing.pid} 已退出），覆盖之。`);
-  return {};
-}
-
-/** relay run 拿 CLI pid 活锁。 */
-export function acquireLock(wt: string, agent: string, opts: { force?: boolean } = {}): LockTakeover {
-  const takeover = checkExisting(wt, opts);
-  writeLock(wt, agent, 'cli');
-  return takeover;
-}
-
-/** relay open 拿 App 软锁。 */
-export function acquireAppLock(wt: string, agent: string, opts: { force?: boolean } = {}): LockTakeover {
-  const takeover = checkExisting(wt, opts);
-  writeLock(wt, agent, 'app');
-  return takeover;
+export function restoreLock(wt: string, lock: SessionLock): void {
+  fs.mkdirSync(path.dirname(lockPath(wt)), { recursive: true });
+  fs.writeFileSync(lockPath(wt), JSON.stringify(lock, null, 2) + '\n');
 }
 
 export function releaseLock(wt: string): void {
-  const p = lockPath(wt);
-  if (fs.existsSync(p)) fs.rmSync(p);
+  fs.rmSync(lockPath(wt), { force: true });
 }
 
-/** 交接期间占住这把锁，盖住审计和门禁的等待。只放自己写下的那把。 */
-export function holdForHandoff(wt: string, agent: string): void {
-  const existing = readLock(wt);
-  if (existing && !isAppLock(existing) && pidAlive(existing.pid) && existing.pid !== process.pid) {
-    throw new Error(
-      `「${existing.agent}」的会话仍在运行（pid ${existing.pid}）。handoff 前须等它退出。`
-    );
+/** 描述一把锁，给人看。 */
+export function describeLock(lock: SessionLock): string {
+  const who = agentLabel(lock.agent);
+  switch (lockKind(lock)) {
+    case 'app':
+      return `「${who}」还在干活（桌面窗口，还没交接）`;
+    case 'op':
+      return `接力台正在${lock.op ?? '处理'}`;
+    default:
+      return lock.auto ? `全自动流水线里「${who}」正在干活` : `「${who}」正在终端里干活（进程 ${lock.pid}）`;
   }
-  writeLock(wt, agent, 'cli');
 }
 
-export function releaseLockIfOwner(wt: string): void {
+/** 清掉陈旧锁（进程已经不在的 cli / op 锁）。返回被清掉的锁。 */
+export function clearStaleLock(wt: string): SessionLock | null {
   const lock = readLock(wt);
-  if (lock && lock.pid === process.pid) releaseLock(wt);
+  if (!lock || lockActive(lock)) return null;
+  releaseLock(wt);
+  return lock;
 }
 
 /**
- * CLI 活锁检查：pid 活 → 拒绝；pid 死 → 清除（陈旧）。App 软锁不看 pid，此处直接放行——
- * 是否拒绝由各命令语义决定（run/open/rollback 用 assertNoAppSoftLock 拒绝；
- * handoff 是软锁的正常释放点，merge / abandon 自行检查软锁：默认拒绝，--force 才收尾）。
+ * 有人占着就拒绝。allowApp：桌面软锁放行（交接就是用来释放它的）。
+ * 陈旧锁顺手清掉。
  */
-export function assertNoLiveLock(wt: string, action: string): void {
+export function assertFree(wt: string, action: string, opts: { allowApp?: boolean } = {}): SessionLock | null {
+  clearStaleLock(wt);
   const lock = readLock(wt);
-  if (!lock || isAppLock(lock)) return;
-  if (pidAlive(lock.pid)) {
-    throw new Error(
-      `「${lock.agent}」的会话仍在运行（pid ${lock.pid}）。${action} 前须等它退出。` +
-        `确认为误锁可手工删除 ${lockPath(wt)}`
-    );
-  }
-  console.warn(`发现陈旧锁（${lock.agent}，pid ${lock.pid} 已退出），清除之。`);
-  releaseLock(wt);
+  if (!lock) return null;
+  const kind = lockKind(lock);
+  if (kind === 'app' && opts.allowApp) return lock;
+  if (lock.pid === process.pid && kind !== 'app') return lock;
+  if (kind === 'app') throw new RelayError(`${describeLock(lock)}。先交接，再${action}。`, 'locked-app');
+  if (kind === 'op') throw new RelayError(`${describeLock(lock)}，请稍等再${action}。`, 'locked-op');
+  throw new RelayError(`${describeLock(lock)}。等它退出后再${action}。`, 'locked-cli');
 }
 
-/** App 软锁拒绝：run / open / rollback 用（防止 App 还开着时被接管或 reset）。handoff 不调用——它是软锁的正常释放点；merge / abandon 自行检查（默认拒绝，--force 才收尾）。 */
-export function assertNoAppSoftLock(wt: string, action: string): void {
-  const lock = readLock(wt);
-  if (lock && isAppLock(lock)) {
-    throw new Error(
-      `「${lock.agent}」的 App 会话尚未交接（软锁，不看 pid）。` +
-        `先执行 relay handoff 完成交接（或 relay abandon --force 放弃），才能${action}。`
-    );
+/**
+ * 在 op 锁里做一件事。成功：锁释放（交接本来就要释放桌面软锁）。
+ * 失败：恢复原来的锁（交接失败了，桌面工人还在岗）。
+ */
+export async function withOpLock<T>(wt: string, op: string, agent: string, fn: () => Promise<T> | T): Promise<T> {
+  const prev = readLock(wt);
+  writeLock(wt, { agent, kind: 'op', op });
+  try {
+    const out = await fn();
+    const cur = readLock(wt);
+    if (cur && cur.pid === process.pid && lockKind(cur) === 'op') releaseLock(wt);
+    return out;
+  } catch (e) {
+    if (fs.existsSync(path.dirname(lockPath(wt)))) {
+      if (prev && lockKind(prev) === 'app') restoreLock(wt, prev);
+      else releaseLock(wt);
+    }
+    throw e;
   }
 }

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AuditEvent, GateEvent, JournalEvent, Tier } from './types';
+import { RelayError } from './errors';
+import type { AuditEvent, AutoEvent, GateEvent, HandoffEvent, JournalEvent, ReviewEvent, Tier } from './types';
 
 export function journalPath(worktree: string): string {
   return path.join(worktree, '.relay', 'journal.jsonl');
@@ -24,9 +25,9 @@ export function readEvents(worktree: string): JournalEvent[] {
       out.push(JSON.parse(line) as JournalEvent);
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
-      throw new Error(
-        `${p} 第 ${i + 1} 行不是合法 JSON（${why}）。` +
-          `不要手工改 journal。收尾可用 relay abandon --force。`
+      throw new RelayError(
+        `交接记录 ${p} 第 ${i + 1} 行坏了（${why}）。不要手改这个文件；要收场可以强制放弃任务（relay abandon --force）。`,
+        'bad-journal'
       );
     }
   }
@@ -34,78 +35,106 @@ export function readEvents(worktree: string): JournalEvent[] {
 }
 
 /**
- * 审计/门禁/段内 diffstat 的基准（「新工作从哪开始」）：最近一次回滚后的落点、
- * 或最近一次 handoff 检查点；没有过 handoff 则退回 start 事件记录的主线基准。
+ * 结构事件的落点（「从这里开始算新改动」）。不是结构事件返回 undefined。
+ * 同步主线有冲突或被撤销时不算落点：冲突要等下一次交接收尾。
  */
+function anchorOf(ev: JournalEvent): string | null | undefined {
+  switch (ev.type) {
+    case 'start':
+      return ev.commit ?? null;
+    case 'handoff':
+      return ev.checkpoint;
+    case 'rollback':
+      return ev.to;
+    case 'sync':
+      return !ev.aborted && !ev.conflicts?.length && ev.commit ? ev.commit : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** 这一段的起点（审计、未交接改动、门禁都从这里算）：最近的交接检查点 / 退回落点 / 同步点 / 开始基准。 */
 export function lastCheckpoint(events: JournalEvent[]): string | null {
   for (let i = events.length - 1; i >= 0; i--) {
-    const ev = events[i];
-    if (ev.type === 'rollback') return ev.to;
-    if (ev.type === 'handoff') return ev.checkpoint;
-    if (ev.type === 'start') return ev.commit ?? null;
+    const a = anchorOf(events[i]);
+    if (a !== undefined) return a;
   }
   return null;
 }
 
+export interface ReviewTarget {
+  /** 上一位干了活的工人（最近一次有改动的交接）。 */
+  agent: string;
+  tier?: Tier;
+  llm?: string;
+  /** 他那一段的起点和检查点：git diff from..to 就是他的全部改动。 */
+  from: string;
+  to: string;
+}
+
 /**
- * 自审基准（「上一段的起点」）：ONBOARD 里的 git diff <基准>..HEAD 必须能看到
- * 前任的业务改动——所以它不是最近的检查点，而是最近 handoff 之前那个检查点。
- * 最近结构事件是 rollback 时用其落点；从未 handoff 时用 start 记录的主线基准。
+ * 下一位上岗时要审的「上一段」：最近一次**有改动**的交接。空交接（没干活就交班）透明跳过，
+ * 这样「弱模型干了活 → 强模型什么都没做就交班 → 第三位上岗」时，第三位审的仍是弱模型那段。
+ * 中间有退回：之前的活已经被丢掉，没东西可审。
  */
-export function reviewBaseFor(events: JournalEvent[]): string | null {
+export function lastReviewTarget(events: JournalEvent[]): ReviewTarget | null {
   let i = events.length - 1;
+  let hand: HandoffEvent | null = null;
   for (; i >= 0; i--) {
     const ev = events[i];
-    if (ev.type === 'rollback') return ev.to;
-    if (ev.type === 'start') return ev.commit ?? null;
-    if (ev.type === 'handoff') {
-      i--; // 越过最近的 handoff，继续找上一段的起点
+    if (ev.type === 'rollback' || ev.type === 'start') return null;
+    if (ev.type === 'handoff' && !ev.empty) {
+      hand = ev;
+      i--;
       break;
     }
   }
+  if (!hand) return null;
   for (; i >= 0; i--) {
-    const ev = events[i];
-    if (ev.type === 'rollback') return ev.to;
-    if (ev.type === 'handoff') return ev.checkpoint;
-    if (ev.type === 'start') return ev.commit ?? null;
+    const a = anchorOf(events[i]);
+    if (a === undefined) continue;
+    if (!a) return null;
+    return {
+      agent: hand.agent ?? '?',
+      ...(hand.tier ? { tier: hand.tier } : {}),
+      ...(hand.llm ? { llm: hand.llm } : {}),
+      from: a,
+      to: hand.checkpoint,
+    };
   }
   return null;
 }
 
-/** 上一位干活的 agent（自审强制条款的判断依据）。run 与 open 都是上岗，取最近者。 */
-export function lastRun(
-  events: JournalEvent[]
-): { agent: string; tier: Tier | undefined; llm?: string } | null {
+export interface ShiftInfo {
+  agent: string;
+  tier?: Tier;
+  llm?: string;
+  type: 'run' | 'open';
+  ts: string;
+}
+
+/** 这一段（最近一次交接 / 退回 / 同步之后）上岗的工人；没人上岗返回 null。 */
+export function lastSegmentRun(events: JournalEvent[]): ShiftInfo | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
+    if (anchorOf(ev) !== undefined && ev.type !== 'start') return null;
     if (ev.type === 'run' || ev.type === 'open') {
-      return { agent: ev.agent ?? '?', tier: ev.tier, ...(ev.llm ? { llm: ev.llm } : {}) };
+      return {
+        agent: ev.agent ?? '?',
+        ...(ev.tier ? { tier: ev.tier } : {}),
+        ...(ev.llm ? { llm: ev.llm } : {}),
+        type: ev.type,
+        ts: ev.ts,
+      };
     }
   }
   return null;
 }
 
-/**
- * 本段谁在干活（handoff / 审计 / 门禁归因）：只看最近一次 handoff 或 rollback 之后的 run/open。
- * 连续两次 handoff 中间没人上岗 → 归到 framework，不把上一段的人再记一次。
- * ONBOARD 的「前任」仍用 lastRun（整本 journal 最近一次上岗）。
- */
-export function lastSegmentRun(
-  events: JournalEvent[]
-): { agent: string; tier: Tier | undefined; llm?: string } | null {
-  let start = 0;
+export function lastHandoff(events: JournalEvent[], opts: { nonEmpty?: boolean } = {}): HandoffEvent | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
-    if (ev.type === 'handoff' || ev.type === 'rollback') {
-      start = i + 1;
-      break;
-    }
-  }
-  for (let i = events.length - 1; i >= start; i--) {
-    const ev = events[i];
-    if (ev.type === 'run' || ev.type === 'open') {
-      return { agent: ev.agent ?? '?', tier: ev.tier, ...(ev.llm ? { llm: ev.llm } : {}) };
-    }
+    if (ev.type === 'handoff' && (!opts.nonEmpty || !ev.empty)) return ev;
   }
   return null;
 }
@@ -126,27 +155,68 @@ export function lastAudit(events: JournalEvent[]): AuditEvent | null {
   return null;
 }
 
-/** rollback 可选目标：relay 首提交（优先取会话指针里的 startCommit，start 事件里存的是主线基准）
- *  + 每个 handoff 检查点。 */
-export function checkpoints(
-  events: JournalEvent[],
-  startCommit?: string
-): { sha: string; agent: string; ts: string }[] {
-  const list: { sha: string; agent: string; ts: string }[] = [];
-  let startSeen = false;
+/** 还没收尾的同步冲突（同步主线后有冲突，之后还没交接过）。 */
+export function pendingSyncConflicts(events: JournalEvent[]): string[] {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type === 'handoff' || ev.type === 'rollback') return [];
+    if (ev.type === 'sync') return ev.aborted ? [] : ev.conflicts ?? [];
+  }
+  return [];
+}
+
+export interface CheckpointInfo {
+  sha: string;
+  agent: string;
+  ts: string;
+  label: string;
+}
+
+/** 可以退回的点：任务开始时 + 每次有改动的交接。 */
+export function checkpoints(events: JournalEvent[], startCommit?: string): CheckpointInfo[] {
+  const list: CheckpointInfo[] = [];
+  const seen = new Set<string>();
+  const push = (c: CheckpointInfo) => {
+    if (seen.has(c.sha)) return;
+    seen.add(c.sha);
+    list.push(c);
+  };
   for (const ev of events) {
     if (ev.type === 'start') {
       const sha = startCommit ?? ev.commit;
-      if (sha) {
-        list.push({ sha, agent: '(start)', ts: ev.ts });
-        startSeen = true;
-      }
-    } else if (ev.type === 'handoff') {
-      list.push({ sha: ev.checkpoint, agent: ev.agent ?? '?', ts: ev.ts });
+      if (sha) push({ sha, agent: '(开始)', ts: ev.ts, label: '任务开始时' });
+    } else if (ev.type === 'handoff' && !ev.empty) {
+      push({ sha: ev.checkpoint, agent: ev.agent ?? '?', ts: ev.ts, label: '交接' });
     }
   }
-  if (!startSeen && startCommit) {
-    list.unshift({ sha: startCommit, agent: '(start)', ts: '?' });
-  }
+  if (startCommit && !seen.has(startCommit)) list.unshift({ sha: startCommit, agent: '(开始)', ts: '', label: '任务开始时' });
   return list;
+}
+
+/** 最近一次审查。 */
+export function lastReview(events: JournalEvent[]): ReviewEvent | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type === 'review') return ev;
+  }
+  return null;
+}
+
+/** 最近一次「要求修改」的审查。 */
+export function lastFixReview(events: JournalEvent[]): ReviewEvent | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type === 'review' && ev.verdict === 'fix') return ev;
+  }
+  return null;
+}
+
+/** 某次全自动开始之后的审查（算轮数用）。 */
+export function reviewsSinceAuto(events: JournalEvent[], runId: string): ReviewEvent[] {
+  let i = events.length - 1;
+  for (; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type === 'auto' && (ev as AutoEvent).phase === 'begin' && (ev as AutoEvent).runId === runId) break;
+  }
+  return events.slice(Math.max(0, i)).filter((e): e is ReviewEvent => e.type === 'review');
 }

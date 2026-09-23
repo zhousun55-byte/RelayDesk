@@ -2,509 +2,304 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ChatLine } from './chat';
-import {
-  prettyLlm,
-  readHarnessBrain,
-  runningHarnesses,
-  windowLabel,
-} from './identity';
-import { loadRegistry } from './registry';
+import { RelayError, errorMessage } from './errors';
+import { findHarness, locateCached } from './harness';
+import { fillTemplate } from './launch';
+import { chat } from './llm';
+import { redactSecrets } from './redact';
+import { startRun } from './runner';
+import { agentKind, agentLabel, canTalk, findAgent, OUT_PLACEHOLDER } from './registry';
+import type { AgentConfig } from './types';
 
+/**
+ * 讨论：人问一句，选中的几个 AI 依次发言，每个都看得到前面的全部内容。
+ * 讨论只说话、不改文件，记录存在项目的 .relay/talk.jsonl（不进 git）。
+ */
 export interface TalkRow {
   ts: string;
-  kind: 'system' | 'person';
+  kind: 'human' | 'ai' | 'system';
   who: string;
-  windowId?: string;
-  llm?: string;
-  sub?: string;
-  at?: string[];
+  agent?: string;
+  model?: string;
   text: string;
-  mine?: boolean;
-  pending?: boolean;
-  files?: string[];
-}
-
-export interface TalkOpener {
-  who: string;
-  windowId?: string;
-  llm?: string;
-  text: string;
-}
-
-const asking = new Set<string>();
-const waiting = new Set<string>();
-const queues = new Map<string, string[]>();
-
-function now(): string {
-  return new Date().toISOString();
-}
-
-function roomKey(root: string): string {
-  return path.resolve(root);
+  /** 这条是「没回上来」的说明。 */
+  error?: boolean;
 }
 
 export function talkPath(root: string): string {
-  return path.join(path.resolve(root), '.relay', 'talk.jsonl');
+  return path.join(root, '.relay', 'talk.jsonl');
 }
 
-export function talkMdPath(root: string): string {
-  return path.join(path.resolve(root), '.relay', 'talk.md');
-}
-
-export function saveTalkFile(root: string, name: string, bytes: Buffer): string {
-  const base = path.basename(name).replace(/[^\w.\-\u4e00-\u9fff]+/g, '_').slice(0, 80) || 'file';
-  const dir = path.join(path.resolve(root), '.relay', 'attach');
-  fs.mkdirSync(dir, { recursive: true });
-  const filename = `${Date.now().toString(36)}-${base}`;
-  fs.writeFileSync(path.join(dir, filename), bytes);
-  return `.relay/attach/${filename}`;
-}
-
-export function resolveProjectFile(root: string, rel: string): string | null {
-  if (!rel || rel.includes('\0')) return null;
-  const absRoot = path.resolve(root);
-  const abs = path.resolve(absRoot, rel);
-  if (abs !== absRoot && !abs.startsWith(absRoot + path.sep)) return null;
-  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return null;
-  if (fs.statSync(abs).size > 8_000_000) return null;
-  return abs;
-}
-
-export function knownWindows(): { id: string; label: string }[] {
-  const seen = new Map<string, string>();
-  for (const a of loadRegistry().agents) seen.set(a.name, windowLabel(a.name));
-  for (const id of ['claude', 'cursor', 'zcode']) {
-    if (!seen.has(id)) seen.set(id, windowLabel(id));
-  }
-  return [...seen.entries()].map(([id, label]) => ({ id, label }));
-}
-
-export function parseMentions(text: string, known: { id: string; label: string }[] = knownWindows()): string[] {
-  const ids: string[] = [];
-  for (const m of text.matchAll(/@([^\s@]+)/g)) {
-    const token = m[1].split(/[·.]/)[0];
-    const hit = known.find(
-      (k) => k.id.toLowerCase() === token.toLowerCase() || k.label.toLowerCase() === token.toLowerCase()
-    );
-    if (hit && !ids.includes(hit.id)) ids.push(hit.id);
-  }
-  return ids;
-}
-
-export function readTalkRows(root: string): TalkRow[] {
+/** 读讨论记录。兼容旧版格式（person/system + windowId），跳过旧版残留的「正在说」占位行。 */
+export function readTalk(root: string, limit = 400): TalkRow[] {
   const p = talkPath(root);
   if (!fs.existsSync(p)) return [];
   const out: TalkRow[] = [];
   for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
     if (!line.trim()) continue;
+    let r: Record<string, unknown>;
     try {
-      out.push(JSON.parse(line) as TalkRow);
+      r = JSON.parse(line) as Record<string, unknown>;
     } catch {
-      /* skip a broken talk line */
+      continue;
     }
-  }
-  return out;
-}
-
-export function shownSub(sub?: string): string | undefined {
-  if (!sub) return undefined;
-  const t = sub.replace(/\s*[·•]\s*最认真/g, '').replace(/最认真/g, '').trim();
-  return t || undefined;
-}
-
-export function rowToChat(row: TalkRow): ChatLine {
-  return {
-    kind: row.kind,
-    who: row.who,
-    windowId: row.windowId,
-    llm: row.llm,
-    sub: shownSub(row.sub),
-    at: row.at,
-    text: row.text,
-    ts: row.ts,
-    mine: row.mine,
-    pending: row.pending,
-    files: row.files,
-  };
-}
-
-function writeTalk(root: string, rows: TalkRow[]): void {
-  const p = talkPath(root);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''));
-  writeTalkMd(root);
-}
-
-/** 后到的正式回复盖住同一扇窗前面那条「正在说」，文件本身只追加。 */
-export function collapsePending(rows: TalkRow[]): TalkRow[] {
-  const hide = new Set<number>();
-  const open = new Map<string, number>();
-  rows.forEach((r, i) => {
-    if (r.pending && r.windowId) {
-      open.set(r.windowId, i);
-      return;
-    }
-    if (r.kind === 'person' && r.windowId && !r.pending && open.has(r.windowId)) {
-      hide.add(open.get(r.windowId)!);
-      open.delete(r.windowId);
-    }
-  });
-  return rows.filter((_, i) => !hide.has(i));
-}
-
-function expirePending(root: string): void {
-  const stuck = collapsePending(readTalkRows(root)).filter(
-    (r) => r.pending && r.windowId && Number.isFinite(Date.parse(r.ts)) && Date.now() - Date.parse(r.ts) > 200_000
-  );
-  for (const r of stuck) {
-    appendTalk(root, {
-      kind: 'person',
-      who: r.who,
-      windowId: r.windowId,
-      text: '没听见。',
+    if (r.pending) continue;
+    const text = typeof r.text === 'string' ? r.text : '';
+    if (!text.trim()) continue;
+    const ts = typeof r.ts === 'string' ? r.ts : new Date(0).toISOString();
+    const kindIn = r.kind;
+    const windowId = typeof r.windowId === 'string' ? r.windowId : undefined;
+    let kind: TalkRow['kind'];
+    if (kindIn === 'human' || kindIn === 'ai' || kindIn === 'system') kind = kindIn;
+    else if (r.mine || windowId === 'human') kind = 'human';
+    else if (kindIn === 'system') kind = 'system';
+    else kind = 'ai';
+    const agent = typeof r.agent === 'string' ? r.agent : windowId && windowId !== 'human' ? windowId : undefined;
+    const model = typeof r.model === 'string' ? r.model : typeof r.llm === 'string' ? r.llm : undefined;
+    out.push({
+      ts,
+      kind,
+      who: typeof r.who === 'string' && r.who ? r.who : kind === 'human' ? '我' : agentLabel(agent ?? '?'),
+      ...(agent ? { agent } : {}),
+      ...(model ? { model } : {}),
+      text,
+      ...(r.error ? { error: true } : {}),
     });
   }
-}
-
-export function readTalk(root: string): ChatLine[] {
-  expirePending(root);
-  return collapsePending(readTalkRows(root)).map(rowToChat);
-}
-
-export function pendingWindow(lines: ChatLine[]): string | null {
-  return lines.find((l) => l.pending)?.windowId ?? null;
-}
-
-export function talkSub(windowId: string): string {
-  return prettyLlm(readHarnessBrain(windowId) || '');
-}
-
-export function talkWho(windowId: string): string {
-  const win = windowLabel(windowId);
-  const sub = talkSub(windowId);
-  return sub && sub !== win ? `${win} · ${sub}` : win;
-}
-
-export function writeTalkMd(root: string): string {
-  const p = talkMdPath(root);
-  const rows = readTalkRows(root).filter((r) => !r.pending);
-  const lines = [
-    `# 群聊 · ${path.basename(path.resolve(root))}`,
-    '',
-  ];
-  for (const r of rows) {
-    const t = new Date(r.ts);
-    const hh = String(t.getHours()).padStart(2, '0');
-    const mm = String(t.getMinutes()).padStart(2, '0');
-    const who = r.sub ? `${r.who}（${r.sub}）` : r.who;
-    const at = r.at?.length ? ` @${r.at.join(' @')}` : '';
-    lines.push(`- ${hh}:${mm} **${who}**${at}：${r.text.replace(/\s+/g, ' ').trim()}`);
-  }
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, lines.join('\n') + '\n');
-  return p;
-}
-
-export function openTalkWindow(root: string, windowId?: string): string {
-  const p = writeTalkMd(root);
-  if (windowId === 'claude') {
-    spawn('open', ['-a', 'Claude', p], { stdio: 'ignore', detached: true }).unref();
-  } else {
-    spawn('open', [p], { stdio: 'ignore', detached: true }).unref();
-  }
-  return p;
+  return out.slice(-limit);
 }
 
 export function appendTalk(root: string, row: Omit<TalkRow, 'ts'> & { ts?: string }): TalkRow {
-  const full: TalkRow = { ...row, ts: row.ts ?? now() };
-  const p = talkPath(root);
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.appendFileSync(p, JSON.stringify(full) + '\n');
-  writeTalkMd(root);
+  const full: TalkRow = { ts: row.ts ?? new Date().toISOString(), ...row } as TalkRow;
+  fs.mkdirSync(path.dirname(talkPath(root)), { recursive: true });
+  fs.appendFileSync(talkPath(root), JSON.stringify(full) + '\n');
   return full;
 }
 
-export function settleTalk(root: string, windowId: string, text: string, opts?: { ask?: boolean }): void {
-  appendTalk(root, {
-    kind: 'person',
-    who: windowLabel(windowId),
-    windowId,
-    llm: readHarnessBrain(windowId) || undefined,
-    sub: talkSub(windowId) || undefined,
-    text,
-  });
-  const key = roomKey(root);
-  const leftover = queues.get(key) ?? [];
-  if (waiting.has(key) && leftover.length === 0) {
-    waiting.delete(key);
-    maybeAsk(root, { ask: opts?.ask, fresh: true });
-    return;
+/** 清空讨论：旧记录改名存档（talk-时间.jsonl），不删。 */
+export function archiveTalk(root: string): string | null {
+  const p = talkPath(root);
+  if (!fs.existsSync(p)) return null;
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const name = `talk-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jsonl`;
+  const to = path.join(path.dirname(p), name);
+  fs.renameSync(p, to);
+  return to;
+}
+
+export interface TalkContext {
+  task?: { title: string; phaseText: string; changes: string[] } | null;
+}
+
+function hhmm(ts: string): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '--:--';
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** 拼给某个 AI 的发言提示：规则 + 项目背景 + 最近的讨论记录。纯函数。 */
+export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number }): string {
+  const max = input.maxChars ?? 24_000;
+  const lines = input.rows
+    .filter((r) => !r.error)
+    .map((r) => `[${hhmm(r.ts)}] ${r.kind === 'system' ? '（接力台）' : r.who}：${r.text.trim()}`);
+  const kept: string[] = [];
+  let size = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    size += lines[i].length + 2;
+    if (size > max && kept.length > 0) break;
+    kept.unshift(lines[i]);
   }
-  maybeAsk(root, { ask: opts?.ask });
+  const t = input.context?.task;
+  const parts = [
+    `你在参加「接力台」里的一场多 AI 讨论。你是「${input.speaker}」。`,
+    `项目文件夹：${input.root}（可以读里面的文件做参考，但不要修改任何文件，也不要执行会改变东西的命令）。`,
+    t
+      ? `当前任务：${t.title}\n任务状态：${t.phaseText}${t.changes.length ? `\n已改动的文件：${t.changes.slice(0, 30).join('、')}` : ''}`
+      : '现在没有进行中的任务。',
+    [
+      '怎么发言：',
+      '- 直接给出你的判断和理由，不客套，不复述别人已经说过的话。',
+      '- 可以点名回应别人的观点：同意还是不同意，为什么。',
+      '- 一般控制在 300 字以内；被要求详细时再展开。',
+      '- 用中文。只输出你要说的话本身。',
+    ].join('\n'),
+    `讨论记录（${kept.length < lines.length ? '较早的已省略，' : ''}最新的在最后）：\n${kept.join('\n\n') || '（还没有人说话）'}`,
+    `现在轮到你（${input.speaker}）发言。`,
+  ];
+  return redactSecrets(parts.join('\n\n'));
 }
 
-export function sayInTalk(root: string, text: string, files: string[] = []): void {
-  const t = text.trim();
-  const clips = files.map((f) => f.trim()).filter(Boolean);
-  if (!t && !clips.length) throw new Error('先说一句');
-  appendTalk(root, {
-    kind: 'person',
-    who: '我',
-    windowId: 'human',
-    text: t || clips.map((f) => f.split('/').pop()).join('、'),
-    at: parseMentions(t),
-    files: clips.length ? clips : undefined,
-    mine: true,
-  });
+function cleanReply(text: string): string {
+  return text
+    .replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\r/g, '')
+    .trim()
+    .slice(0, 8000);
 }
 
-export function sayAs(root: string, opener: TalkOpener): void {
-  const t = opener.text.trim();
-  if (!t) throw new Error('先说一句');
-  appendTalk(root, {
-    kind: 'person',
-    who: opener.who,
-    windowId: opener.windowId,
-    llm: opener.llm,
-    text: t,
-    at: parseMentions(t),
-    mine: opener.windowId === 'human',
-  });
-}
-
-export function formatTalkHistory(root: string, limit = 24): string {
-  return readTalkRows(root)
-    .filter((r) => !r.pending)
-    .slice(-limit)
-    .map((r) => {
-      const sub = shownSub(r.sub);
-      const who = sub ? `${r.who} · ${sub}` : r.who;
-      const files = r.files?.length ? `\n文件：${r.files.join('、')}` : '';
-      return `${who}：${r.text}${files}`;
-    })
-    .join('\n\n');
-}
-
-export function seatedWindows(rows: TalkRow[]): string[] {
-  const ids: string[] = [];
-  for (const r of rows) {
-    if (!r.windowId || r.windowId === 'human') continue;
-    if (r.kind === 'system' && /进了群/.test(r.text) && !ids.includes(r.windowId)) ids.push(r.windowId);
+/** 让一个 AI 回答：API 型直接调接口；命令型把提示从标准输入喂进去，读标准输出（或 {{out}} 文件）。 */
+export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, timeoutMs = 240_000): Promise<string> {
+  if (agentKind(agent) === 'api') {
+    if (!agent.api) throw new RelayError('这个工人没有配置接口。', 'no-api');
+    return cleanReply(await chat(agent.api, [{ role: 'user', content: prompt }], { timeoutMs, temperature: 0.5 }));
   }
-  return ids;
-}
-
-function replyApp(windowId: string): string | null {
-  if (windowId === 'claude') return 'Claude';
-  return null;
-}
-
-export function canReply(windowId: string): boolean {
-  return replyApp(windowId) !== null;
-}
-
-function lastHuman(rows: TalkRow[]): TalkRow | null {
-  for (let i = rows.length - 1; i >= 0; i--) {
-    if (rows[i].mine || rows[i].windowId === 'human') return rows[i];
-  }
-  return null;
-}
-
-function spokenSinceHuman(rows: TalkRow[]): Set<string> {
-  const spoken = new Set<string>();
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const r = rows[i];
-    if (r.mine || r.windowId === 'human') break;
-    if (r.kind === 'person' && r.windowId && !r.pending) spoken.add(r.windowId);
-  }
-  return spoken;
-}
-
-export function buildRound(root: string): string[] {
-  const rows = readTalkRows(root);
-  const seated = seatedWindows(rows);
-  const able = seated.filter((id) => canReply(id));
-  const spoken = spokenSinceHuman(rows);
-  const mentions = (lastHuman(rows)?.at ?? []).filter((id) => able.includes(id) && !spoken.has(id));
-  const rest = able.filter((id) => !mentions.includes(id) && !spoken.has(id));
-  return [...mentions, ...rest];
-}
-
-export function maybeAsk(root: string, opts?: { ask?: boolean; fresh?: boolean }): void {
-  const ask = opts?.ask !== false;
-  const key = roomKey(root);
-  const rows = collapsePending(readTalkRows(root));
-  if (rows.some((r) => r.pending)) {
-    waiting.add(key);
-    return;
-  }
-  let q = queues.get(key) ?? [];
-  if (opts?.fresh) {
-    q = buildRound(root);
-    queues.set(key, q);
-    const mentioned = (lastHuman(rows)?.at ?? []).filter((id) => !canReply(id));
-    for (const id of mentioned) {
-      appendTalk(root, {
-        kind: 'system',
-        who: '接力',
-        windowId: id,
-        text: `${windowLabel(id)} 不自动回`,
-      });
-    }
-  }
-  const next = q.shift();
-  queues.set(key, q);
-  if (!next) return;
-  if (ask && !windowIsRunning(next)) {
-    appendTalk(root, { kind: 'system', who: '接力', windowId: next, text: `${windowLabel(next)} 窗口没开。` });
-    maybeAsk(root, { ask, fresh: false });
-    return;
-  }
-  appendTalk(root, {
-    kind: 'person',
-    who: windowLabel(next),
-    windowId: next,
-    llm: readHarnessBrain(next) || undefined,
-    sub: talkSub(next) || undefined,
-    text: '正在说',
-    pending: true,
-  });
-  if (ask) kickReply(root, next);
-}
-
-export function windowIsRunning(windowId: string): boolean {
-  return runningHarnesses().includes(windowId);
-}
-
-function claudeBin(): string {
-  const home = path.join(os.homedir(), '.local/bin/claude');
-  return fs.existsSync(home) ? home : 'claude';
-}
-
-function bringFront(app: string): void {
-  spawn('open', ['-a', app], { stdio: 'ignore', detached: true }).unref();
-}
-
-export function pullIntoTalk(
-  root: string,
-  windowId: string,
-  opener?: TalkOpener,
-  opts?: { ask?: boolean }
-): void {
-  const ask = opts?.ask !== false;
-  if (ask && !windowIsRunning(windowId)) throw new Error('窗口没开');
-  const rows = collapsePending(readTalkRows(root));
-  if (rows.some((r) => r.pending)) throw new Error('还在等上一句');
-  const label = windowLabel(windowId);
-  if (!rows.some((r) => r.windowId === windowId && /进了群/.test(r.text))) {
-    appendTalk(root, { kind: 'system', who: '接力', windowId, text: `${label} 进了群` });
-  }
-  if (opener?.text.trim()) {
-    appendTalk(root, {
-      kind: 'person',
-      who: opener.who,
-      windowId: opener.windowId,
-      llm: opener.llm,
-      text: opener.text.trim(),
-      at: parseMentions(opener.text),
+  const tpl = agent.ask?.trim();
+  if (!tpl) {
+    // 绑定了认得的编程工具：用它的只读模式回答。
+    const spec = findHarness(agent.harness);
+    const loc = spec ? locateCached(spec) : null;
+    if (!spec || !loc) throw new RelayError(`「${agentLabel(agent)}」没有配置讨论命令。`, 'no-ask');
+    const stamp = `${process.pid}-${Date.now()}`;
+    const inv = spec.invoke(loc, {
+      cwd,
+      prompt,
+      level: 'safe',
+      readOnly: true,
+      model: agent.model?.trim() || undefined,
+      effort: agent.effort,
+      outFile: path.join(os.tmpdir(), `relay-talk-${stamp}.txt`),
     });
+    const logPath = path.join(os.tmpdir(), `relay-talk-${stamp}.log`);
+    const r = await startRun({ invocation: inv, cwd, timeoutMs, logPath, title: '讨论' }).done;
+    fs.rmSync(logPath, { force: true });
+    const text = cleanReply(r.finalText);
+    if (!text) throw new RelayError(r.error ?? (r.timedOut ? `${Math.round(timeoutMs / 1000)} 秒没回话，停掉了。` : `什么都没说（退出码 ${r.code}）。`), 'ask-empty');
+    return text;
   }
-  writeTalkMd(root);
-  if (ask && windowId === 'claude') openTalkWindow(root, 'claude');
-  if (!canReply(windowId)) {
-    appendTalk(root, { kind: 'system', who: '接力', windowId, text: `${label} 不自动回` });
-    return;
-  }
-  queues.set(roomKey(root), [windowId]);
-  maybeAsk(root, { ask, fresh: false });
-}
-
-export function listTalkRooms(
-  projects: { name: string; root: string; current: boolean }[]
-): { name: string; root: string; current: boolean; preview: string }[] {
-  const out: { name: string; root: string; current: boolean; preview: string }[] = [];
-  for (const p of projects) {
-    if (!fs.existsSync(talkPath(p.root))) continue;
-    const rows = readTalkRows(p.root).filter((r) => r.kind === 'person' && !r.pending);
-    const last = rows[rows.length - 1];
-    out.push({
-      name: p.name,
-      root: p.root,
-      current: p.current,
-      preview: (last?.text || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+  const outFile = tpl.includes(OUT_PLACEHOLDER) ? path.join(os.tmpdir(), `relay-talk-${process.pid}-${Date.now()}.txt`) : null;
+  const cmd = fillTemplate(tpl, outFile ? { out: outFile } : {});
+  return new Promise((resolve, reject) => {
+    const child = spawn('sh', ['-c', cmd], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true, env: { ...process.env, NO_COLOR: '1' } });
+    let out = '';
+    let err = '';
+    child.stdout?.on('data', (c: Buffer) => {
+      out += c.toString('utf8');
+      if (out.length > 200_000) out = out.slice(-200_000);
     });
-  }
-  return out;
+    child.stderr?.on('data', (c: Buffer) => {
+      err = (err + c.toString('utf8')).slice(-4000);
+    });
+    child.stdin?.on('error', () => {
+      /* 有的命令不读标准输入 */
+    });
+    child.stdin?.end(prompt);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        /* 已结束 */
+      }
+    }, timeoutMs);
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      reject(new RelayError(`启动不了：${e.message}`, 'ask-spawn'));
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      let reply = out;
+      if (outFile) {
+        try {
+          reply = fs.readFileSync(outFile, 'utf8');
+        } catch {
+          /* 没写文件就用标准输出 */
+        }
+        fs.rmSync(outFile, { force: true });
+      }
+      const text = cleanReply(reply);
+      if (timedOut) return reject(new RelayError(`${Math.round(timeoutMs / 1000)} 秒没回话，停掉了。`, 'ask-timeout'));
+      if (code !== 0 && !text) return reject(new RelayError(`命令出错（退出码 ${code}）：${cleanReply(err).slice(-600) || '没有输出'}`, 'ask-failed'));
+      if (!text) return reject(new RelayError(`什么都没说。${cleanReply(err).slice(-300)}`, 'ask-empty'));
+      resolve(text);
+    });
+  });
 }
 
-export function lastHumanText(root: string): string {
-  const row = lastHuman(readTalkRows(root));
-  return row?.text.replace(/@\S+/g, '').trim() || '';
+// ---- 一轮发言（按项目排队，同一个项目同一时间只有一轮在跑） ----
+
+interface Round {
+  queue: string[];
+  current: string | null;
+  since: string | null;
+  running: Promise<void> | null;
 }
 
-export function kickReply(root: string, windowId: string): void {
-  const app = replyApp(windowId);
-  if (!app) {
-    settleTalk(root, windowId, '这扇窗开着，但还不会在群聊里回。');
-    return;
+const rounds = new Map<string, Round>();
+
+function roundOf(root: string): Round {
+  const key = path.resolve(root);
+  let r = rounds.get(key);
+  if (!r) {
+    r = { queue: [], current: null, since: null, running: null };
+    rounds.set(key, r);
   }
-  const key = `${path.resolve(root)}::${windowId}`;
-  if (asking.has(key)) return;
-  asking.add(key);
-  bringFront(app);
-  writeTalkMd(root);
-  const history = formatTalkHistory(root);
-  const mentioned = (lastHuman(readTalkRows(root))?.at ?? []).includes(windowId);
-  const prompt = [
-    `你是 ${talkWho(windowId)}。用你这个模型本来的说法说话，不要装成另一个助手，不要改任何文件。`,
-    `当前房间：${path.resolve(root)}`,
-    '这是接力的群聊。改代码走接力那一条，不在这里改。',
-    '看着下面整段往下说。别人说过的不要重复。点到你就先答那一句。',
-    mentioned ? '最后一句点了你。' : '这轮大家都在。',
-    history || '（还没有别人说话）',
-  ].join('\n\n');
-  const child = spawn(
-    claudeBin(),
-    ['-p', prompt, '--output-format', 'text', '--model', 'opus'],
-    {
-      cwd: os.tmpdir(),
-      env: {
-        ...process.env,
-        PATH: `${path.join(os.homedir(), '.local/bin')}:${process.env.PATH ?? ''}`,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }
-  );
-  let out = '';
-  let err = '';
-  child.stdout?.on('data', (c: Buffer) => {
-    out += c.toString('utf8');
-  });
-  child.stderr?.on('data', (c: Buffer) => {
-    err += c.toString('utf8');
-  });
-  const done = (text: string): void => {
-    if (!asking.has(key)) return;
-    asking.delete(key);
-    const t = text.replace(/\u001b\[[0-9;]*m/g, '').trim();
-    try {
-      settleTalk(root, windowId, (t || '没听见。').slice(0, 4000));
-    } catch {
-      /* a late reply must not take the page down */
-    }
+  return r;
+}
+
+export function talkStatus(root: string): { current: { agent: string; label: string; since: string } | null; queue: { agent: string; label: string }[] } {
+  const r = rounds.get(path.resolve(root));
+  const lab = (n: string) => agentLabel(findAgent(n) ?? n);
+  return {
+    current: r?.current ? { agent: r.current, label: lab(r.current), since: r.since ?? '' } : null,
+    queue: (r?.queue ?? []).map((n) => ({ agent: n, label: lab(n) })),
   };
-  const timer = setTimeout(() => {
-    child.kill('SIGTERM');
-    done('等太久，没接到。');
-  }, 180_000);
-  child.on('close', (code) => {
-    clearTimeout(timer);
-    if (code === 0 && out.trim()) done(out);
-    else done((out.trim() || err.trim() || '没听见。').slice(0, 4000));
-  });
-  child.on('error', () => {
-    clearTimeout(timer);
-    done('没能叫到 Claude。');
-  });
+}
+
+function speakerName(agent: AgentConfig): string {
+  return `${agentLabel(agent)}${agent.model ? ` · ${agent.model}` : ''}`;
+}
+
+async function runRound(root: string, context: () => TalkContext): Promise<void> {
+  const r = roundOf(root);
+  while (r.queue.length) {
+    const name = r.queue.shift()!;
+    r.current = name;
+    r.since = new Date().toISOString();
+    const agent = findAgent(name);
+    try {
+      if (!agent) throw new RelayError('工人名单里已经没有它了。', 'no-agent');
+      let ctx: TalkContext = {};
+      try {
+        ctx = context();
+      } catch {
+        ctx = {};
+      }
+      const who = speakerName(agent);
+      const prompt = buildTalkPrompt({ speaker: who, root, rows: readTalk(root, 80), context: ctx });
+      const text = await askAgent(agent, prompt, root);
+      appendTalk(root, { kind: 'ai', who, agent: agent.name, ...(agent.model ? { model: agent.model } : {}), text });
+    } catch (e) {
+      appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agentLabel(agent ?? name)} 没回上来：${errorMessage(e)}`, error: true });
+    }
+  }
+  r.current = null;
+  r.since = null;
+}
+
+/**
+ * 人说一句，并请几位 AI 依次回应。立即返回；回答在后台陆续写进记录。
+ * 已经有一轮在跑时，新请的人排到队尾（他们发言时会看到这句话）。
+ */
+export function say(root: string, text: string, ask: string[], context: () => TalkContext = () => ({})): { row: TalkRow; queued: string[]; done: Promise<void> } {
+  const t = text.trim();
+  if (!t) throw new RelayError('先写一句话。', 'empty');
+  const names: string[] = [];
+  for (const n of ask) {
+    const a = findAgent(n);
+    if (!a) throw new RelayError(`工人名单里没有「${n}」。`, 'no-agent');
+    if (!canTalk(a)) throw new RelayError(`「${agentLabel(a)}」还不能参加讨论：在设置里给它填「讨论命令」。`, 'cannot-talk');
+    if (!names.includes(n)) names.push(n);
+  }
+  const row = appendTalk(root, { kind: 'human', who: '我', text: t });
+  const r = roundOf(root);
+  for (const n of names) if (!r.queue.includes(n) && r.current !== n) r.queue.push(n);
+  if (!r.running && r.queue.length) {
+    r.running = runRound(root, context).finally(() => {
+      r.running = null;
+    });
+  }
+  return { row, queued: names, done: r.running ?? Promise.resolve() };
 }
