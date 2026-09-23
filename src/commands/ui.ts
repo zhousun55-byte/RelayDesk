@@ -44,19 +44,19 @@ export function uiCommand(): Command {
       const wanted = Number(opts.port) || 7388;
 
       for (let port = wanted; port < wanted + 10; port++) {
-        const server = createServer({ defaultDir: info.root, autoDetect: true });
+        const stop = () => {
+          stopAllAuto();
+          server.close();
+          // 给正在干活的工具一点时间收尾（runner 会先发 SIGTERM）。
+          setTimeout(() => process.exit(0), 300);
+        };
+        const server = createServer({ defaultDir: info.root, autoDetect: true, onQuit: stop });
         try {
           const actual = await listen(server, port);
           const url = `http://127.0.0.1:${actual}/${q}`;
           ok(`接力台已启动：${url}`);
-          console.log('  关掉这个窗口（或按 Ctrl-C），接力台就停了。');
+          console.log('  关掉这个窗口（或按 Ctrl-C），或在网页「设置」里点「关闭接力台」，接力台就停了。');
           if (opts.open !== false) openBrowser(url);
-          const stop = () => {
-            stopAllAuto();
-            server.close();
-            // 给正在干活的工具一点时间收尾（runner 会先发 SIGTERM）。
-            setTimeout(() => process.exit(0), 300);
-          };
           process.on('SIGINT', stop);
           process.on('SIGTERM', stop);
           return;

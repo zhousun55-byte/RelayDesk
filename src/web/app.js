@@ -2458,6 +2458,34 @@ function doctorCard() {
   );
 }
 
+function quitRelay() {
+  const running = autoRunning(S.st);
+  dialog({
+    title: '关闭接力台？',
+    body: [
+      h('p', null, '关闭后这个网页就连不上了。在桌面双击「接力台」就能重新打开。'),
+      running ? h('p', { class: 'form-error' }, '现在有全自动在跑：关闭会让它停下，重新打开后点「继续全自动」就能接着做。') : null,
+    ],
+    buttons: [
+      { label: '取消' },
+      {
+        label: '关闭',
+        cls: 'danger solid',
+        keepOpen: true,
+        run: async (d) => {
+          d.busy('正在关闭……');
+          try {
+            await post('/api/quit');
+            d.replace({ title: '接力台已关闭', body: [h('p', null, '在桌面双击「接力台」就能重新打开。这个网页可以关掉了。')], buttons: [{ label: '好', cls: 'primary' }] });
+          } catch (e) {
+            d.error(e.message);
+          }
+        },
+      },
+    ],
+  });
+}
+
 function renderSettings() {
   const st = S.st;
   if (!S.presets) {
@@ -2485,7 +2513,12 @@ function renderSettings() {
         workersCard(view),
         projectCard(st),
         doctorCard(),
-        h('p', { class: 'hint', style: 'text-align:center' }, `接力台 ${st.version} · 命令行也能用：relay --help`)
+        h(
+          'div',
+          { class: 'quit-line' },
+          h('span', { class: 'hint' }, `接力台 ${st.version} 在后台运行：关掉浏览器它也不停，全自动会接着跑。命令行也能用：relay --help`),
+          btn('关闭接力台…', quitRelay, 'ghost small')
+        )
       )
   );
 }

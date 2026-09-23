@@ -2582,3 +2582,14 @@ ul.plain {
     gap: 8px;
   }
 }
+
+/* ---- 设置页最下面：版本和关闭 ---- */
+
+.quit-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 4px 4px 0;
+}

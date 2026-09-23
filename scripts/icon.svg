@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- 接力台的图标：灰色主线（正式文件夹）分出一条绿色支线，支线上一个站（交接点）。 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e6eeea"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0b1a14" flood-opacity="0.26"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)" filter="url(#shadow)"/>
+  <rect x="100.5" y="100.5" width="823" height="823" rx="185.5" fill="none" stroke="#0e7c5a" stroke-opacity="0.12" stroke-width="1"/>
+  <g transform="translate(206 212) scale(18.75)" fill="none" stroke-linecap="round">
+    <path d="M9 3v26" stroke="#5b6572" stroke-width="4"/>
+    <path d="M9 8c0 5 12 3 12 8s-12 3-12 8" stroke="#0e7c5a" stroke-width="4"/>
+    <circle cx="21" cy="16" r="3.4" fill="#ffffff" stroke="#0e7c5a" stroke-width="2.4"/>
+  </g>
+</svg>

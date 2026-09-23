@@ -225,7 +225,10 @@ const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'imag
 
 type Handler = (q: URLSearchParams, body: Record<string, unknown>, res: http.ServerResponse) => Promise<unknown> | unknown;
 
-export function createServer(opts: { defaultDir: string; autoDetect?: boolean }): http.Server {
+/**
+ * onQuit：网页上点「关闭接力台」时调用（由启动网页的 relay ui 负责退出进程）；不给就不能从网页关闭。
+ */
+export function createServer(opts: { defaultDir: string; autoDetect?: boolean; onQuit?: () => void }): http.Server {
   if (opts.autoDetect) ensureDetected();
   const fallbackDir = () => lastProject() ?? opts.defaultDir;
   const dirOf = (q: URLSearchParams, body: Record<string, unknown>) => resolveDir(str(body.dir) ?? q.get('dir') ?? q.get('root') ?? undefined, fallbackDir());
@@ -435,6 +438,13 @@ export function createServer(opts: { defaultDir: string; autoDetect?: boolean })
       const r = say(root, str(b.text) ?? '', ask, talkContext(root));
       r.done.catch(() => undefined);
       return { row: r.row, queued: r.queued };
+    },
+    '/api/quit': () => {
+      if (!opts.onQuit) throw new RelayError('这个接力台不能从网页关闭。', 'no-quit');
+      const quit = opts.onQuit;
+      // 先把回复发出去，再退出。
+      setTimeout(quit, 200);
+      return { quitting: true };
     },
     '/api/talk/clear': (q, b) => {
       const root = rootOf(q, b);

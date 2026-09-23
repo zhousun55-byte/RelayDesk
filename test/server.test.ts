@@ -142,3 +142,21 @@ test('接力台网页接口：只认本机页面；POST 必须是 JSON；不能�
     ui.child.kill('SIGTERM');
   }
 });
+
+test('网页上「关闭接力台」：接口回话后 relay ui 自己退出；别的网站发来的关闭请求会被拒绝', async () => {
+  const s = sandbox('srv-quit');
+  s.relay(['init']);
+  const ui = await startUi(s);
+  const exited = new Promise<number | null>((resolve) => ui.child.once('exit', (code) => resolve(code)));
+  try {
+    const bad = await ui.call('/api/quit', {}, { origin: 'http://evil.example' });
+    assert.equal(bad.status, 403, '别的网站不能叫它关掉');
+    const r = await ui.call('/api/quit', {});
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.quitting, true);
+    const code = await Promise.race([exited, new Promise<string>((res) => setTimeout(() => res('超时'), 8000))]);
+    assert.equal(code, 0, '进程要正常退出');
+  } finally {
+    if (ui.child.exitCode === null) ui.child.kill();
+  }
+});
