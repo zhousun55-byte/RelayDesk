@@ -610,14 +610,13 @@ function pastList(past) {
 }
 
 function steps() {
-  return h(
-    'ol',
-    { class: 'steps' },
-    h('li', null, h('strong', null, '写下要做什么，点「全自动完成」。'), '接力台在别处建一个隔离副本，正式文件夹一直不动。'),
-    h('li', null, h('strong', null, 'AI 自己干活。'), '主力（默认 Claude Code）按任务改隔离副本；做不出来会自动换下一位。'),
-    h('li', null, h('strong', null, '另一个 AI 审查。'), '不合格就把意见交给下一轮接着改，最多几轮可以在设置里调。'),
-    h('li', null, h('strong', null, '通过后自动合回正式文件夹。'), '随时能停、能继续；也可以「只开始任务」，自己安排工人上岗、交接、合回。')
-  );
+  const items = [
+    ['写下要做什么', '点「全自动完成」。接力台在别处建一个隔离副本，正式文件夹一直不动。'],
+    ['AI 自己干活', '主力按任务改隔离副本；做不出来会自动换下一位。'],
+    ['另一个 AI 审查', '不合格就把意见交给下一轮接着改，最多几轮可以在设置里调。'],
+    ['通过后合回', '随时能停、能继续；也可以「只开始任务」，自己安排工人上岗、交接、合回。'],
+  ];
+  return h('ol', { class: 'howto' }, items.map(([t, d], i) => h('li', null, h('span', { class: 'hnum num', 'aria-hidden': 'true' }, String(i + 1)), h('strong', null, t), h('span', { class: 'hdesc' }, d))));
 }
 
 function viewIdle(st) {
@@ -668,11 +667,11 @@ function viewIdle(st) {
             { class: 'foot' },
             btn(S.acting === '全自动' ? '正在开始……' : '全自动完成', () => startAutoRun(true), 'primary', { disabled: !!S.acting || !st.team.workers.length }),
             btn(S.acting === '开始任务' ? '正在开始……' : '只开始任务（手动安排）', startTask, '', { disabled: !!S.acting }),
-            h('span', { class: 'hint' }, '全自动：AI 干活 → 另一个 AI 审查 → 要改就再来一轮 → 通过后自动合回。⌘ Enter = 全自动。')
+            h('span', { class: 'hint kbd-hint' }, h('kbd', null, '⌘'), h('kbd', null, 'Enter'), ' 全自动')
           ),
-          h('p', { class: 'hint' }, teamText(st.team), ' ', link('改', () => setView('settings'))),
           p.mainDirty ? h('p', { class: 'hint' }, `正式文件夹里有 ${p.mainDirty} 个没提交的改动，它们不会带进任务。`) : null
-        )
+        ),
+        h('div', { class: 'compose-team' }, teamLine(st.team))
       ),
       h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('h2', null, '怎么用')), steps())
     )
@@ -704,26 +703,68 @@ function autoRunning(st) {
   return !!(st.auto && st.auto.state && st.auto.state.status === 'running');
 }
 
-function memberText(list) {
-  return list.map((m) => `${m.label}${m.model ? `（${m.model}）` : ''}`).join(' → ') || '（没有）';
+/** 一位成员的线路标签：线路色点 + 名字（+ 模型）。 */
+function memberChip(m) {
+  return h('span', { class: 'lchip', style: `--c:${colorOf(m.name)}` }, h('i', { 'aria-hidden': 'true' }), m.label, m.model ? h('small', null, m.model) : null);
 }
 
-function teamText(team) {
+function routeChips(list) {
+  if (!list.length) return [h('span', { class: 'muted small' }, '（没有）')];
+  const out = [];
+  list.forEach((m, i) => {
+    if (i) out.push(h('span', { class: 'lsep', 'aria-hidden': 'true' }, '→'));
+    out.push(memberChip(m));
+  });
+  return out;
+}
+
+/** 全自动的安排：谁干活、谁审查（按顺序，前一位做不出来才换下一位）、几轮、什么档位。 */
+function teamLine(team, edit = true) {
   const s = team.settings;
-  return `干活：${memberText(team.workers)}；审查：${memberText(team.reviewers)}；最多 ${s.maxRounds} 轮，${s.level === 'full' ? '完全放开' : '安全档'}，${s.autoMerge ? '通过后自动合回' : '通过后等你合回'}。`;
-}
-
-function autoStepEl(st) {
-  const icon = { ok: '✓', fail: '✗', skip: '–', running: '…' }[st.status] || '·';
-  const cls = st.status === 'ok' ? 'is-ok' : st.status === 'fail' ? 'is-bad' : 'is-mid';
-  const took = st.endedAt ? ` · ${Math.max(1, Math.round((new Date(st.endedAt) - new Date(st.startedAt)) / 1000))} 秒` : ` · ${since(st.startedAt)}`;
   return h(
-    'li',
-    null,
-    h('span', { class: `auto-icon ${cls}` }, icon),
-    h('div', null, h('div', null, st.label, h('span', { class: 'muted small' }, took)), st.detail ? h('div', { class: 'auto-detail' }, st.detail) : null)
+    'div',
+    { class: 'team' },
+    h('div', { class: 'team-row' }, h('span', { class: 'team-k' }, '干活'), h('div', { class: 'team-chips' }, routeChips(team.workers))),
+    h('div', { class: 'team-row' }, h('span', { class: 'team-k' }, '审查'), h('div', { class: 'team-chips' }, routeChips(team.reviewers))),
+    h(
+      'div',
+      { class: 'team-meta' },
+      `最多 ${s.maxRounds} 轮 · ${s.level === 'full' ? '完全放开' : '安全档'} · ${s.autoMerge ? '通过后自动合回' : '通过后等你合回'}`,
+      edit ? h('span', null, '　', link('改安排', () => setView('settings'))) : null
+    )
   );
 }
+
+function tookText(st) {
+  return st.endedAt ? `${Math.max(1, Math.round((new Date(st.endedAt) - new Date(st.startedAt)) / 1000))} 秒` : since(st.startedAt);
+}
+
+/** 全自动的一步：线路上的一站，颜色跟着这一步的工人走。 */
+function autoStepEl(st) {
+  const icon = { ok: '✓', fail: '✕', skip: '–', running: '' }[st.status] ?? '·';
+  const c = st.agent ? colorOf(st.agent) : st.kind === 'merge' ? 'var(--go)' : 'var(--main)';
+  return h(
+    'li',
+    { class: `rstop is-${st.status}`, style: `--c:${c}` },
+    h('span', { class: 'rdot', 'aria-hidden': 'true' }, icon),
+    h(
+      'div',
+      { class: 'rbody' },
+      h('div', { class: 'rlabel' }, h('span', null, st.label), h('span', { class: 'rtook num' }, tookText(st))),
+      st.detail ? h('div', { class: 'rdetail' }, st.detail) : null
+    )
+  );
+}
+
+/** 长的结论拆成「第一句（标题）+ 其余（说明）」。 */
+function headline(text) {
+  const t = String(text || '');
+  const i = t.indexOf('。');
+  if (t.length <= 44 || i < 0 || i === t.length - 1) return [t, ''];
+  return [t.slice(0, i + 1), t.slice(i + 1)];
+}
+
+const AUTO_TONE = { running: 'run', done: 'go', ready: 'go', 'needs-human': 'warn', failed: 'bad', stopped: 'warn' };
 
 function autoPanel(st) {
   const a = st.auto && st.auto.state;
@@ -731,32 +772,45 @@ function autoPanel(st) {
   const running = autoRunning(st);
   const hasTask = !!st.project.task;
   if (!a && !hasTask) return null;
-  const kids = [
-    h(
-      'div',
-      { class: 'section-head' },
-      h('h2', null, '全自动'),
-      a ? h('span', { class: `pill ${a.status === 'done' || a.status === 'ready' ? 'go' : a.status === 'running' ? 'line' : a.status === 'failed' ? 'stop' : 'warn'}` }, `${AUTO_WORDS[a.status]}${a.interrupted ? '（被中断）' : ''}`) : null
-    ),
-  ];
-  if (a) {
-    kids.push(h('p', { class: 'auto-phase' }, a.phase));
-    kids.push(h('p', { class: 'hint' }, `目标：${a.goal}　·　开始于 ${fmtTime(a.startedAt)}　·　${running ? `第 ${a.round} 轮 / 最多 ${a.maxRounds} 轮` : `一共 ${a.round} 轮`}`));
-    kids.push(h('ol', { class: 'auto-steps' }, a.steps.map(autoStepEl)));
-    const tail = st.auto.tail;
-    if (tail) {
-      kids.push(h('details', { class: 'auto-log-box', open: running }, h('summary', null, `日志：${tail.label}`), h('pre', { class: 'auto-log' }, tail.text || '（还没有输出）')));
-    }
-  } else {
-    kids.push(h('p', { class: 'hint' }, '让 AI 们自己把这个任务做完：干活 → 另一个 AI 审查 → 要改就再来一轮 → 通过后合回。'));
-  }
+  const tone = a ? AUTO_TONE[a.status] || 'warn' : 'idle';
+  const current = running ? [...a.steps].reverse().find((x) => x.status === 'running') : null;
+  const pill = a
+    ? h(
+        'span',
+        { class: `pill ${tone === 'go' ? 'go' : tone === 'bad' ? 'stop' : tone === 'run' ? 'line' : 'warn'}`, style: current && current.agent ? `--c:${colorOf(current.agent)}` : '--c:var(--go)' },
+        running ? h('span', { class: 'spin' }) : null,
+        `${AUTO_WORDS[a.status]}${a.interrupted ? '（被中断）' : ''}`
+      )
+    : null;
   const buttons = [];
   if (running) buttons.push(btn(S.acting === '停止' ? '正在停止……' : '停止', stopAutoRun, 'danger', { disabled: !!S.acting }));
   else if (hasTask) buttons.push(btn(a ? '继续全自动' : '全自动做完它', () => startAutoRun(false), 'primary', { disabled: !!S.acting || !team.workers.length || !!st.busy }));
-  kids.push(h('div', { class: 'row', style: 'margin-top:10px;align-items:center;flex-wrap:wrap;gap:10px' }, ...buttons, h('span', { class: 'hint' }, teamText(team), ' ', link('改', () => setView('settings')))));
-  if (!team.workers.length) kids.push(banner('info', '还没有能全自动干活的 AI 工具。去「设置」点「重新识别」。', btn('去设置', () => setView('settings'), 'small')));
-  for (const pr of team.problems || []) kids.push(h('p', { class: 'hint warn-text' }, `⚠ ${pr}`));
-  return h('section', { class: 'board auto-board' }, ...kids);
+  const tail = a && st.auto.tail;
+  return h(
+    'section',
+    { class: `board auto-board tone-${tone}` },
+    running ? h('div', { class: 'auto-rail', 'aria-hidden': 'true', style: current && current.agent ? `--c:${colorOf(current.agent)}` : '' }) : null,
+    h(
+      'div',
+      { class: 'auto-head' },
+      h(
+        'div',
+        { class: 'auto-titles' },
+        h('p', { class: 'eyebrow' }, '全自动', a ? h('span', { class: 'num' }, running ? ` · 第 ${a.round} 轮 / 最多 ${a.maxRounds} 轮` : ` · 一共 ${a.round} 轮`) : null),
+        h('h2', { class: 'auto-title' }, a ? headline(a.phase)[0] : '让 AI 们自己把这个任务做完'),
+        a && headline(a.phase)[1] ? h('p', { class: 'auto-more' }, headline(a.phase)[1]) : null,
+        h('p', { class: 'auto-goal' }, a ? [`目标：${a.goal}`, h('span', { class: 'muted' }, `　${fmtTime(a.startedAt)} 开始`)] : '干活 → 另一个 AI 审查 → 要改就再来一轮 → 通过后合回。')
+      ),
+      pill
+    ),
+    a ? h('ol', { class: 'route' }, a.steps.map(autoStepEl)) : null,
+    tail
+      ? h('details', { class: 'auto-log-box', open: running }, h('summary', null, '日志', h('span', { class: 'muted' }, ` · ${tail.label}`)), h('pre', { class: 'auto-log' }, tail.text || '（还没有输出）'))
+      : null,
+    h('div', { class: 'auto-foot' }, buttons.length ? h('div', { class: 'row' }, buttons) : null, teamLine(team)),
+    !team.workers.length ? h('div', { class: 'auto-note' }, banner('info', '还没有能全自动干活的 AI 工具。去「设置」点「重新识别」。', btn('去设置', () => setView('settings'), 'small'))) : null,
+    (team.problems || []).length ? h('div', { class: 'auto-note' }, (team.problems || []).map((pr) => h('p', { class: 'hint warn-text' }, `⚠ ${pr}`))) : null
+  );
 }
 
 async function startAutoRun(withGoal) {
@@ -909,7 +963,7 @@ function lineMap(t) {
 // —— 任务状态牌 ——
 
 function phasePill(t, busyOp, autoOn) {
-  if (autoOn) return h('span', { class: 'pill line', style: t.onShift ? `--c:${colorOf(t.onShift.agent)}` : '' }, '全自动');
+  if (autoOn) return h('span', { class: 'pill line', style: `--c:${t.onShift ? colorOf(t.onShift.agent) : 'var(--go)'}` }, '全自动');
   if (busyOp || t.phase === 'busy') return h('span', { class: 'pill' }, h('span', { class: 'spin' }), '处理中');
   if (t.phase === 'working' && t.onShift) return h('span', { class: 'pill line', style: `--c:${colorOf(t.onShift.agent)}` }, '在岗');
   const map = {
@@ -957,7 +1011,7 @@ function phaseActions(t, busyOp, autoOn) {
   return out;
 }
 
-function boardEl(t, busyOp, autoOn) {
+function boardEl(t, busyOp, autoOn, autoPhase) {
   return h(
     'section',
     { class: 'board' },
@@ -968,7 +1022,7 @@ function boardEl(t, busyOp, autoOn) {
       h('h1', { class: 'task-title' }, t.title),
       t.taskText ? h('details', null, h('summary', null, '任务说明'), h('div', { class: 'doc', style: 'margin-top:10px', html: md(t.taskText) })) : null
     ),
-    h('div', { class: 'phase' }, phasePill(t, busyOp, autoOn), h('p', null, busyOp && !autoOn ? `正在${busyOp}……` : t.phaseText)),
+    h('div', { class: 'phase' }, phasePill(t, busyOp, autoOn), h('p', null, autoOn && autoPhase ? `全自动进行中：${autoPhase}` : busyOp ? `正在${busyOp}……` : t.phaseText)),
     h('div', { class: 'actions' }, phaseActions(t, busyOp, autoOn))
   );
 }
@@ -1682,7 +1736,17 @@ function viewTask(st) {
     'div',
     { class: 'grid' },
     h('aside', { class: 'side' }, h('p', { class: 'side-title' }, '支线图'), lineMap(t), dangerZone(t, autoOn)),
-    h('div', null, autoPanel(st), boardEl(t, busyOp, autoOn), banners(t, p, autoOn), t.phase !== 'broken' && t.phase !== 'busy' && !autoOn ? workersSection(t, st, busyOp) : null, t.worktreeExists ? detailsEl(t) : null)
+    h(
+      'div',
+      null,
+      // 全自动跑过（或正在跑）时它是主角，放最上面；手动安排的任务先看任务本身，全自动只是一个可选的按钮。
+      st.auto && st.auto.state ? autoPanel(st) : null,
+      boardEl(t, busyOp, autoOn, st.auto && st.auto.state ? st.auto.state.phase : ''),
+      banners(t, p, autoOn),
+      st.auto && st.auto.state ? null : autoPanel(st),
+      t.phase !== 'broken' && t.phase !== 'busy' && !autoOn ? workersSection(t, st, busyOp) : null,
+      t.worktreeExists ? detailsEl(t) : null
+    )
   );
 }
 
@@ -2210,8 +2274,10 @@ function projectCard(st) {
   );
 }
 
-function loginMark(state) {
-  return state === 'ok' ? h('span', { class: 'go-text' }, '✓') : state === 'no' ? h('span', { class: 'stop-text' }, '✗') : h('span', { class: 'warn-text' }, '?');
+/** 状态灯：ok 绿、no 红、其余黄。 */
+function stateDot(state) {
+  const cls = state === 'ok' ? 'ok' : state === 'no' ? 'bad' : 'warn';
+  return h('span', { class: `sdot ${cls}`, 'aria-hidden': 'true' });
 }
 
 function loadDetect() {
@@ -2238,73 +2304,75 @@ async function runDetect() {
   });
 }
 
+function toolCard(x) {
+  const tested = x.tested === 'yes' ? ['ok', '实测过'] : x.tested === 'partial' ? ['warn', '部分实测'] : ['plain', '没实测'];
+  return h(
+    'div',
+    { class: `tool is-${x.login.state}` },
+    h('div', { class: 'tool-top' }, stateDot(x.login.state), h('strong', null, x.label), h('span', { class: `badge ${tested[0]}` }, tested[1])),
+    h('div', { class: 'tool-model' }, h('span', { class: 'mchip' }, x.model.label || x.model.model || '工具默认模型'), x.model.effort ? h('span', { class: 'muted small' }, `思考 ${x.model.effort}`) : null),
+    h('div', { class: 'tool-meta' }, x.login.detail, h('span', { class: 'muted' }, ` · 版本 ${x.version}`)),
+    x.model.via ? h('div', { class: 'tool-note' }, `经 ${x.model.via}`) : null,
+    x.login.state === 'no' ? h('div', { class: 'tool-note warn-text' }, x.loginHint) : null,
+    x.note ? h('div', { class: 'tool-note' }, x.note) : null,
+    !x.workLevels.includes('safe') ? h('div', { class: 'tool-note' }, '只能在「完全放开」档干活') : null
+  );
+}
+
+function providerCard(p, enabled) {
+  const on = p.needsConsent ? enabled : p.state === 'ok';
+  return h(
+    'div',
+    { class: `tool is-${on ? 'ok' : p.state}` },
+    h('div', { class: 'tool-top' }, stateDot(on ? 'ok' : p.state), h('strong', null, p.label)),
+    h('div', { class: 'tool-model' }, h('span', { class: 'mchip' }, p.model || '—')),
+    h('div', { class: 'tool-meta mono small' }, p.baseUrl),
+    h('div', { class: 'tool-note' }, p.needsConsent && enabled ? '已同意使用' : p.detail),
+    p.needsConsent && !enabled
+      ? h(
+          'div',
+          { style: 'margin-top:10px' },
+          btn(
+            '同意使用',
+            () =>
+              act('启用接口', async () => {
+                await post('/api/detect/use', { id: p.id });
+                toast(`已启用 ${p.label}。`);
+              }),
+            'primary small'
+          )
+        )
+      : null
+  );
+}
+
 function detectCard(st) {
   const d = S.detect || {};
   const r = d.report;
   const enabled = (p) => st.workers.some((w) => w.api && w.api.keyFrom && w.api.keyFrom === p.keyFrom);
   const kids = [
     h('div', { class: 'section-head' }, h('h2', null, '自动识别'), btn(d.loading ? '识别中……（十几秒）' : r ? '重新识别' : '开始识别', runDetect, 'primary small', { disabled: !!S.acting || d.loading })),
-    h('p', { class: 'lead' }, '找出这台电脑上的 AI 编程工具（Claude Code、Codex、Cursor Agent、ZCode……）和配好的模型接口（DeepSeek……），登没登录、默认用什么模型，都自动看；能用的自动加进工人名单。'),
+    h('p', { class: 'lead' }, '找出这台电脑上的 AI 编程工具和配好的模型接口：登没登录、默认用什么模型，都自动看；能用的自动加进工人名单。'),
   ];
   if (!r) {
     kids.push(h('p', { class: 'hint' }, d.loaded ? '还没识别过。点「开始识别」。' : '正在读取……'));
     return h('section', { class: 'card' }, ...kids);
   }
-  kids.push(h('p', { class: 'hint' }, `上次识别：${fmtTime(r.at)}`));
-  if (d.changes && d.changes.length) kids.push(h('ul', { class: 'checks' }, d.changes.map((c) => h('li', null, h('span', { class: 'ok' }, '✓'), h('span', null, c)))));
-  kids.push(h('h3', { class: 'sub-h' }, '编程工具（能自己改文件）'));
+  if (d.changes && d.changes.length) kids.push(h('ul', { class: 'checks changes' }, d.changes.map((c) => h('li', null, h('span', { class: 'ok' }, '✓'), h('span', null, c)))));
+  kids.push(h('h3', { class: 'sub-h' }, '编程工具', h('span', { class: 'muted small' }, ' · 能自己改文件，全自动的主力')));
   kids.push(
-    h(
-      'table',
-      { class: 'detect-table' },
-      h('tbody', null, r.harnesses.length
-        ? r.harnesses.map((x) =>
-            h(
-              'tr',
-              null,
-              h('td', null, loginMark(x.login.state)),
-              h('td', null, h('strong', null, x.label), h('div', { class: 'muted small' }, `版本 ${x.version}${x.tested === 'yes' ? ' · 实测过' : x.tested === 'partial' ? ' · 部分实测' : ' · 没实测'}`)),
-              h('td', null, x.model.label || x.model.model || '工具默认', x.model.via ? h('div', { class: 'muted small' }, `经 ${x.model.via}`) : null, x.model.effort ? h('div', { class: 'muted small' }, `默认思考 ${x.model.effort}`) : null),
-              h('td', null, x.login.detail, x.login.state === 'no' ? h('div', { class: 'muted small' }, x.loginHint) : null, x.note ? h('div', { class: 'muted small' }, x.note) : null, !x.workLevels.includes('safe') ? h('div', { class: 'muted small' }, '只能在「完全放开」档干活') : null)
-            )
-          )
-        : [h('tr', null, h('td', null, '一个都没找到。装好并登录 Claude Code / Codex / Cursor Agent 之一，再识别一次。'))])
-    )
+    r.harnesses.length
+      ? h('div', { class: 'tools' }, r.harnesses.map(toolCard))
+      : h('p', { class: 'hint' }, '一个都没找到。装好并登录 Claude Code / Codex / Cursor Agent 之一，再识别一次。')
   );
-  kids.push(h('h3', { class: 'sub-h' }, '模型接口'));
-  kids.push(
-    h(
-      'table',
-      { class: 'detect-table' },
-      h('tbody', null, r.providers.length
-        ? r.providers.map((p) =>
-            h(
-              'tr',
-              null,
-              h('td', null, p.needsConsent && enabled(p) ? h('span', { class: 'go-text' }, '✓') : loginMark(p.state)),
-              h('td', null, h('strong', null, p.label), h('div', { class: 'muted small mono' }, p.baseUrl)),
-              h('td', null, p.model || '—'),
-              h(
-                'td',
-                null,
-                p.needsConsent && enabled(p) ? '已同意使用' : p.detail,
-                p.needsConsent && !enabled(p)
-                  ? h('div', { style: 'margin-top:6px' }, btn('同意使用', () => act('启用接口', async () => {
-                      await post('/api/detect/use', { id: p.id });
-                      toast(`已启用 ${p.label}。`);
-                    }), 'small'))
-                  : null
-              )
-            )
-          )
-        : [h('tr', null, h('td', null, '没找到配置好的密钥。'))])
-    )
-  );
+  kids.push(h('h3', { class: 'sub-h' }, '模型接口', h('span', { class: 'muted small' }, ' · 能审查、讨论，也能用内置小代理干活')));
+  kids.push(r.providers.length ? h('div', { class: 'tools' }, r.providers.map((p) => providerCard(p, enabled(p)))) : h('p', { class: 'hint' }, '没找到配置好的密钥。'));
   if (r.unknownKeys.length) kids.push(h('p', { class: 'hint' }, `还有不认识的密钥：${r.unknownKeys.join('、')}（不知道接口地址，没用上；可以在下面「工人」里手动加成接口工人）。`));
   if (r.apps.length) {
-    kids.push(h('h3', { class: 'sub-h' }, '桌面 App（只能手动用）'));
-    kids.push(h('ul', { class: 'plain' }, r.apps.map((a) => h('li', null, h('strong', null, a.name), `：${a.hint}`))));
+    kids.push(h('h3', { class: 'sub-h' }, '桌面 App', h('span', { class: 'muted small' }, ' · 只能手动用')));
+    kids.push(h('div', { class: 'app-chips' }, r.apps.map((a) => h('span', { class: 'app-chip', title: a.hint }, a.name))));
   }
+  kids.push(h('p', { class: 'hint', style: 'margin-top:14px' }, `上次识别：${fmtTime(r.at)}`));
   return h('section', { class: 'card' }, ...kids);
 }
 
@@ -2341,15 +2409,25 @@ function autoSettingsCard(st) {
       S.autoCfg = null;
       toast('全自动设置已保存。');
     });
-  const names = t.members.map((m) => `${m.name}（${m.label}${m.model ? ` · ${m.model}` : ''}：${[m.work ? '干活' : null, m.review ? '审查' : null].filter(Boolean).join('/') || m.why || '不能用'}）`);
+  const names = t.members.map((m) =>
+    h(
+      'span',
+      { class: `lchip name-chip${m.work || m.review ? '' : ' off'}`, style: `--c:${colorOf(m.name)}`, title: m.why || '' },
+      h('i', { 'aria-hidden': 'true' }),
+      h('code', null, m.name),
+      h('small', null, [m.label, m.model].filter(Boolean).join(' · ')),
+      h('small', { class: 'roles' }, [m.work ? '干活' : null, m.review ? '审查' : null].filter(Boolean).join('/') || '不能用')
+    )
+  );
   return h(
     'section',
     { class: 'card' },
     h('h2', null, '全自动设置'),
-    h('p', { class: 'lead' }, '全机通用。现在的安排：', teamText(t)),
+    h('p', { class: 'lead' }, '全机通用，所有项目都按这个安排。'),
+    h('div', { class: 'team-box' }, teamLine(t, false)),
     field('干活的人（按优先级，逗号分隔；空 = 自动排）', keepInput('as-workers', h('input', { type: 'text', class: 'mono-input', placeholder: '例如 codex, claude' })), '第一位是主力；它做不出东西（出错、没登录、额度用完）才换下一位。'),
     field('审查的人（按优先级；空 = 自动排）', keepInput('as-reviewers', h('input', { type: 'text', class: 'mono-input', placeholder: '例如 cursor-agent, deepseek' })), '每一轮会挑一个和干活的人不同的来审。'),
-    h('p', { class: 'hint' }, `可以填的名字：${names.join('；') || '（还没有，先识别）'}`),
+    h('div', { class: 'field' }, h('span', { class: 'label' }, '可以填的名字'), names.length ? h('div', { class: 'name-chips' }, names) : h('p', { class: 'hint' }, '（还没有，先识别）')),
     h(
       'div',
       { class: 'two' },
