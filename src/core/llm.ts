@@ -201,6 +201,11 @@ export interface ToolCall {
 
 export class ToolChat {
   private msgs: J[] = [];
+  /**
+   * 模型回的思考内容（reasoning_content）要不要原样传回去。DeepSeek 等思考模型在连续调用工具时要求传回，
+   * 缺了会报 400；个别接口不收这个字段，那就去掉再试一次，之后都不带。
+   */
+  private sendReasoning = true;
 
   constructor(
     private readonly spec: ApiSpec,
@@ -236,23 +241,27 @@ export class ToolChat {
         .map((b) => ({ id: String(o(b).id), name: String(o(b).name), args: o(o(b).input) }));
       return { text, calls };
     }
-    const data = o(
-      await request(
-        this.spec,
-        'chat',
-        {
-          model: this.spec.model,
-          messages: [{ role: 'system', content: this.system }, ...this.msgs],
-          tools: this.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
-          temperature: 0.2,
-        },
-        timeoutMs
-      )
-    );
+    const body = (withReasoning: boolean) => ({
+      model: this.spec.model,
+      messages: [{ role: 'system', content: this.system }, ...(withReasoning ? this.msgs : this.msgs.map(({ reasoning_content: _r, ...m }) => m))],
+      tools: this.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+      temperature: 0.2,
+    });
+    let raw: unknown;
+    try {
+      raw = await request(this.spec, 'chat', body(this.sendReasoning), timeoutMs);
+    } catch (e) {
+      const carried = this.msgs.some((m) => 'reasoning_content' in m);
+      if (!(this.sendReasoning && carried && e instanceof RelayError && e.code === 'llm-http' && /reasoning/i.test(e.message))) throw e;
+      this.sendReasoning = false;
+      raw = await request(this.spec, 'chat', body(false), timeoutMs);
+    }
+    const data = o(raw);
     const msg = o(o(arr(data.choices)[0]).message);
     const rawCalls = arr(msg.tool_calls);
     const text = typeof msg.content === 'string' ? msg.content : '';
-    this.msgs.push({ role: 'assistant', content: msg.content ?? null, ...(rawCalls.length ? { tool_calls: rawCalls } : {}) });
+    const reasoning = typeof msg.reasoning_content === 'string' && msg.reasoning_content ? { reasoning_content: msg.reasoning_content } : {};
+    this.msgs.push({ role: 'assistant', content: msg.content ?? null, ...reasoning, ...(rawCalls.length ? { tool_calls: rawCalls } : {}) });
     const calls: ToolCall[] = rawCalls.map((c, i) => {
       const f = o(o(c).function);
       const raw = String(f.arguments ?? '{}');

@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { normalizeAutoSettings } from '../src/core/auto-settings';
@@ -214,4 +216,60 @@ test('带工具的对话：太长时整轮丢掉最早的，任务说明一直�
   assert.equal(msgs[0].content, '任务说明');
   assert.equal(msgs[1].role, 'assistant');
   assert.equal(msgs[msgs.length - 2].content, '第 4 轮', '最近一轮还在');
+});
+
+/** 假接口：第一次回思考内容 + 一个工具调用；之后按 rule 检查传回来的助手消息。 */
+function reasoningServer(rule: 'require' | 'reject'): Promise<{ url: string; close: () => void; bodies: unknown[] }> {
+  return new Promise((resolve) => {
+    const bodies: unknown[] = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const j = JSON.parse(body) as { messages: { role: string; reasoning_content?: string }[] };
+        bodies.push(j);
+        res.setHeader('content-type', 'application/json');
+        const assistants = j.messages.filter((m) => m.role === 'assistant');
+        if (!assistants.length) {
+          res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '', reasoning_content: '先读文件', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } }] } }] }));
+          return;
+        }
+        const carried = assistants.every((m) => m.reasoning_content === '先读文件');
+        if (rule === 'require' && !carried) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: { message: 'Missing `reasoning_content` field in the assistant message' } }));
+          return;
+        }
+        if (rule === 'reject' && assistants.some((m) => 'reasoning_content' in m)) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: { message: 'reasoning_content is not allowed in input messages' } }));
+          return;
+        }
+        res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '读完了' } }] }));
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const a = server.address() as AddressInfo;
+      resolve({ url: `http://127.0.0.1:${a.port}/v1`, close: () => server.close(), bodies });
+    });
+  });
+}
+
+test('内置小代理：思考模型回的思考内容原样传回；接口不收这个字段时自动去掉再试', async () => {
+  for (const rule of ['require', 'reject'] as const) {
+    const srv = await reasoningServer(rule);
+    try {
+      const c = new ToolChat({ baseUrl: srv.url, model: 'm', apiKeyEnv: '' }, '系统说明', [
+        { name: 'read_file', description: '读文件', parameters: { type: 'object', properties: { path: { type: 'string' } } } },
+      ]);
+      c.user('开始');
+      const first = await c.next(5000);
+      assert.equal(first.calls[0].name, 'read_file');
+      c.results([{ id: first.calls[0].id, content: '文件内容' }]);
+      const second = await c.next(5000);
+      assert.equal(second.text, '读完了', `${rule}：第二步要成功`);
+    } finally {
+      srv.close();
+    }
+  }
 });
