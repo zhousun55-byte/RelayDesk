@@ -25,6 +25,21 @@ export interface MemberInfo extends MemberLike {
   tierSet: boolean;
 }
 
+/** 桌面程序和它的命令行 / 接口是一家：桌面版看不出用的哪个模型，就借同一家的来定强弱。 */
+const FAMILIES: { app: RegExp; siblings: string[] }[] = [
+  { app: /^cursor$|cursor/i, siblings: ['cursor-agent'] },
+  { app: /zcode/i, siblings: ['zcode-cli', 'zcode'] },
+  { app: /mimo/i, siblings: ['mimo-api'] },
+  { app: /chatgpt|^gpt$|codex/i, siblings: ['codex'] },
+  { app: /antigravity/i, siblings: ['agy'] },
+];
+
+function siblingModel(a: AgentConfig, all: MemberInfo[]): string | undefined {
+  const f = FAMILIES.find((x) => x.app.test(a.name) || x.app.test(a.label ?? ''));
+  if (!f) return undefined;
+  return all.find((m) => m.kind !== 'app' && f.siblings.includes(m.name) && m.model)?.model;
+}
+
 export function allMembers(level: Level = 'safe', report: DetectReport | null = loadDetected(), now = new Date()): MemberInfo[] {
   const quota = loadQuota();
   const auto = new Map(listMembers(level, report).map((m) => [m.name, m]));
@@ -45,6 +60,14 @@ export function allMembers(level: Level = 'safe', report: DetectReport | null = 
     } else {
       out.push({ ...base, kind: 'harness', canWork: false, why: a.harness ? '这台电脑上找不到它' : '不认得这个命令，只能你自己在终端里用' });
     }
+  }
+  // 桌面程序没设过强弱：借同一家命令行 / 接口的模型来判断（ZCode 桌面版和 ZCode 命令行用的是同一个 GLM）。
+  for (const m of out) {
+    if (m.kind !== 'app' || m.tierSet || m.model) continue;
+    const sm = siblingModel(m.agent, out);
+    if (!sm) continue;
+    m.model = sm;
+    m.tier = memberTier(m.agent, sm);
   }
   return out;
 }

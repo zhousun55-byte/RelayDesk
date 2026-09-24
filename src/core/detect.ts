@@ -247,7 +247,7 @@ export function enableProvider(report: DetectReport, id: string, name?: string):
   return agent;
 }
 
-// ---- 谁能全自动干活 / 审查 ----
+// ---- 谁能全自动干活 ----
 
 export interface Member {
   agent: AgentConfig;
@@ -258,7 +258,6 @@ export interface Member {
   kind: 'harness' | 'api';
   harness?: string;
   canWork: boolean;
-  canReview: boolean;
   /** 不能用的原因。 */
   why?: string;
 }
@@ -283,7 +282,7 @@ export function listMembers(level: Level, report: DetectReport | null = loadDete
     if (kind === 'api') {
       if (!a.api) continue;
       const ok = apiUsable(a.api);
-      out.push({ ...base, kind: 'api', canWork: ok, canReview: ok, ...(ok ? {} : { why: '没有密钥' }) });
+      out.push({ ...base, kind: 'api', canWork: ok, ...(ok ? {} : { why: '没有密钥' }) });
       continue;
     }
     const spec = harnessOf(a);
@@ -298,34 +297,8 @@ export function listMembers(level: Level, report: DetectReport | null = loadDete
       kind: 'harness',
       harness: spec.id,
       canWork: work,
-      canReview: !why && spec.canReview,
       ...(why ? { why } : !work ? { why: '只有「完全放开」档才能无人值守地干活' } : {}),
     });
   }
   return out;
-}
-
-function rankOf(m: Member): number {
-  if (m.kind === 'api') return 1000;
-  return findHarness(m.harness)?.rank ?? 500;
-}
-
-/** 按设置排出干活的人和审查的人。设置里没写就按默认顺序（编程工具在前，模型接口在后）。 */
-export function resolveTeam(
-  members: Member[],
-  want: { workers: string[]; reviewers: string[] }
-): { workers: Member[]; reviewers: Member[]; problems: string[] } {
-  const problems: string[] = [];
-  const pick = (names: string[], ok: (m: Member) => boolean, what: string): Member[] => {
-    if (!names.length) return members.filter(ok).sort((a, b) => rankOf(a) - rankOf(b));
-    const out: Member[] = [];
-    for (const n of names) {
-      const m = members.find((x) => x.name === n);
-      if (!m) problems.push(`「${n}」不在工人名单里。`);
-      else if (!ok(m)) problems.push(`「${m.label}」现在不能${what}${m.why ? `：${m.why}` : ''}。`);
-      else if (!out.includes(m)) out.push(m);
-    }
-    return out;
-  };
-  return { workers: pick(want.workers, (m) => m.canWork, '干活'), reviewers: pick(want.reviewers, (m) => m.canReview, '审查'), problems };
 }

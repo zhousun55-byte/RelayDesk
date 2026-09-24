@@ -10,8 +10,8 @@ import { sandbox, type Sandbox } from './helpers';
  * 弱模型的活由强模型复核 → 终审 → 退回。全部用假的 claude（接 DeepSeek，弱）和 codex（gpt-6，强）。
  */
 
-function prepared(name: string, extra: NodeJS.ProcessEnv = {}): Sandbox {
-  const s = sandbox(name);
+function prepared(name: string, extra: NodeJS.ProcessEnv = {}, opts: { git?: boolean } = {}): Sandbox {
+  const s = sandbox(name, opts);
   withFakes(s, extra);
   s.relay(['detect', '--offline']);
   return s;
@@ -243,25 +243,29 @@ test('退回：整个文件夹恢复成第 N 棒之前，之后的棒作废；�
   );
 });
 
-test('只有接口的模型也能接一棒：内置小代理写文件、写交接', async () => {
-  const s = prepared('api', { MOCK_KEY: 'k-test' });
-  s.relay(['init']);
-  s.relay(['task', '写一条笔记', '--step', '写']);
-  const mock = await mockLlm();
-  try {
-    s.relay(['workers', 'add', 'mock', '--kind', 'api', '--api-base', mock.url, '--api-model', 'mock-coder', '--api-key-env', 'MOCK_KEY']);
-    const r = await s.relayAsync(['go', 'mock']);
-    assert.equal(r.code, 0, r.out);
-    assert.equal(s.read('notes/llm.txt'), '模型写的\n');
-    const st = s.stints()[0];
-    assert.equal(st.who.member, 'mock');
-    assert.equal(st.who.tier, 'weak');
-    assert.equal(st.ghost, undefined, '它自己写了交接');
-    assert.match(s.read(st.handoff), /写了 notes\/llm\.txt/);
-  } finally {
-    mock.close();
-  }
-});
+for (const git of [true, false]) {
+  test(`只有接口的模型也能接一棒：内置小代理搜代码、写文件、写交接${git ? '' : '（项目不是 git 仓库）'}`, async () => {
+    const s = prepared(git ? 'api' : 'api-plain', { MOCK_KEY: 'k-test' }, { git });
+    s.relay(['init']);
+    s.relay(['task', '写一条笔记', '--step', '写']);
+    const mock = await mockLlm();
+    try {
+      s.relay(['workers', 'add', 'mock', '--kind', 'api', '--api-base', mock.url, '--api-model', 'mock-coder', '--api-key-env', 'MOCK_KEY']);
+      const r = await s.relayAsync(['go', 'mock']);
+      assert.equal(r.code, 0, r.out);
+      assert.match(mock.toolResults[0], /^README\.md:1:demo$/m, '搜得到项目里的文件');
+      assert.doesNotMatch(mock.toolResults[0], /\.relay\//, '不搜 .relay/');
+      assert.equal(s.read('notes/llm.txt'), '模型写的\n');
+      const st = s.stints()[0];
+      assert.equal(st.who.member, 'mock');
+      assert.equal(st.who.tier, 'weak');
+      assert.equal(st.ghost, undefined, '它自己写了交接');
+      assert.match(s.read(st.handoff), /写了 notes\/llm\.txt/);
+    } finally {
+      mock.close();
+    }
+  });
+}
 
 test('群聊：轮流说、各自先想；投票不投自己，一个 AI 一票', async () => {
   const s = prepared('talk');

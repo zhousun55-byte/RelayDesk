@@ -74,13 +74,11 @@ export interface AgentsRegistry {
 }
 
 /**
- * 项目配置 .relay/config.json（唯一进主线的接力文件；不许写密钥）。
+ * 项目配置 .relay/config.json（会进你的 git；不许写密钥）。
  */
 export interface RelayConfig {
   /** 检查命令（门禁），如 npm test。空 = 不检查。 */
   gate: { command: string };
-  /** 不许改的路径（简易 glob）。改了会标红，合回时拒绝。 */
+  /** 不许改的路径（简易 glob）。改到了会记在那一棒上，接力本和复核里都会提醒。 */
   protectedPaths: string[];
-  /** 交接时写「阅读面」的便宜模型。可以不配，事实段照样有。 */
-  audit: ApiSpec;
 }

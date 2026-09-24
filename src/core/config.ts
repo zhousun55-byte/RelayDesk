@@ -11,11 +11,6 @@ export function defaultRelayConfig(): RelayConfig {
   return {
     gate: { command: '' },
     protectedPaths: [],
-    audit: {
-      baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-chat',
-      apiKeyEnv: 'DEEPSEEK_API_KEY',
-    },
   };
 }
 
@@ -52,19 +47,10 @@ export function normalizeConfig(raw: unknown, where = '接力配置'): RelayConf
     throw new RelayError(`${where} 里的 protectedPaths 必须是文字列表（现在是 ${typeName(protectedPaths)}）。`, 'bad-config');
   }
 
-  const auditIn = asObject(orDefault(obj.audit, {}), 'audit', where);
-  const audit = {
-    baseUrl: reqString(orDefault(auditIn.baseUrl, d.audit.baseUrl), 'audit.baseUrl', where).trim(),
-    model: reqString(orDefault(auditIn.model, d.audit.model), 'audit.model', where).trim(),
-    apiKeyEnv: reqString(orDefault(auditIn.apiKeyEnv, d.audit.apiKeyEnv), 'audit.apiKeyEnv', where).trim(),
-  };
-  if (audit.apiKeyEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(audit.apiKeyEnv)) {
-    throw new RelayError(`${where} 里的 audit.apiKeyEnv 要填环境变量的名字（如 DEEPSEEK_API_KEY），不是密钥本身。`, 'bad-config');
-  }
+  // 1.x 的 audit（交接时请便宜模型写摘要）已经不用了：旧配置里有也不报错，保存时去掉。
   return {
     gate: { command },
     protectedPaths: (protectedPaths as string[]).map((p) => p.trim()).filter(Boolean),
-    audit,
   };
 }
 
@@ -72,14 +58,14 @@ export function normalizeConfig(raw: unknown, where = '接力配置'): RelayConf
 export function loadRelayConfig(repoRoot: string): RelayConfig {
   const p = relayConfigPath(repoRoot);
   if (!fs.existsSync(p)) {
-    throw new RelayError('这个文件夹还不是接力项目。先执行 relay init，或在接力台里按「设为接力项目」。', 'no-config');
+    throw new RelayError('这个文件夹还不是接力项目。先执行 relay init，或在接力台里点「接入这个文件夹」。', 'no-config');
   }
   let raw: unknown;
   try {
     raw = JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new RelayError(`${p} 不是合法的 JSON（${msg}）。修好它，或删掉后重新设为接力项目。`, 'bad-config');
+    throw new RelayError(`${p} 不是合法的 JSON（${msg}）。修好它，或删掉后重新接入。`, 'bad-config');
   }
   return normalizeConfig(raw, p);
 }

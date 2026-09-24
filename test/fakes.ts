@@ -144,9 +144,11 @@ export function setOrder(s: Sandbox, order: string[], extra: Record<string, unkn
 }
 
 /** 假的 OpenAI 接口：带工具时先写一个文件、再写交接、再 finish；不带工具时按群聊 / 投票回答。 */
-export function mockLlm(): Promise<{ url: string; calls: { tools: boolean }[]; close: () => void }> {
+export function mockLlm(): Promise<{ url: string; calls: { tools: boolean }[]; toolResults: string[]; close: () => void }> {
   return new Promise((resolve) => {
     const calls: { tools: boolean }[] = [];
+    /** 小代理交回来的工具结果（按顺序）。 */
+    const toolResults: string[] = [];
     const server = http.createServer((req, res) => {
       let body = '';
       req.on('data', (c) => (body += c));
@@ -161,14 +163,18 @@ export function mockLlm(): Promise<{ url: string; calls: { tools: boolean }[]; c
         if (j.tools) {
           const first = String(j.messages.find((m) => m.role === 'user')?.content ?? '');
           const handoff = first.match(/交接写在 `([^`]+)`/)?.[1] ?? '.relay/交接/mock.md';
-          const turns = j.messages.filter((m) => m.role === 'tool').length;
+          const results = j.messages.filter((m) => m.role === 'tool').map((m) => String(m.content ?? ''));
+          toolResults.splice(0, toolResults.length, ...results);
+          const turns = results.length;
           const call =
             turns === 0
-              ? { id: 'c1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'notes/llm.txt', content: '模型写的\n' }) } }
+              ? { id: 'c0', type: 'function', function: { name: 'search', arguments: JSON.stringify({ pattern: 'demo|笔记' }) } }
               : turns === 1
-                ? { id: 'c2', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: handoff, content: '# 交接：DeepSeek 接口 · mock-coder\n\n- 状态：已交接\n\n## 做了什么\n\n- 写了 notes/llm.txt\n' }) } }
-                : { id: 'c3', type: 'function', function: { name: 'finish', arguments: JSON.stringify({ summary: '写好了' }) } };
-          res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: turns === 0 ? '先写文件。' : '', tool_calls: [call] } }] }));
+                ? { id: 'c1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'notes/llm.txt', content: '模型写的\n' }) } }
+                : turns === 2
+                  ? { id: 'c2', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: handoff, content: '# 交接：DeepSeek 接口 · mock-coder\n\n- 状态：已交接\n\n## 做了什么\n\n- 写了 notes/llm.txt\n' }) } }
+                  : { id: 'c3', type: 'function', function: { name: 'finish', arguments: JSON.stringify({ summary: '写好了' }) } };
+          res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: turns === 0 ? '先搜一下。' : '', tool_calls: [call] } }] }));
         } else {
           const text = String(j.messages.at(-1)?.content ?? '');
           const answer = /投票：<方案字母>/.test(text) ? '投票：A\n理由：简单' : /请给出你的方案/.test(text) ? '接口的方案：换个思路\n理由：试试' : '接口的看法';
@@ -178,7 +184,7 @@ export function mockLlm(): Promise<{ url: string; calls: { tools: boolean }[]; c
     });
     server.listen(0, '127.0.0.1', () => {
       const a = server.address() as AddressInfo;
-      resolve({ url: `http://127.0.0.1:${a.port}/v1`, calls, close: () => server.close() });
+      resolve({ url: `http://127.0.0.1:${a.port}/v1`, calls, toolResults, close: () => server.close() });
     });
   });
 }

@@ -6,7 +6,7 @@ import type { Invocation, StreamFormat } from './harness';
 import { stampLocal } from './time';
 
 /**
- * 无人值守地跑一个 AI 工具：在隔离副本里启动、把它吐出来的事件翻译成一行行中文日志、
+ * 无人值守地跑一个 AI 工具：在项目文件夹里启动、把它吐出来的事件翻译成一行行中文日志、
  * 超时或被叫停时整组结束进程。日志落盘（接力台页面实时读），最后一句话交给调用方。
  */
 

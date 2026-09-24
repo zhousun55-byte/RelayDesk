@@ -9,7 +9,7 @@ import { agentEnv, envValue, scanApps, which } from './env';
  * 全自动流水线只通过这里调用工具；新增一个工具 = 在 HARNESSES 里加一项。
  */
 
-/** safe：改文件只限隔离副本，命令在工具自己的沙箱里跑；full：完全放开（工具不再拦任何操作）。 */
+/** safe：只能改项目文件夹里的文件，命令在工具自己的沙箱里跑；full：完全放开（工具不再拦任何操作）。 */
 export type Level = 'safe' | 'full';
 
 /** 工具标准输出的格式（决定怎么解析进度和最后一句话）。 */

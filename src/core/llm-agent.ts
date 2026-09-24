@@ -12,7 +12,7 @@ import type { ApiSpec } from './types';
 
 /**
  * 内置小代理：让只有接口的模型（DeepSeek、MiMo……）也能自己读写文件干活。
- * 它只能通过下面这几个工具碰隔离副本里的文件；安全档不能跑任意命令，只能跑项目配置的检查命令。
+ * 它只能通过下面这几个工具碰项目文件夹里的文件；安全档不能跑任意命令，只能跑项目配置的检查命令。
  */
 
 export interface LlmAgentInput {
@@ -195,7 +195,11 @@ function editFile(root: string, args: Record<string, unknown>, protectedPaths: s
 function search(root: string, args: Record<string, unknown>): string {
   if (typeof args.pattern !== 'string' || !args.pattern) throw new ToolError('缺少 pattern。');
   const where = typeof args.path === 'string' && args.path.trim() ? resolveIn(root, args.path).rel : '.';
-  const r = git(root, ['grep', '-n', '-I', '-E', '--untracked', '--no-color', '-e', args.pattern, '--', where, ':(exclude).relay']);
+  // 项目不是 git 仓库也要能搜：用 --no-index（照样认 .gitignore），大目录手动跳过。
+  const inRepo = git(root, ['rev-parse', '--is-inside-work-tree']).stdout === 'true';
+  const mode = inRepo ? ['--untracked'] : ['--no-index', '--exclude-standard'];
+  const skip = inRepo ? [] : [...SKIP_DIRS].map((d) => `:(exclude,glob)**/${d}/**`);
+  const r = git(root, ['grep', '-n', '-I', '-E', ...mode, '--no-color', '-e', args.pattern, '--', where, ':(exclude).relay', ...skip]);
   if (r.code === 1) return '（没找到）';
   if (r.code !== 0) throw new ToolError(`搜索出错：${r.stderr || r.code}`);
   const lines = r.stdout.split('\n');

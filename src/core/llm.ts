@@ -177,7 +177,7 @@ type J = Record<string, unknown>;
 const o = (v: unknown): J => (v && typeof v === 'object' && !Array.isArray(v) ? (v as J) : {});
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
-/** 一问一答（审计、审查、讨论用）。 */
+/** 一问一答（群聊、投票用）。 */
 export async function chat(spec: ApiSpec, messages: ChatMessage[], opts: { timeoutMs?: number; temperature?: number } = {}): Promise<string> {
   const timeoutMs = opts.timeoutMs ?? 90_000;
   let content = '';
