@@ -3,35 +3,29 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { doctor } from '../commands/doctor';
-import { loadAutoSettings, saveAutoSettings } from '../core/auto-settings';
-import { detectAll, enableProvider, listMembers, loadDetected, resolveTeam, syncRegistry } from '../core/detect';
-import { apiUsable, keyWhere } from '../core/llm';
 import { talkContext } from '../commands/talk';
+import { loadAutoSettings, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
+import { detectAll, enableProvider, loadDetected, syncRegistry } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
-import { mergeBase } from '../core/git';
-import { checkCommand, chooseFolder, copyToClipboard, reveal } from '../core/launch';
+import { copyToClipboard, fillTemplate, openTerminal, runOpener, shq, chooseFolder } from '../core/launch';
+import { loadLedger, saveStint } from '../core/ledger';
+import { allMembers, orderMembers } from '../core/members';
 import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
+import { BRIEF_REL, TASK_REL } from '../core/notes';
 import { isInside } from '../core/paths';
 import { PRESETS } from '../core/presets';
-import { inspectProject, setupProject } from '../core/project';
-import { ONBOARD_HINT } from '../core/prompts';
-import { agentKind, agentLabel, canTalk, loadRegistry, removeAgent, upsertAgent } from '../core/registry';
-import { listSessionRoots, loadSession } from '../core/session';
-import { fileDiff } from '../core/status';
-import { archiveTalk, readTalk, say, talkStatus } from '../core/talk';
-import type { AgentConfig } from '../core/types';
-import { abandon } from '../ops/abandon';
-import { autoActive, autoLogTail, loadAutoState, startAuto, stopAuto } from '../ops/auto';
-import { openTask } from '../ops/context';
-import { handoff } from '../ops/handoff';
-import { merge } from '../ops/merge';
-import { rollback } from '../ops/rollback';
-import { startTask } from '../ops/start';
-import { abortSync, syncMain } from '../ops/sync';
-import { takeStray } from '../ops/take';
-import { loadProjectView } from '../ops/view';
-import { launchInTerminal, openApp } from '../ops/work';
+import { untilText } from '../core/quota';
+import { agentKind, findAgent, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
+import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
+import { archiveTalk, readTalk, say, talkBusy, talkStatus } from '../core/talk';
+import { adoptOption, castHumanVote, readVotes, startVote } from '../core/vote';
+import { goActive, startGo, stopGo } from '../ops/go';
+import { initProject, liveProjects, newTask } from '../ops/init';
+import { rollbackBefore, undoRollback } from '../ops/rollback';
+import { refreshBrief, relayBusy, trackAndGate } from '../ops/track';
+import { projectView, readRunLog, stintDetail } from '../ops/view';
+import { unwatchAll, watchProject, watching } from '../ops/watch';
 
 const WEB = path.join(__dirname, '..', 'web');
 const VERSION = (() => {
@@ -42,22 +36,8 @@ const VERSION = (() => {
   }
 })();
 
-// ---- 同一个项目同一时间只做一件事 ----
-
-const busy = new Map<string, { op: string; since: string }>();
-
-async function exclusive<T>(root: string, op: string, fn: () => Promise<T> | T): Promise<T> {
-  const key = path.resolve(root);
-  const cur = busy.get(key);
-  if (cur) throw new RelayError(`正在${cur.op}，请等它做完。`, 'busy');
-  if (autoActive(root)) throw new RelayError('全自动正在跑。先「停止」它，再手动操作。', 'auto-running');
-  busy.set(key, { op, since: new Date().toISOString() });
-  try {
-    return await fn();
-  } finally {
-    busy.delete(key);
-  }
-}
+/** 你自己在别的 AI 工具里接着做时，对它说的第一句话。 */
+export const HINT = '接着做这个项目：先读 .relay/接力本.md，再按 AGENTS.md（或 CLAUDE.md）里的「接力规矩」来。';
 
 // ---- 自动识别：接力台一启动就在后台识别一次（没识别过、或者上次是 12 小时以前） ----
 
@@ -68,81 +48,53 @@ function ensureDetected(force = false): void {
   const last = loadDetected();
   if (!force && last && Date.now() - new Date(last.at).getTime() < 12 * 3600_000) return;
   detecting = detectAll({ network: true })
-    .then((r) => {
-      syncRegistry(r);
-      checkCache.clear();
-    })
+    .then((r) => syncRegistry(r))
     .catch(() => undefined)
     .finally(() => {
       detecting = null;
     });
 }
 
-// ---- 工人命令检查比较慢（要起进程），缓存一分钟 ----
+// ---- 给网页看的成员 ----
 
-const checkCache = new Map<string, { at: number; ok: boolean; problem?: string }>();
-
-function cachedCheck(cmd: string): { ok: boolean; problem?: string } {
-  const hit = checkCache.get(cmd);
-  if (hit && Date.now() - hit.at < 60_000) return hit;
-  const r = checkCommand(cmd);
-  const v = { at: Date.now(), ok: r.ok, ...(r.problem ? { problem: r.problem } : {}) };
-  checkCache.set(cmd, v);
-  return v;
-}
-
-function workerViews() {
-  const members = new Map(listMembers(loadAutoSettings().level).map((m) => [m.name, m]));
-  return loadRegistry().agents.map((a: AgentConfig) => {
-    const kind = agentKind(a);
-    let check: { ok: boolean; problem?: string };
-    if (kind === 'api') {
-      check = a.api && apiUsable(a.api) ? { ok: true } : { ok: false, problem: `没有密钥（${a.api ? keyWhere(a.api) : '没配接口'}）` };
-    } else {
-      check = cachedCheck(a.cmd ?? '');
-    }
-    const m = members.get(a.name);
-    const auto = m ? { work: m.canWork, review: m.canReview, model: m.model ?? null, why: m.why ?? null } : null;
-    return { ...a, kind, label: agentLabel(a), canTalk: canTalk(a), check, auto };
-  });
-}
-
-function autoView(root: string) {
-  const state = loadAutoState(root);
-  return state ? { state, tail: autoLogTail(state, 80) } : null;
-}
-
-function teamView() {
-  const settings = loadAutoSettings();
-  const report = loadDetected();
-  const members = listMembers(settings.level, report);
-  const team = resolveTeam(members, settings);
-  const brief = (l: typeof members) => l.map((m) => ({ name: m.name, label: m.label, model: m.model ?? null }));
-  return {
-    settings,
-    detectedAt: report?.at ?? null,
-    workers: brief(team.workers),
-    reviewers: brief(team.reviewers),
-    problems: team.problems,
-    members: members.map((m) => ({ name: m.name, label: m.label, model: m.model ?? null, kind: m.kind, work: m.canWork, review: m.canReview, why: m.why ?? null })),
-  };
+function memberViews() {
+  const s = loadAutoSettings();
+  const now = new Date();
+  return orderMembers(allMembers(s.level), s.order).map((m) => ({
+    name: m.name,
+    label: m.label,
+    model: m.model ?? null,
+    kind: m.kind,
+    tier: m.tier,
+    tierSet: m.tierSet,
+    canWork: m.canWork,
+    canTalk: m.canTalk,
+    why: m.why ?? null,
+    cooling: m.cooling ?? null,
+    coolingText: m.cooling ? untilText(m.cooling, now) : null,
+    detected: !!m.agent.detected,
+    agent: m.agent,
+  }));
 }
 
 function projectList(current: string | null) {
-  const roots = [...(current ? [current] : []), ...(loadMemory().recents ?? []), ...listSessionRoots()];
+  const roots = [...(current ? [current] : []), ...(loadMemory().recents ?? [])];
   const seen = new Set<string>();
-  const out: { root: string; name: string; hasTask: boolean; current: boolean }[] = [];
+  const out: { root: string; name: string; init: boolean; current: boolean; pending: number }[] = [];
   for (const r of roots) {
     const abs = path.resolve(r);
     if (seen.has(abs) || !fs.existsSync(abs)) continue;
     seen.add(abs);
-    let hasTask = false;
+    let init = false;
+    let pending = 0;
     try {
-      hasTask = !!loadSession(abs);
+      const v = loadLedger(abs);
+      init = !!v.init;
+      pending = v.stints.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack).length;
     } catch {
-      hasTask = false;
+      /* 读不了当没接入 */
     }
-    out.push({ root: abs, name: path.basename(abs), hasTask, current: abs === current });
+    out.push({ root: abs, name: path.basename(abs), init, current: abs === current, pending });
     if (out.length >= 15) break;
   }
   return out;
@@ -186,6 +138,10 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
+function strList(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()) : [];
+}
+
 /** 防 DNS 重绑定和跨站请求：只认本机地址 + 本端口；POST 必须是 JSON。 */
 function trusted(req: http.IncomingMessage): boolean {
   const port = req.socket.localPort;
@@ -203,147 +159,262 @@ function resolveDir(raw: string | undefined, fallback: string): string {
   return dir;
 }
 
-function sideBase(dir: string, side: string | undefined): string {
-  const info = inspectProject(dir);
-  if (side === 'task') {
-    const s = info.isGit ? loadSession(info.root) : null;
-    if (!s || !fs.existsSync(s.worktree)) throw new RelayError('现在没有隔离副本。', 'no-worktree');
-    return s.worktree;
-  }
-  return info.root;
+function requireProject(root: string): void {
+  if (!loadLedger(root).init) throw new RelayError('这个文件夹还没接入接力台。先点「接入」。', 'not-init');
 }
 
-function insideBase(base: string, rel: string): string {
-  const target = path.resolve(base, rel || '.');
-  if (!isInside(base, target)) throw new RelayError('不能看这个位置。', 'outside');
-  return target;
+function num(v: unknown, what: string): number {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0) throw new RelayError(`${what}不对。`, 'bad-number');
+  return n;
 }
-
-const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
 
 // ---- 路由 ----
 
-type Handler = (q: URLSearchParams, body: Record<string, unknown>, res: http.ServerResponse) => Promise<unknown> | unknown;
+type Handler = (q: URLSearchParams, body: Record<string, unknown>) => Promise<unknown> | unknown;
 
-/**
- * onQuit：网页上点「关闭接力台」时调用（由启动网页的 relay ui 负责退出进程）；不给就不能从网页关闭。
- */
-export function createServer(opts: { defaultDir: string; autoDetect?: boolean; onQuit?: () => void }): http.Server {
+export interface ServerOptions {
+  defaultDir: string;
+  autoDetect?: boolean;
+  /** 盯着接入过的文件夹自动记账（relay ui 开；测试里按需开）。 */
+  watch?: boolean;
+  /** 网页上点「关闭接力台」时调用（由启动网页的 relay ui 负责退出进程）；不给就不能从网页关闭。 */
+  onQuit?: () => void;
+}
+
+export function createServer(opts: ServerOptions): http.Server {
   if (opts.autoDetect) ensureDetected();
+  const watchOn = (root: string) => {
+    if (opts.watch && loadLedger(root).init) watchProject(root);
+  };
+  if (opts.watch) for (const r of liveProjects()) watchOn(r);
   const fallbackDir = () => lastProject() ?? opts.defaultDir;
-  const dirOf = (q: URLSearchParams, body: Record<string, unknown>) => resolveDir(str(body.dir) ?? q.get('dir') ?? q.get('root') ?? undefined, fallbackDir());
-  const rootOf = (q: URLSearchParams, body: Record<string, unknown>) => inspectProject(dirOf(q, body)).root;
+  const dirOf = (q: URLSearchParams, body: Record<string, unknown>) => resolveDir(str(body.dir) ?? q.get('dir') ?? undefined, fallbackDir());
 
   const get: Record<string, Handler> = {
     '/api/ping': () => ({ app: 'relay', version: VERSION }),
     '/api/state': (q) => {
-      const dir = dirOf(q, {});
-      const project = loadProjectView(dir);
-      if (project.isGit) rememberProject(project.root);
-      const key = path.resolve(project.root);
-      const t = talkStatus(project.root);
+      const root = dirOf(q, {});
+      const pv = projectView(root);
+      if (pv.init) {
+        rememberProject(root);
+        watchOn(root);
+      }
+      const t = talkStatus(root);
+      const w = watching(root);
       return {
         version: VERSION,
         home: os.homedir(),
-        project,
-        workers: workerViews(),
-        projects: projectList(project.root),
-        busy: busy.get(key) ?? null,
-        talk: { count: readTalk(project.root).length, current: t.current, queue: t.queue },
-        auto: project.isGit ? autoView(project.root) : null,
-        team: teamView(),
+        project: pv,
+        members: memberViews(),
+        settings: loadAutoSettings(),
+        projects: projectList(root),
+        talk: { count: readTalk(root).length, speaking: t.speaking, queue: t.queue },
         detecting: !!detecting,
+        detectedAt: loadDetected()?.at ?? null,
+        watching: !!w,
+        watchError: w?.lastError ?? null,
+        hint: HINT,
       };
     },
-    '/api/auto': (q) => {
-      const root = rootOf(q, {});
-      return { auto: autoView(root), team: teamView() };
-    },
-    '/api/detect': () => ({ report: loadDetected(), team: teamView() }),
-    '/api/talk': (q) => {
-      const root = rootOf(q, {});
-      return { rows: readTalk(root, 300), status: talkStatus(root) };
-    },
-    '/api/presets': () => ({ presets: PRESETS }),
-    '/api/doctor': (q) => ({ lines: doctor(dirOf(q, {})) }),
-    '/api/files': (q) => {
-      const base = sideBase(dirOf(q, {}), q.get('side') ?? 'main');
-      const target = insideBase(base, q.get('sub') ?? '');
-      if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) throw new RelayError('这不是文件夹。', 'not-dir');
-      const entries = fs
-        .readdirSync(target, { withFileTypes: true })
-        .filter((d) => d.name !== '.git' && d.name !== '.DS_Store')
-        .map((d) => ({ name: d.name, dir: d.isDirectory() }))
-        .sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name, 'zh') : a.dir ? -1 : 1))
-        .slice(0, 500);
-      return { base, sub: path.relative(base, target), entries };
-    },
-    '/api/file': (q) => {
-      const base = sideBase(dirOf(q, {}), q.get('side') ?? 'main');
-      const abs = insideBase(base, q.get('path') ?? '');
-      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw new RelayError('找不到这个文件。', 'no-file');
-      const size = fs.statSync(abs).size;
-      const ext = path.extname(abs).toLowerCase();
-      if (IMAGE_TYPES[ext]) return { path: path.relative(base, abs), size, image: true };
-      const fd = fs.openSync(abs, 'r');
-      const buf = Buffer.alloc(Math.min(size, 256 * 1024));
-      fs.readSync(fd, buf, 0, buf.length, 0);
-      fs.closeSync(fd);
-      if (buf.subarray(0, 8000).includes(0)) return { path: path.relative(base, abs), size, binary: true };
-      return { path: path.relative(base, abs), size, text: buf.toString('utf8'), truncated: size > buf.length };
+    '/api/stint': (q) => {
+      const root = dirOf(q, {});
+      const d = stintDetail(root, num(q.get('id'), '棒号'));
+      if (!d) throw new RelayError('没有这一棒。', 'no-stint');
+      return d;
     },
     '/api/diff': (q) => {
-      const ctx = openTask(dirOf(q, {}));
-      const mb = mergeBase(ctx.wt, ctx.session.mainBranch ?? 'HEAD', 'HEAD') ?? ctx.session.baseCommit;
-      const file = q.get('path') ?? '';
-      if (!file) throw new RelayError('要看哪个文件？', 'no-file');
-      const committed = fileDiff(ctx.wt, mb, 'HEAD', file);
-      const working = fileDiff(ctx.wt, 'HEAD', null, file);
-      return { path: file, diff: committed + (working ? `${committed ? '\n' : ''}# ↓ 还没交接的改动\n${working}` : '') };
+      const root = dirOf(q, {});
+      const v = loadLedger(root);
+      const id = q.get('id');
+      const file = q.get('path') ?? undefined;
+      if (!id || id === '0') {
+        // 上一棒结束之后、还没人交接的改动。
+        const now = takeSnapshot(root, '看改动').sha;
+        const base = v.base ?? now;
+        return { files: snapChanges(root, base, now), diff: snapDiff(root, base, now, file) };
+      }
+      const s = v.stints.find((x) => x.id === Number(id));
+      if (!s) throw new RelayError('没有这一棒。', 'no-stint');
+      const to = s.to ?? takeSnapshot(root, '看改动').sha;
+      return { files: snapChanges(root, s.from, to), diff: snapDiff(root, s.from, to, file) };
     },
-    '/api/audit': (q) => {
-      const ctx = openTask(dirOf(q, {}));
-      const rel = q.get('path') ?? '';
-      const abs = insideBase(path.join(ctx.wt, '.relay', 'audits'), path.relative('.relay/audits', rel));
-      if (!fs.existsSync(abs)) throw new RelayError('找不到这份审计报告。', 'no-file');
-      return { path: rel, text: fs.readFileSync(abs, 'utf8') };
+    '/api/log': (q) => ({ text: readRunLog(dirOf(q, {}), q.get('path') ?? '') }),
+    '/api/brief': (q) => {
+      const root = dirOf(q, {});
+      try {
+        return { text: fs.readFileSync(path.join(root, BRIEF_REL), 'utf8') };
+      } catch {
+        return { text: '' };
+      }
     },
+    '/api/task': (q) => {
+      const root = dirOf(q, {});
+      try {
+        return { raw: fs.readFileSync(path.join(root, TASK_REL), 'utf8') };
+      } catch {
+        return { raw: '' };
+      }
+    },
+    '/api/talk': (q) => {
+      const root = dirOf(q, {});
+      return { rows: readTalk(root, 300), votes: readVotes(root).slice(-20), status: talkStatus(root) };
+    },
+    '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
+    '/api/presets': () => ({ presets: PRESETS }),
+    '/api/doctor': (q) => ({ lines: doctor(dirOf(q, {})) }),
   };
 
   const post: Record<string, Handler> = {
+    '/api/init': (q, b) => {
+      const root = dirOf(q, b);
+      const r = initProject(root, { task: str(b.task) });
+      rememberProject(r.root);
+      watchOn(r.root);
+      return r;
+    },
+    '/api/task': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      newTask(root, str(b.text) ?? '', strList(b.steps));
+      return {};
+    },
+    '/api/task/save': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      const raw = str(b.raw) ?? '';
+      if (!raw.trim()) throw new RelayError('任务不能是空的。', 'empty');
+      fs.writeFileSync(path.join(root, TASK_REL), raw.endsWith('\n') ? raw : `${raw}\n`);
+      refreshBrief(root);
+      return {};
+    },
+    '/api/go': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      const kind = b.kind === 'review' ? 'review' : 'work';
+      const r = startGo(root, { mode: 'once', kind, ...(str(b.who) ? { who: str(b.who) } : {}) });
+      r.done.catch(() => undefined);
+      return { state: r.state };
+    },
+    '/api/auto': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      if (str(b.task)?.trim()) newTask(root, str(b.task)!);
+      const r = startGo(root, { mode: 'auto' });
+      r.done.catch(() => undefined);
+      return { state: r.state };
+    },
+    '/api/stop': (q, b) => ({ stopped: stopGo(dirOf(q, b)) }),
+    '/api/snap': async (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      return await trackAndGate(root);
+    },
+    '/api/open': async (q, b) => {
+      // 你自己接着做：用桌面程序打开这个文件夹 / 在终端里开编程工具，并把第一句话复制好。
+      const root = dirOf(q, b);
+      requireProject(root);
+      const a = findAgent(str(b.who) ?? '');
+      if (!a) throw new RelayError('名单里没有它。', 'no-agent');
+      const copied = copyToClipboard(HINT);
+      if (agentKind(a) === 'app') {
+        const r = await runOpener(fillTemplate(a.cmd ?? '', { dir: root, worktree: root }), root);
+        if (r.code !== 0 && !r.lingering) throw new RelayError(`打不开：${r.output || `退出码 ${r.code}`}`, 'open-failed');
+        return { opened: true, copied, hint: HINT };
+      }
+      if (agentKind(a) === 'cli' && a.cmd) {
+        const first = a.prompt?.mode === 'arg' ? ` ${shq(HINT)}` : '';
+        const t = openTerminal(`cd ${shq(root)} && ${a.cmd}${first}`);
+        return { opened: t.ok, copied, hint: HINT, ...(t.ok ? {} : { error: t.error }) };
+      }
+      throw new RelayError('它没有可以打开的程序（接口模型用「让它接着做」）。', 'cannot-open');
+    },
+    '/api/copy-hint': () => ({ copied: copyToClipboard(HINT), hint: HINT }),
+    '/api/rollback': (q, b) => {
+      const root = dirOf(q, b);
+      if (goActive(root)) throw new RelayError('接力台正在调度，先停下再退回。', 'busy');
+      return rollbackBefore(root, num(b.stint, '棒号'));
+    },
+    '/api/rollback/undo': (q, b) => {
+      const root = dirOf(q, b);
+      if (goActive(root)) throw new RelayError('接力台正在调度，先停下再撤销。', 'busy');
+      return undoRollback(root);
+    },
+    '/api/mark': (q, b) => {
+      // 你说这一棒不用复核（比如其实是你自己改的）。
+      const root = dirOf(q, b);
+      const v = loadLedger(root);
+      const s = v.stints.find((x) => x.id === Number(b.stint));
+      if (!s) throw new RelayError('没有这一棒。', 'no-stint');
+      if (s.status === 'working') throw new RelayError('这一棒还在进行中。', 'working');
+      const note = str(b.note)?.trim() || '你标记为不用复核。';
+      saveStint(root, { ...s, review: 'skip', note: [s.note, note].filter(Boolean).join(' ') });
+      refreshBrief(root);
+      return {};
+    },
     '/api/detect': async (_q, b) => {
       if (detecting) await detecting;
       const report = await detectAll({ network: b.offline !== true });
       const changes = syncRegistry(report);
-      checkCache.clear();
-      return { report, changes, team: teamView() };
+      return { report, changes, members: memberViews() };
     },
     '/api/detect/use': (_q, b) => {
       const report = loadDetected();
       if (!report) throw new RelayError('先识别一次。', 'no-detect');
       const agent = enableProvider(report, str(b.id) ?? '');
-      return { agent, team: teamView() };
+      return { agent, members: memberViews() };
     },
-    '/api/auto/settings': (_q, b) => ({ settings: saveAutoSettings(b.settings), team: teamView() }),
-    '/api/auto/start': (q, b) => {
-      const dir = dirOf(q, b);
-      const root = inspectProject(dir).root;
-      if (busy.get(path.resolve(root))) throw new RelayError(`正在${busy.get(path.resolve(root))!.op}，请等它做完。`, 'busy');
-      const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined);
-      const r = startAuto(dir, {
-        goal: str(b.goal),
-        acceptance: str(b.acceptance),
-        workers: list(b.workers),
-        reviewers: list(b.reviewers),
-        ...(typeof b.maxRounds === 'number' ? { maxRounds: b.maxRounds } : {}),
-        ...(typeof b.autoMerge === 'boolean' ? { autoMerge: b.autoMerge } : {}),
-        ...(b.level === 'safe' || b.level === 'full' ? { level: b.level } : {}),
-      });
+    '/api/settings': (_q, b) => ({ settings: saveAutoSettings(b.settings), members: memberViews() }),
+    '/api/members/tier': (_q, b) => {
+      const name = str(b.name) ?? '';
+      const tier = b.tier === 'strong' ? 'strong' : b.tier === 'weak' ? 'weak' : null;
+      const reg = loadRegistry();
+      const a = reg.agents.find((x) => x.name === name);
+      if (!a) throw new RelayError('名单里没有它。', 'no-agent');
+      if (tier) {
+        a.tier = tier;
+        a.tierSet = true;
+      } else delete a.tierSet;
+      saveRegistry(reg);
+      for (const r of liveProjects()) refreshBrief(r);
+      return { members: memberViews() };
+    },
+    '/api/workers/save': (_q, b) => ({ agent: upsertAgent(b.agent, str(b.originalName)) }),
+    '/api/workers/delete': (_q, b) => {
+      removeAgent(str(b.name) ?? '');
+      return {};
+    },
+    '/api/config/save': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      const cfg = saveRelayConfig(root, b.config as never);
+      refreshBrief(root);
+      return { config: cfg };
+    },
+    '/api/talk/say': (q, b) => {
+      const root = dirOf(q, b);
+      const r = say(root, str(b.text) ?? '', strList(b.ask), talkContext(root), b.mode === 'solo' ? 'solo' : 'turn');
       r.done.catch(() => undefined);
-      rememberProject(r.state.root);
-      return { state: r.state };
+      return { row: r.row, queued: r.queued };
     },
-    '/api/auto/stop': (q, b) => ({ stopped: stopAuto(rootOf(q, b)) }),
+    '/api/talk/clear': (q, b) => {
+      const root = dirOf(q, b);
+      if (talkBusy(root)) throw new RelayError('还有人在发言，等这一轮说完再清空。', 'busy');
+      return { archived: archiveTalk(root) };
+    },
+    '/api/vote/start': (q, b) => {
+      const root = dirOf(q, b);
+      const r = startVote(root, { question: str(b.question) ?? '', voters: strList(b.voters), options: strList(b.options), context: talkContext(root) });
+      r.done.catch(() => undefined);
+      return { vote: r.vote };
+    },
+    '/api/vote/cast': (q, b) => ({ vote: castHumanVote(dirOf(q, b), str(b.id) ?? '', str(b.key) ?? '', str(b.reason) ?? '') }),
+    '/api/vote/adopt': (q, b) => {
+      const root = dirOf(q, b);
+      const v = adoptOption(root, str(b.id) ?? '', str(b.key) ?? '');
+      if (loadLedger(root).init) refreshBrief(root);
+      return { vote: v };
+    },
     '/api/choose-folder': async () => {
       const picked = await chooseFolder();
       if (!picked) throw new RelayError('没有选文件夹。', 'cancelled');
@@ -353,103 +424,12 @@ export function createServer(opts: { defaultDir: string; autoDetect?: boolean; o
       forgetProject(path.resolve(str(b.dir) ?? ''));
       return {};
     },
-    '/api/setup': (q, b) => {
-      const dir = dirOf(q, b);
-      return exclusive(dir, '设置项目', () => {
-        const r = setupProject(dir);
-        rememberProject(r.root);
-        return r;
-      });
-    },
-    '/api/start': (q, b) => {
-      const dir = dirOf(q, b);
-      return exclusive(inspectProject(dir).root, '开始任务', () => {
-        const r = startTask(dir, { task: str(b.task) ?? '', acceptance: str(b.acceptance) });
-        rememberProject(r.root);
-        return r;
-      });
-    },
-    '/api/work': (q, b) => {
-      const dir = dirOf(q, b);
-      const name = str(b.agent) ?? '';
-      const agent = loadRegistry().agents.find((a) => a.name === name);
-      if (!agent) throw new RelayError(`工人名单里没有「${name}」。`, 'no-agent');
-      const o = { model: str(b.model), force: b.force === true };
-      return exclusive(inspectProject(dir).root, '安排上岗', async () => {
-        if (agentKind(agent) === 'app') return { kind: 'app', ...(await openApp(dir, name, o)) };
-        return { kind: 'cli', ...launchInTerminal(dir, name, o) };
-      });
-    },
-    '/api/copy-hint': () => ({ copied: copyToClipboard(ONBOARD_HINT), hint: ONBOARD_HINT }),
-    '/api/handoff': (q, b) => {
-      const dir = dirOf(q, b);
-      return exclusive(inspectProject(dir).root, '交接', () => handoff(dir, { note: str(b.note) }));
-    },
-    '/api/merge': (q, b) => {
-      const dir = dirOf(q, b);
-      return exclusive(inspectProject(dir).root, '合回', () => merge(dir, { force: b.force === true, keepAudits: b.keepAudits === true }));
-    },
-    '/api/abandon': (q, b) => {
-      const dir = dirOf(q, b);
-      return exclusive(inspectProject(dir).root, '放弃任务', () => abandon(dir, { force: b.force === true }));
-    },
-    '/api/rollback': (q, b) => {
-      const dir = dirOf(q, b);
-      return exclusive(inspectProject(dir).root, '退回', () => rollback(dir, str(b.sha) ?? ''));
-    },
-    '/api/take': (q, b) => {
-      const dir = dirOf(q, b);
-      const only = Array.isArray(b.paths) ? b.paths.filter((p): p is string => typeof p === 'string') : undefined;
-      return exclusive(inspectProject(dir).root, '收进任务', () => takeStray(dir, only));
-    },
-    '/api/sync': (q, b) => {
-      const dir = dirOf(q, b);
-      return exclusive(inspectProject(dir).root, '同步主线', () => {
-        if (b.abort === true) {
-          abortSync(dir);
-          return { status: 'aborted' };
-        }
-        return syncMain(dir);
-      });
-    },
-    '/api/reveal': (q, b) => {
-      const base = sideBase(dirOf(q, b), str(b.side) ?? 'main');
-      const target = insideBase(base, str(b.path) ?? '');
-      return { opened: reveal(target), target };
-    },
-    '/api/workers/save': (_q, b) => {
-      const agent = upsertAgent(b.agent, str(b.originalName));
-      checkCache.clear();
-      return { agent };
-    },
-    '/api/workers/delete': (_q, b) => {
-      removeAgent(str(b.name) ?? '');
-      return {};
-    },
-    '/api/config/save': (q, b) => {
-      const root = rootOf(q, b);
-      const info = inspectProject(root);
-      if (!info.hasConfig) throw new RelayError('这个文件夹还不是接力项目。', 'no-config');
-      return { config: saveRelayConfig(root, b.config as never) };
-    },
-    '/api/talk/say': (q, b) => {
-      const root = rootOf(q, b);
-      const ask = Array.isArray(b.ask) ? b.ask.filter((x): x is string => typeof x === 'string') : [];
-      const r = say(root, str(b.text) ?? '', ask, talkContext(root));
-      r.done.catch(() => undefined);
-      return { row: r.row, queued: r.queued };
-    },
     '/api/quit': () => {
       if (!opts.onQuit) throw new RelayError('这个接力台不能从网页关闭。', 'no-quit');
       const quit = opts.onQuit;
       // 先把回复发出去，再退出。
       setTimeout(quit, 200);
       return { quitting: true };
-    },
-    '/api/talk/clear': (q, b) => {
-      const root = rootOf(q, b);
-      if (talkStatus(root).current) throw new RelayError('还有人在发言，等这一轮说完再清空。', 'busy');
-      return { archived: archiveTalk(root) };
     },
   };
 
@@ -462,18 +442,6 @@ export function createServer(opts: { defaultDir: string; autoDetect?: boolean; o
           return;
         }
         if (url.pathname.startsWith('/api/')) {
-          if (req.method === 'GET' && url.pathname === '/api/raw') {
-            const base = sideBase(resolveDir(url.searchParams.get('dir') ?? undefined, fallbackDir()), url.searchParams.get('side') ?? 'main');
-            const abs = insideBase(base, url.searchParams.get('path') ?? '');
-            const type = IMAGE_TYPES[path.extname(abs).toLowerCase()];
-            if (!type || !fs.existsSync(abs) || fs.statSync(abs).size > 20_000_000) {
-              send(res, 404, { ok: false, error: '没有这张图。' });
-              return;
-            }
-            res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-            fs.createReadStream(abs).pipe(res);
-            return;
-          }
           const table = req.method === 'POST' ? post : req.method === 'GET' ? get : {};
           const h = table[url.pathname];
           if (!h) {
@@ -481,7 +449,7 @@ export function createServer(opts: { defaultDir: string; autoDetect?: boolean; o
             return;
           }
           const body = req.method === 'POST' ? await readBody(req) : {};
-          const data = await h(url.searchParams, body, res);
+          const data = await h(url.searchParams, body);
           send(res, 200, { ok: true, ...(data as object) });
           return;
         }
@@ -491,6 +459,9 @@ export function createServer(opts: { defaultDir: string; autoDetect?: boolean; o
         send(res, known ? 400 : 500, { ok: false, error: errorMessage(e), code: known ? e.code : 'internal' });
       }
     })();
+  });
+  server.on('close', () => {
+    if (opts.watch) unwatchAll();
   });
   return server;
 }
@@ -505,12 +476,12 @@ function serveStatic(pathname: string, res: http.ServerResponse): void {
   }
   const ext = path.extname(file);
   const type =
-    ext === '.css' ? 'text/css; charset=utf-8' : ext === '.js' ? 'text/javascript; charset=utf-8' : ext === '.svg' ? 'image/svg+xml' : 'text/html; charset=utf-8';
+    ext === '.css' ? 'text/css; charset=utf-8' : ext === '.js' ? 'text/javascript; charset=utf-8' : ext === '.svg' ? 'image/svg+xml' : ext === '.woff2' ? 'font/woff2' : 'text/html; charset=utf-8';
   res.writeHead(200, {
     'Content-Type': type,
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
   });
   res.end(fs.readFileSync(file));
 }
@@ -531,3 +502,5 @@ export function listen(server: http.Server, port: number): Promise<number> {
     server.listen(port, '127.0.0.1');
   });
 }
+
+export { relayBusy };

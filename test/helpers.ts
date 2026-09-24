@@ -17,11 +17,13 @@ export interface Sandbox {
   git(args: string[], cwd?: string): string;
   /** 写一个可执行的假脚本，返回路径。 */
   script(name: string, body: string): string;
-  session(): { worktree: string; branch: string; startCommit: string; baseCommit: string; mainSnapshot?: Record<string, string> } | null;
+  /** 账本里的所有事件。 */
   journal(): Record<string, unknown>[];
-  write(rel: string, text: string, where?: 'repo' | 'wt'): void;
-  read(rel: string, where?: 'repo' | 'wt'): string;
-  exists(rel: string, where?: 'repo' | 'wt'): boolean;
+  /** 按编号折好的每一棒（取最后一条）。 */
+  stints(): Record<string, any>[];
+  write(rel: string, text: string): void;
+  read(rel: string): string;
+  exists(rel: string): boolean;
 }
 
 export function testEnv(home: string): NodeJS.ProcessEnv {
@@ -41,7 +43,7 @@ export function testEnv(home: string): NodeJS.ProcessEnv {
   return env;
 }
 
-/** 一个干净的临时环境：假 HOME + 一个有一次提交的 git 仓库（git=false 时只是普通文件夹）。 */
+/** 一个干净的临时环境：假 HOME + 一个项目文件夹（默认是有一次提交的 git 仓库；git=false 时只是普通文件夹）。 */
 export function sandbox(name: string, opts: { git?: boolean } = {}): Sandbox {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-${name}-`)));
   const home = path.join(base, 'home');
@@ -86,36 +88,34 @@ export function sandbox(name: string, opts: { git?: boolean } = {}): Sandbox {
       fs.chmodSync(p, 0o755);
       return p;
     },
-    session() {
-      const dir = path.join(home, '.relay', 'projects');
-      if (!fs.existsSync(dir)) return null;
-      for (const d of fs.readdirSync(dir)) {
-        const p = path.join(dir, d, 'session.json');
-        if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
-      }
-      return null;
-    },
     journal() {
-      const s = sb.session();
-      if (!s) return [];
+      const p = path.join(repo, '.relay', 'journal.jsonl');
+      if (!fs.existsSync(p)) return [];
       return fs
-        .readFileSync(path.join(s.worktree, '.relay', 'journal.jsonl'), 'utf8')
+        .readFileSync(p, 'utf8')
         .split('\n')
         .filter(Boolean)
         .map((l) => JSON.parse(l));
     },
-    write(rel, text, where = 'repo') {
-      const root = where === 'repo' ? repo : sb.session()!.worktree;
-      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
-      fs.writeFileSync(path.join(root, rel), text);
+    stints() {
+      const byId = new Map<number, Record<string, any>>();
+      for (const e of sb.journal()) if (e.type === 'stint') byId.set((e.stint as { id: number }).id, e.stint as Record<string, any>);
+      for (const e of sb.journal()) {
+        if (e.type !== 'rollback') continue;
+        for (const id of (e.dropped as number[]) ?? []) if (byId.get(id)) byId.get(id)!.rolledBack = true;
+        for (const id of (e.restored as number[]) ?? []) if (byId.get(id)) delete byId.get(id)!.rolledBack;
+      }
+      return [...byId.values()].sort((a, b) => a.id - b.id);
     },
-    read(rel, where = 'repo') {
-      const root = where === 'repo' ? repo : sb.session()!.worktree;
-      return fs.readFileSync(path.join(root, rel), 'utf8');
+    write(rel, text) {
+      fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
+      fs.writeFileSync(path.join(repo, rel), text);
     },
-    exists(rel, where = 'repo') {
-      const root = where === 'repo' ? repo : sb.session()!.worktree;
-      return fs.existsSync(path.join(root, rel));
+    read(rel) {
+      return fs.readFileSync(path.join(repo, rel), 'utf8');
+    },
+    exists(rel) {
+      return fs.existsSync(path.join(repo, rel));
     },
   };
   return sb;

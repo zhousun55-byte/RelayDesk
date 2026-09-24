@@ -29,7 +29,7 @@ function withFlags(cmd: Command): Command {
   return cmd
     .option('--label <显示名>', '显示名，如「Claude Code」')
     .option('--kind <类型>', 'cli（终端）| app（桌面）| api（只讨论）')
-    .option('--cmd <命令>', '启动命令；桌面工人要含 {{worktree}}')
+    .option('--cmd <命令>', '启动命令；桌面程序要含 {{dir}}（项目文件夹）')
     .option('--tier <能力>', 'strong（强）| weak（弱）')
     .option('--mode <喂法>', '终端工人的上岗词喂法：arg | stdin | file')
     .option('--model <模型>', '正在用的模型（只做记录）')

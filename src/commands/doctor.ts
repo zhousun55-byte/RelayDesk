@@ -1,18 +1,19 @@
 import { spawnSync } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
 import { Command } from 'commander';
-import { auditSpec } from '../core/audit';
 import { loadAutoSettings } from '../core/auto-settings';
-import { loadRelayConfig } from '../core/config';
-import { listMembers, loadDetected, resolveTeam } from '../core/detect';
+import { loadDetected } from '../core/detect';
 import { errorMessage } from '../core/errors';
 import { checkCommand } from '../core/launch';
+import { loadLedger } from '../core/ledger';
 import { apiUsable, keyWhere } from '../core/llm';
+import { allMembers, readyMembers } from '../core/members';
 import { relayHome } from '../core/paths';
-import { inspectProject } from '../core/project';
+import { protocolState } from '../core/protocol';
+import { untilText } from '../core/quota';
 import { agentKind, agentLabel, loadRegistry } from '../core/registry';
-import { loadSession } from '../core/session';
+import { projectConfig } from '../ops/track';
+import { findRoot } from './relay';
 
 export interface DoctorLine {
   level: 'ok' | 'warn' | 'bad';
@@ -59,36 +60,30 @@ export function doctor(dir: string): DoctorLine[] {
 
   try {
     const settings = loadAutoSettings();
-    const report = loadDetected();
-    if (!report) add('warn', '还没自动识别过这台电脑上的 AI 工具（接力台启动时会自动识别，或执行 relay detect）。');
-    const team = resolveTeam(listMembers(settings.level, report), settings);
-    const names = (l: typeof team.workers) => l.map((m) => m.label).join('、');
-    if (team.workers.length) add('ok', `全自动能派的：干活 ${names(team.workers)}；审查 ${names(team.reviewers) || '（没有）'}`);
-    else add('warn', '全自动现在派不出人：装好并登录 Claude Code、Codex、Cursor Agent 等之一，再 relay detect。');
-    for (const p of team.problems) add('warn', p);
+    if (!loadDetected()) add('warn', '还没自动识别过这台电脑上的 AI 工具（接力台启动时会自动识别，或执行 relay detect）。');
+    const list = allMembers(settings.level);
+    const ready = readyMembers(list);
+    const strong = ready.filter((m) => m.tier === 'strong');
+    if (ready.length) add('ok', `接力台能调度的：${ready.map((m) => `${m.label}（${m.tier === 'strong' ? '强' : '弱'}）`).join('、')}`);
+    else add('warn', '接力台现在调度不了任何 AI（没装、没登录，或者额度都用完了）。你自己在工具里接着做也行，接力台照样记账。');
+    if (ready.length && !strong.length) add('warn', '能调度的里面没有强模型：弱模型的活要等强模型复核。');
+    for (const m of list.filter((x) => x.cooling)) add('warn', `${m.label} 额度用完了，${untilText(m.cooling!)}`);
   } catch (e) {
     add('warn', errorMessage(e));
   }
 
   try {
-    const info = inspectProject(dir);
-    if (!info.isGit || !info.hasConfig) {
-      add('warn', `${info.root} 还不是接力项目（开始第一个任务时会自动设好，也可以 relay init）。`);
+    const root = findRoot(dir);
+    const v = loadLedger(root);
+    if (!v.init) {
+      add('warn', `${root} 还没接入接力台（relay init，或在网页里点「接入」）。`);
     } else {
-      add('ok', `接力项目：${info.root}`);
-      try {
-        const cfg = loadRelayConfig(info.root);
-        add('ok', `检查命令：${cfg.gate.command || '没配置（交接时不检查）'}`);
-        if (apiUsable(cfg.audit)) add('ok', `审计模型：${auditSpec(cfg.audit).spec.model}（${cfg.audit.apiKeyEnv} 已设置）`);
-        else add('warn', `审计模型没有密钥（${cfg.audit.apiKeyEnv || '没填变量名'}）：交接照常，只是没有模型写的阅读面`);
-      } catch (e) {
-        add('bad', errorMessage(e));
-      }
-      const s = loadSession(info.root);
-      if (s) {
-        if (fs.existsSync(s.worktree)) add('ok', `进行中的任务：${s.taskTitle}`);
-        else add('bad', `进行中的任务「${s.taskTitle}」的隔离副本不见了，只能放弃（relay abandon）。`);
-      }
+      add('ok', `接入的项目：${root}（${v.stints.length} 棒）`);
+      const st = protocolState(root);
+      if (st === 'ok') add('ok', 'AGENTS.md / CLAUDE.md 里的接力规矩是最新的');
+      else add('warn', st === 'old' ? '接力规矩是旧版的：relay init 更新一下' : 'AGENTS.md / CLAUDE.md 里没有接力规矩了：relay init 补上');
+      const cfg = projectConfig(root);
+      add('ok', `检查命令：${cfg.gate.command || '没配置（每一棒结束时不跑检查）'}`);
     }
   } catch (e) {
     add('warn', errorMessage(e));

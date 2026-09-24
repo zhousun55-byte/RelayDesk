@@ -4,7 +4,9 @@ import { RelayError } from './errors';
 import { relayHome } from './paths';
 import type { AgentConfig, AgentKind, AgentsRegistry, PromptMode, Tier } from './types';
 
-export const WORKTREE_PLACEHOLDER = '{{worktree}}';
+/** 桌面程序「打开文件夹」命令里的占位符（旧版叫 {{worktree}}，也认）。 */
+export const DIR_PLACEHOLDER = '{{dir}}';
+const DIR_PLACEHOLDERS = ['{{dir}}', '{{worktree}}'];
 export const OUT_PLACEHOLDER = '{{out}}';
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/;
@@ -128,6 +130,7 @@ export function normalizeAgent(input: unknown): AgentConfig {
   if (!TIERS.includes(tier)) throw new RelayError('能力只能是 strong（强）或 weak（弱）。', 'bad-agent');
 
   const agent: AgentConfig = { name, kind, tier };
+  if (o.tierSet === true) agent.tierSet = true;
   const label = optText(o.label, '显示名', 40);
   const model = optText(o.model, '模型', 80);
   const note = optText(o.note, '备注', 200);
@@ -155,8 +158,8 @@ export function normalizeAgent(input: unknown): AgentConfig {
   } else {
     const cmd = optText(o.cmd, '启动命令', 500) ?? '';
     if (!cmd) throw new RelayError('启动命令不能空。', 'bad-agent');
-    if (kind === 'app' && !cmd.includes(WORKTREE_PLACEHOLDER)) {
-      throw new RelayError(`桌面工人的启动命令必须含 ${WORKTREE_PLACEHOLDER}，例如 open -a Cursor ${WORKTREE_PLACEHOLDER}。`, 'bad-agent');
+    if (kind === 'app' && !DIR_PLACEHOLDERS.some((x) => cmd.includes(x))) {
+      throw new RelayError(`桌面程序的打开命令必须含 ${DIR_PLACEHOLDER}（项目文件夹），例如 open -a Cursor ${DIR_PLACEHOLDER}。`, 'bad-agent');
     }
     agent.cmd = cmd;
     const promptIn = o.prompt as { mode?: unknown } | undefined;

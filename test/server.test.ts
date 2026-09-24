@@ -1,15 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import fs from 'node:fs';
 import http from 'node:http';
-import path from 'node:path';
+import { withFakes } from './fakes';
 import { CLI, sandbox, until, type Sandbox } from './helpers';
 
 /** 起一个真的接力台（relay ui），用 HTTP 打它。 */
-async function startUi(s: Sandbox): Promise<{ base: string; child: ChildProcess; call: (p: string, body?: unknown, headers?: Record<string, string>) => Promise<{ status: number; json: Record<string, unknown> }> }> {
+async function startUi(s: Sandbox): Promise<{ child: ChildProcess; port: number; call: (p: string, body?: unknown, headers?: Record<string, string>) => Promise<{ status: number; json: Record<string, any> }> }> {
   const port = 20000 + Math.floor(Math.random() * 20000);
-  const child = spawn(process.execPath, [CLI, 'ui', s.repo, '--port', String(port), '--no-open'], { cwd: s.repo, env: s.env });
+  const child = spawn(process.execPath, [CLI, 'ui', s.repo, '--port', String(port), '--no-open'], { cwd: s.repo, env: { ...s.env, RELAY_WATCH_DEBOUNCE_MS: '150', RELAY_WATCH_TICK_MS: '400' } });
   let out = '';
   child.stdout?.on('data', (c) => (out += c));
   child.stderr?.on('data', (c) => (out += c));
@@ -18,101 +17,132 @@ async function startUi(s: Sandbox): Promise<{ base: string; child: ChildProcess;
   const base = `http://127.0.0.1:${actual}`;
   const call = async (p: string, body?: unknown, headers: Record<string, string> = {}) => {
     const res = await fetch(`${base}${p}`, body === undefined ? { headers } : { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
-    return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+    return { status: res.status, json: (await res.json()) as Record<string, any> };
   };
-  return { base, child, call };
+  return { child, port: actual, call };
 }
 
-function fakeTools(s: Sandbox): void {
-  // 和 auto.test.ts 同样的假工具，精简版：claude 干活写 hello.txt，codex 审查一律通过。
-  const bin = path.join(s.base, 'fakebin');
-  fs.mkdirSync(bin, { recursive: true });
-  fs.writeFileSync(
-    path.join(bin, 'claude'),
-    [
-      '#!/bin/sh',
-      'case "$1" in --version) echo "9.9.9 (Claude Code)"; exit 0 ;; auth) echo \'{"loggedIn":true}\'; exit 0 ;; esac',
-      'cat > /dev/null',
-      'echo hi > hello.txt',
-      `printf '%s\\n' '{"type":"result","subtype":"success","result":"ok"}'`,
-    ].join('\n')
-  );
-  fs.writeFileSync(
-    path.join(bin, 'codex'),
-    [
-      '#!/bin/sh',
-      'case "$1" in --version) echo "codex-cli 9.9.9"; exit 0 ;; login) echo "Logged in using ChatGPT"; exit 0 ;; esac',
-      'out=""; prev=""',
-      'for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done',
-      'cat > /dev/null',
-      `printf '%s' '{"verdict":"pass","summary":"ok","issues":[]}' > "$out"`,
-    ].join('\n')
-  );
-  fs.chmodSync(path.join(bin, 'claude'), 0o755);
-  fs.chmodSync(path.join(bin, 'codex'), 0o755);
-  s.env.PATH = `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`;
-}
+const q = (s: Sandbox) => `?dir=${encodeURIComponent(s.repo)}`;
 
-test('接力台网页接口：自动识别 → 一键全自动 → 页面状态里能看到进度和结果', async () => {
-  const s = sandbox('srv-auto');
-  fakeTools(s);
-  s.relay(['init']);
+test('网页接口：接入 → 写任务 → 派人接着做一棒 → 看交接和改动 → 退回再撤销', async () => {
+  const s = sandbox('srv');
+  withFakes(s);
+  s.relay(['detect', '--offline']);
   const ui = await startUi(s);
   try {
-    const ping = await ui.call('/api/ping');
-    assert.equal(ping.json.app, 'relay');
+    assert.equal((await ui.call('/api/ping')).json.app, 'relay');
+    let st = await ui.call(`/api/state${q(s)}`);
+    assert.equal(st.json.project.init, false);
 
-    const det = await ui.call('/api/detect', { offline: true });
-    assert.equal(det.status, 200, JSON.stringify(det.json));
-    const report = det.json.report as { harnesses: { id: string }[] };
+    const init = await ui.call('/api/init', { dir: s.repo });
+    assert.equal(init.status, 200, JSON.stringify(init.json));
+    assert.ok(s.exists('.relay/接力本.md'));
+    const task = await ui.call('/api/task', { dir: s.repo, text: '做两件事', steps: ['第一件', '第二件'] });
+    assert.equal(task.status, 200, JSON.stringify(task.json));
+
+    st = await ui.call(`/api/state${q(s)}`);
+    assert.equal(st.json.project.init, true);
+    assert.equal(st.json.project.task.total, 2);
     assert.deepEqual(
-      report.harnesses.map((h) => h.id),
-      ['claude', 'codex']
+      st.json.members.map((m: { name: string; tier: string }) => [m.name, m.tier]),
+      [
+        ['codex', 'strong'],
+        ['claude', 'weak'],
+      ],
+      '强的排在前面'
     );
-    assert.ok((det.json.changes as string[]).length >= 2);
 
-    const state0 = await ui.call(`/api/state?dir=${encodeURIComponent(s.repo)}`);
-    const team = state0.json.team as { workers: { name: string }[]; reviewers: { name: string }[] };
+    const go = await ui.call('/api/go', { dir: s.repo, who: 'claude' });
+    assert.equal(go.status, 200, JSON.stringify(go.json));
+    await until(15_000, async () => (await ui.call(`/api/state${q(s)}`)).json.project.go?.status === 'done', '这一棒做完');
+    st = await ui.call(`/api/state${q(s)}`);
+    assert.equal(st.json.project.stints.length, 1);
+    assert.equal(st.json.project.pending.length, 1, '弱模型的棒待复核');
+    assert.equal(st.json.project.task.done, 1);
+
+    const detail = await ui.call(`/api/stint${q(s)}&id=1`);
+    assert.match(detail.json.handoff, /在 work\.txt 里加了一行/);
+    const diff = await ui.call(`/api/diff${q(s)}&id=1`);
     assert.deepEqual(
-      team.workers.map((w) => w.name),
-      ['claude', 'codex']
+      diff.json.files.map((f: { path: string }) => f.path),
+      ['work.txt']
     );
 
-    const start = await ui.call('/api/auto/start', { dir: s.repo, goal: '做一个 hello.txt', workers: ['claude'], reviewers: ['codex'] });
-    assert.equal(start.status, 200, JSON.stringify(start.json));
+    const mark = await ui.call('/api/mark', { dir: s.repo, stint: 1 });
+    assert.equal(mark.status, 200);
+    st = await ui.call(`/api/state${q(s)}`);
+    assert.equal(st.json.project.pending.length, 0, '你说不用复核就不用');
 
-    let last: Record<string, unknown> = {};
-    await until(
-      20_000,
-      async () => {
-        last = (await ui.call(`/api/state?dir=${encodeURIComponent(s.repo)}`)).json;
-        const a = last.auto as { state: { status: string } } | null;
-        return !!a && a.state.status !== 'running';
-      },
-      '全自动做完'
-    );
-    const a = last.auto as { state: { status: string; steps: { kind: string }[] }; tail: { text: string } | null };
-    assert.equal(a.state.status, 'done', JSON.stringify(a.state));
-    assert.ok(a.tail && a.tail.text.length > 0, '有日志');
-    assert.equal(s.read('hello.txt'), 'hi\n');
-    assert.equal((last.project as { task: unknown }).task, null, '任务已合回');
-
-    const stop = await ui.call('/api/auto/stop', { dir: s.repo });
-    assert.equal(stop.json.stopped, false, '没在跑时叫停无事发生');
+    const rb = await ui.call('/api/rollback', { dir: s.repo, stint: 1 });
+    assert.equal(rb.status, 200, JSON.stringify(rb.json));
+    assert.ok(!s.exists('work.txt'));
+    const undo = await ui.call('/api/rollback/undo', { dir: s.repo });
+    assert.equal(undo.status, 200, JSON.stringify(undo.json));
+    assert.ok(s.exists('work.txt'));
   } finally {
-    ui.child.kill('SIGTERM');
+    ui.child.kill();
   }
 });
 
-test('接力台网页接口：只认本机页面；POST 必须是 JSON；不能读项目外的文件；设置会校验', async () => {
-  const s = sandbox('srv-guard');
-  s.relay(['init']);
+test('网页开着时盯着文件夹：你在别的工具里改文件、写交接，接力台自动记上账', async () => {
+  const s = sandbox('srv-watch');
+  withFakes(s);
+  s.relay(['detect', '--offline']);
+  s.relay(['init', '做滤镜']);
   const ui = await startUi(s);
   try {
-    const port = Number(new URL(ui.base).port);
+    await ui.call(`/api/state${q(s)}`);
+    s.write('filter.xmp', '<x/>\n');
+    s.write('.relay/交接/第1棒-0924-2100-codex.md', '# 交接：Codex · gpt-6\n\n- 状态：已交接\n\n## 做了什么\n\n- 写了 filter.xmp\n');
+    await until(15_000, () => s.stints().some((x) => x.status === 'handed'), '自动记上第 1 棒');
+    const st = s.stints()[0];
+    assert.equal(st.who.member, 'codex');
+    assert.equal(st.review, 'skip');
+    assert.deepEqual(st.facts.paths, ['filter.xmp']);
+  } finally {
+    ui.child.kill();
+  }
+});
+
+test('网页接口：强弱可以改；投票出结果后采纳，写进任务的约定', async () => {
+  const s = sandbox('srv-vote');
+  withFakes(s);
+  s.relay(['detect', '--offline']);
+  s.relay(['init', '做滤镜']);
+  const ui = await startUi(s);
+  try {
+    const t = await ui.call('/api/members/tier', { name: 'claude', tier: 'strong' });
+    assert.equal(t.status, 200);
+    const claude = t.json.members.find((m: { name: string }) => m.name === 'claude');
+    assert.equal(claude.tier, 'strong');
+    assert.equal(claude.tierSet, true);
+
+    const v = await ui.call('/api/vote/start', { dir: s.repo, question: '导出什么格式？', voters: ['claude', 'codex'] });
+    assert.equal(v.status, 200, JSON.stringify(v.json));
+    const id = v.json.vote.id;
+    await until(15_000, async () => (await ui.call(`/api/talk${q(s)}`)).json.votes.find((x: { id: string }) => x.id === id)?.status === 'done', '投完票');
+    const done = (await ui.call(`/api/talk${q(s)}`)).json.votes.find((x: { id: string }) => x.id === id);
+    assert.equal(done.options.length, 2);
+    const mine = await ui.call('/api/vote/cast', { dir: s.repo, id, key: 'A' });
+    assert.equal(mine.json.vote.ballots.length, 3, '你也投了一票');
+    const ad = await ui.call('/api/vote/adopt', { dir: s.repo, id, key: done.leaders[0] });
+    assert.equal(ad.status, 200, JSON.stringify(ad.json));
+    assert.match(s.read('.relay/任务.md'), /导出什么格式？ → 采用方案/);
+    assert.match(s.read('.relay/接力本.md'), /采用方案/, '接力本里也能看到约定');
+  } finally {
+    ui.child.kill();
+  }
+});
+
+test('网页接口的安全检查：只认本机地址和本端口，POST 必须是 JSON；网页能关闭接力台', async () => {
+  const s = sandbox('srv-sec');
+  const ui = await startUi(s);
+  let exited = false;
+  ui.child.on('exit', () => (exited = true));
+  try {
     // fetch 会忽略自定义的 Host，用原始 http 请求模拟 DNS 重绑定。
     const badHost = await new Promise<number>((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port, path: '/api/ping', headers: { host: `evil.example:${port}` } }, (res) => {
+      const req = http.request({ host: '127.0.0.1', port: ui.port, path: '/api/ping', headers: { host: `evil.example:${ui.port}` } }, (res) => {
         res.resume();
         resolve(res.statusCode ?? 0);
       });
@@ -120,43 +150,30 @@ test('接力台网页接口：只认本机页面；POST 必须是 JSON；不能�
       req.end();
     });
     assert.equal(badHost, 403);
-    const badOrigin = await ui.call('/api/auto/stop', { dir: s.repo }, { origin: 'http://evil.example' });
-    assert.equal(badOrigin.status, 403);
-    const form = await fetch(`${ui.base}/api/auto/stop`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'dir=x' });
-    assert.equal(form.status, 403);
-    const outside = await ui.call(`/api/file?dir=${encodeURIComponent(s.repo)}&side=main&path=${encodeURIComponent('../home/.relay/agents.json')}`);
-    assert.equal(outside.status, 400);
-    assert.equal(outside.json.code, 'outside');
-    const bad = await ui.call('/api/auto/settings', { settings: { maxRounds: 99 } });
-    assert.equal(bad.status, 400);
-    assert.match(String(bad.json.error), /1–10/);
-    const good = await ui.call('/api/auto/settings', { settings: { maxRounds: 2, workers: 'codex', autoMerge: false } });
-    assert.equal(good.status, 200);
-    assert.equal((good.json.settings as { maxRounds: number }).maxRounds, 2);
-    const saved = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'auto.json'), 'utf8'));
-    assert.deepEqual(saved.workers, ['codex']);
-    const noTeam = await ui.call('/api/auto/start', { dir: s.repo, goal: '随便' });
-    assert.equal(noTeam.status, 400);
-    assert.match(String(noTeam.json.error), /没有能全自动干活的工人/);
+    assert.equal((await ui.call('/api/init', { dir: s.repo }, { Origin: 'http://evil.example.com' })).status, 403);
+    assert.equal((await ui.call('/api/quit', {}, { Origin: 'http://evil.example.com' })).status, 403, '别的网站关不掉接力台');
+    assert.ok(!s.exists('.relay'), '别的网站接入不了');
+    const port = (await ui.call('/api/ping')).json;
+    assert.equal(port.app, 'relay');
+    const res = await ui.call('/api/quit', {});
+    assert.equal(res.json.quitting, true);
+    await until(10_000, () => exited, '接力台退出');
   } finally {
-    ui.child.kill('SIGTERM');
+    if (!exited) ui.child.kill();
   }
 });
 
-test('网页上「关闭接力台」：接口回话后 relay ui 自己退出；别的网站发来的关闭请求会被拒绝', async () => {
-  const s = sandbox('srv-quit');
-  s.relay(['init']);
-  const ui = await startUi(s);
-  const exited = new Promise<number | null>((resolve) => ui.child.once('exit', (code) => resolve(code)));
-  try {
-    const bad = await ui.call('/api/quit', {}, { origin: 'http://evil.example' });
-    assert.equal(bad.status, 403, '别的网站不能叫它关掉');
-    const r = await ui.call('/api/quit', {});
-    assert.equal(r.status, 200, JSON.stringify(r.json));
-    assert.equal(r.json.quitting, true);
-    const code = await Promise.race([exited, new Promise<string>((res) => setTimeout(() => res('超时'), 8000))]);
-    assert.equal(code, 0, '进程要正常退出');
-  } finally {
-    if (ui.child.exitCode === null) ui.child.kill();
-  }
+test('不许接入整个家目录这种大文件夹', async () => {
+  const s = sandbox('srv-home');
+  const out = s.relay(['init'], false);
+  assert.match(out, /接入了/);
+  const bad = spawnRelay(s, ['init'], s.home);
+  assert.match(bad, /太大了|不像是一个项目/);
 });
+
+function spawnRelay(s: Sandbox, args: string[], cwd: string): string {
+  const { spawnSync } = require('node:child_process') as typeof import('node:child_process');
+  const r = spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: 'utf8', env: { ...s.env, HOME: s.home } });
+  return (r.stdout ?? '') + (r.stderr ?? '');
+}
+

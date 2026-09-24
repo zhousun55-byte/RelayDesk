@@ -8,6 +8,7 @@ import { apiUsable } from './llm';
 import { relayHome } from './paths';
 import { scanProviders, toApiSpec, type DetectedProvider } from './providers';
 import { agentKind, agentLabel, agentModel, loadRegistry, registryPath, saveRegistry } from './registry';
+import { tierForModel } from './tier';
 import type { AgentConfig } from './types';
 
 /**
@@ -44,25 +45,26 @@ export interface DetectReport {
   unknownKeys: string[];
 }
 
-const APPS: { name: string; hint: string }[] = [
-  { name: 'Cursor', hint: '桌面版只能手动用；全自动用 Cursor Agent（同一个账号、同样的模型）。' },
-  { name: 'ZCode', hint: '桌面版只能手动用；全自动用它自带的命令行内核（ZCode 命令行）。' },
-  { name: 'Xiaomi MiMo', hint: '没有命令行；全自动可以用它的 Token Plan 接口（要你同意）。' },
-  { name: 'ChatGPT', hint: '只能手动用；全自动用 Codex。' },
-  { name: 'Claude', hint: '只能手动用；全自动用 Claude Code。' },
-  { name: 'Codex', hint: '只能手动用；全自动用 Codex 命令行。' },
-  { name: 'Trae', hint: '只能手动用。' },
-  { name: 'Windsurf', hint: '只能手动用。' },
-  { name: 'Kiro', hint: '只能手动用。' },
-  { name: 'Qoder', hint: '只能手动用。' },
-  { name: 'CodeBuddy', hint: '只能手动用。' },
-  { name: 'Antigravity', hint: '只能手动用；全自动用 agy 命令行。' },
+/** 认得的桌面程序。id = 加进名单时的名字；tier = 默认强弱（桌面程序看不出用的哪个模型，你可以在设置里改）。 */
+const APPS: { name: string; id: string; label: string; tier: 'strong' | 'weak'; hint: string }[] = [
+  { name: 'Cursor', id: 'cursor', label: 'Cursor', tier: 'weak', hint: '你自己打开它接着做；接力台调度时用 Cursor Agent（同一个账号、同样的模型）。' },
+  { name: 'ZCode', id: 'zcode', label: 'ZCode', tier: 'weak', hint: '你自己打开它接着做；接力台调度时用它自带的命令行内核。' },
+  { name: 'Xiaomi MiMo', id: 'mimo', label: 'MiMo', tier: 'weak', hint: '你自己打开它接着做；接力台调度时可以用它的 Token Plan 接口（要你同意）。' },
+  { name: 'ChatGPT', id: 'chatgpt', label: 'ChatGPT', tier: 'strong', hint: '你自己打开它接着做；接力台调度时用 Codex。' },
+  { name: 'Claude', id: 'claude-app', label: 'Claude', tier: 'strong', hint: '你自己打开它接着做；接力台调度时用 Claude Code。' },
+  { name: 'Codex', id: 'codex-app', label: 'Codex 桌面版', tier: 'strong', hint: '你自己打开它接着做；接力台调度时用 Codex 命令行。' },
+  { name: 'Trae', id: 'trae', label: 'Trae', tier: 'weak', hint: '你自己打开它接着做。' },
+  { name: 'Windsurf', id: 'windsurf', label: 'Windsurf', tier: 'weak', hint: '你自己打开它接着做。' },
+  { name: 'Kiro', id: 'kiro', label: 'Kiro', tier: 'weak', hint: '你自己打开它接着做。' },
+  { name: 'Qoder', id: 'qoder', label: 'Qoder', tier: 'weak', hint: '你自己打开它接着做。' },
+  { name: 'CodeBuddy', id: 'codebuddy', label: 'CodeBuddy', tier: 'weak', hint: '你自己打开它接着做。' },
+  { name: 'Antigravity', id: 'antigravity', label: 'Antigravity', tier: 'weak', hint: '你自己打开它接着做；接力台调度时用 agy 命令行。' },
 ];
 
 function findApps(): AppReport[] {
   if (process.platform !== 'darwin' || !scanApps()) return [];
   const dirs = ['/Applications', path.join(os.homedir(), 'Applications')];
-  return APPS.filter((a) => dirs.some((d) => fs.existsSync(path.join(d, `${a.name}.app`)))).map((a) => ({ ...a }));
+  return APPS.filter((a) => dirs.some((d) => fs.existsSync(path.join(d, `${a.name}.app`)))).map((a) => ({ name: a.name, hint: a.hint }));
 }
 
 export function detectedPath(): string {
@@ -167,8 +169,8 @@ export function syncRegistry(report: DetectReport): string[] {
     if (agentKind(a) === 'app' && /^cursor(\s|$)/.test((a.cmd ?? '').trim())) {
       const chk = checkCommand(a.cmd ?? '');
       if (!chk.ok) {
-        a.cmd = 'open -a Cursor {{worktree}}';
-        changes.push(`「${agentLabel(a)}」的打开命令坏了（cursor 命令其实是 cursor-agent），改成了 open -a Cursor {{worktree}}。`);
+        a.cmd = 'open -a Cursor {{dir}}';
+        changes.push(`「${agentLabel(a)}」的打开命令坏了（cursor 命令其实是 cursor-agent），改成了 open -a Cursor {{dir}}。`);
       }
     }
   }
@@ -193,7 +195,8 @@ export function syncRegistry(report: DetectReport): string[] {
     let name = DEFAULT_NAMES[h.id] ?? h.id;
     for (let i = 2; names.has(name); i++) name = `${DEFAULT_NAMES[h.id] ?? h.id}${i}`;
     names.add(name);
-    reg.agents.push({ name, label: LABELS[h.id] ?? h.label, kind: 'cli', cmd, tier: 'strong', prompt: { mode: MANUAL_MODE[h.id] ?? 'arg' }, harness: h.id, detected: true });
+    const t = tierForModel(h.model.model);
+    reg.agents.push({ name, label: LABELS[h.id] ?? h.label, kind: 'cli', cmd, tier: t === 'weak' ? 'weak' : 'strong', prompt: { mode: MANUAL_MODE[h.id] ?? 'arg' }, harness: h.id, detected: true });
     changes.push(`新加了 ${LABELS[h.id] ?? h.label}（${name}）。`);
   }
 
@@ -206,6 +209,18 @@ export function syncRegistry(report: DetectReport): string[] {
     names.add(name);
     reg.agents.push({ name, label: p.label, kind: 'api', tier: 'weak', api: toApiSpec(p), model: p.model, detected: true });
     changes.push(`新加了模型接口 ${p.label}（${p.model}）。`);
+  }
+
+  // 桌面程序：加进名单（你自己打开它接着做时，接力台知道它是谁、强还是弱）。
+  for (const app of report.apps) {
+    const def = APPS.find((x) => x.name === app.name);
+    if (!def) continue;
+    const exists = reg.agents.some((a) => agentKind(a) === 'app' && (a.name === def.id || (a.cmd ?? '').includes(`"${def.name}"`) || (a.cmd ?? '').includes(`-a ${def.name} `) || (a.cmd ?? '').endsWith(`-a ${def.name}`)));
+    if (exists || names.has(def.id)) continue;
+    names.add(def.id);
+    const q = /\s/.test(def.name) ? `"${def.name}"` : def.name;
+    reg.agents.push({ name: def.id, label: def.label, kind: 'app', cmd: `open -a ${q} {{dir}}`, tier: def.tier, detected: true });
+    changes.push(`新加了桌面程序 ${def.label}。`);
   }
 
   if (changes.length) {

@@ -3,12 +3,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RelayError, errorMessage } from './errors';
+import { loadDetected, memberModel } from './detect';
 import { findHarness, locateCached } from './harness';
 import { fillTemplate } from './launch';
 import { chat } from './llm';
 import { redactSecrets } from './redact';
 import { startRun } from './runner';
-import { agentKind, agentLabel, agentModel, canTalk, findAgent, OUT_PLACEHOLDER } from './registry';
+import { agentKind, agentLabel, canTalk, findAgent, OUT_PLACEHOLDER } from './registry';
 import type { AgentConfig } from './types';
 
 /**
@@ -24,7 +25,14 @@ export interface TalkRow {
   text: string;
   /** 这条是「没回上来」的说明。 */
   error?: boolean;
+  /** 「各自先想」：同一轮的几条（互相看不到）。 */
+  round?: string;
+  /** 这句话后面是怎么请 AI 回答的：turn 轮流说 / solo 各自先想。 */
+  mode?: TalkMode;
 }
+
+/** turn = 轮流说（后面的看得到前面的）；solo = 各自先想（同时问，互相看不到）。 */
+export type TalkMode = 'turn' | 'solo';
 
 export function talkPath(root: string): string {
   return path.join(root, '.relay', 'talk.jsonl');
@@ -43,7 +51,7 @@ export function readTalk(root: string, limit = 400): TalkRow[] {
     } catch {
       continue;
     }
-    if (r.pending) continue;
+    if (r.pending || r.kind === 'vote') continue;
     const text = typeof r.text === 'string' ? r.text : '';
     if (!text.trim()) continue;
     const ts = typeof r.ts === 'string' ? r.ts : new Date(0).toISOString();
@@ -64,9 +72,17 @@ export function readTalk(root: string, limit = 400): TalkRow[] {
       ...(model ? { model } : {}),
       text,
       ...(r.error ? { error: true } : {}),
+      ...(typeof r.round === 'string' ? { round: r.round } : {}),
+      ...(r.mode === 'turn' || r.mode === 'solo' ? { mode: r.mode } : {}),
     });
   }
   return out.slice(-limit);
+}
+
+/** 往群聊记录里追加任意一行（投票也存在这里）。 */
+export function appendTalkRaw(root: string, row: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(talkPath(root)), { recursive: true });
+  fs.appendFileSync(talkPath(root), JSON.stringify(row) + '\n');
 }
 
 export function appendTalk(root: string, row: Omit<TalkRow, 'ts'> & { ts?: string }): TalkRow {
@@ -98,8 +114,8 @@ function hhmm(ts: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** 拼给某个 AI 的发言提示：规则 + 项目背景 + 最近的讨论记录。纯函数。 */
-export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number }): string {
+/** 拼给某个 AI 的发言提示：规则 + 项目背景 + 最近的讨论记录。纯函数。solo = 各自先想（这一轮别人的回答不给它看）。 */
+export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean }): string {
   const max = input.maxChars ?? 24_000;
   const lines = input.rows
     .filter((r) => !r.error)
@@ -121,12 +137,14 @@ export function buildTalkPrompt(input: { speaker: string; root: string; rows: Ta
     [
       '怎么发言：',
       '- 直接给出你的判断和理由，不客套，不复述别人已经说过的话。',
-      '- 可以点名回应别人的观点：同意还是不同意，为什么。',
+      '- 可以点名回应别人的观点：同意还是不同意，为什么。你有不同的想法就直说，不要因为对方是更强的模型就附和。',
       '- 一般控制在 300 字以内；被要求详细时再展开。',
       '- 用中文。只输出你要说的话本身。',
     ].join('\n'),
     `讨论记录（${kept.length < lines.length ? '较早的已省略，' : ''}最新的在最后）：\n${kept.join('\n\n') || '（还没有人说话）'}`,
-    `现在轮到你（${input.speaker}）发言。`,
+    input.solo
+      ? `这一轮是「各自先想」：几个 AI 同时回答最后那个问题，互相看不到。请给出你自己独立的判断，不用顾及别人会怎么说。现在请你（${input.speaker}）回答。`
+      : `现在轮到你（${input.speaker}）发言。`,
   ];
   return redactSecrets(parts.join('\n\n'));
 }
@@ -222,9 +240,12 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
 
 interface Round {
   queue: string[];
-  current: string | null;
+  /** 正在说的（各自先想时好几个同时说）。 */
+  current: Set<string>;
   since: string | null;
   running: Promise<void> | null;
+  /** 排队的「各自先想」轮：同一轮的人一起问。 */
+  soloQueue: { id: string; names: string[] }[];
 }
 
 const rounds = new Map<string, Round>();
@@ -233,75 +254,128 @@ function roundOf(root: string): Round {
   const key = path.resolve(root);
   let r = rounds.get(key);
   if (!r) {
-    r = { queue: [], current: null, since: null, running: null };
+    r = { queue: [], current: new Set(), since: null, running: null, soloQueue: [] };
     rounds.set(key, r);
   }
   return r;
 }
 
-export function talkStatus(root: string): { current: { agent: string; label: string; since: string } | null; queue: { agent: string; label: string }[] } {
+export function talkStatus(root: string): { current: { agent: string; label: string; since: string } | null; speaking: { agent: string; label: string }[]; queue: { agent: string; label: string }[] } {
   const r = rounds.get(path.resolve(root));
   const lab = (n: string) => agentLabel(findAgent(n) ?? n);
+  const speaking = [...(r?.current ?? [])].map((n) => ({ agent: n, label: lab(n) }));
+  const first = speaking[0];
   return {
-    current: r?.current ? { agent: r.current, label: lab(r.current), since: r.since ?? '' } : null,
-    queue: (r?.queue ?? []).map((n) => ({ agent: n, label: lab(n) })),
+    current: first ? { ...first, since: r?.since ?? '' } : null,
+    speaking,
+    queue: [...(r?.queue ?? []), ...(r?.soloQueue ?? []).flatMap((q) => q.names)].map((n) => ({ agent: n, label: lab(n) })),
   };
 }
 
-function speakerName(agent: AgentConfig): string {
-  const m = agentModel(agent);
+/** 群聊里显示的名字：工具名 · 实际用的模型（Claude Code 接的是 DeepSeek 就写 DeepSeek 的模型）。 */
+export function speakerName(agent: AgentConfig): string {
+  const m = memberModel(agent, loadDetected());
   return `${agentLabel(agent)}${m ? ` · ${m}` : ''}`;
+}
+
+function safeContext(context: () => TalkContext): TalkContext {
+  try {
+    return context();
+  } catch {
+    return {};
+  }
+}
+
+async function speakOne(root: string, name: string, rows: TalkRow[], context: () => TalkContext, solo?: string): Promise<void> {
+  const agent = findAgent(name);
+  try {
+    if (!agent) throw new RelayError('工人名单里已经没有它了。', 'no-agent');
+    const who = speakerName(agent);
+    const prompt = buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), ...(solo ? { solo: true } : {}) });
+    const text = await askAgent(agent, prompt, root);
+    const m = memberModel(agent, loadDetected());
+    appendTalk(root, { kind: 'ai', who, agent: agent.name, ...(m ? { model: m } : {}), text, ...(solo ? { round: solo } : {}) });
+  } catch (e) {
+    appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agentLabel(agent ?? name)} 没回上来：${errorMessage(e)}`, error: true, ...(solo ? { round: solo } : {}) });
+  }
+}
+
+/** 同时跑一批，最多 limit 个一起。 */
+export async function inParallel<T>(items: T[], limit: number, fn: (x: T) => Promise<void>): Promise<void> {
+  const q = [...items];
+  const workers = Array.from({ length: Math.min(limit, q.length) }, async () => {
+    for (;;) {
+      const x = q.shift();
+      if (x === undefined) return;
+      await fn(x);
+    }
+  });
+  await Promise.all(workers);
 }
 
 async function runRound(root: string, context: () => TalkContext): Promise<void> {
   const r = roundOf(root);
-  while (r.queue.length) {
-    const name = r.queue.shift()!;
-    r.current = name;
-    r.since = new Date().toISOString();
-    const agent = findAgent(name);
-    try {
-      if (!agent) throw new RelayError('工人名单里已经没有它了。', 'no-agent');
-      let ctx: TalkContext = {};
-      try {
-        ctx = context();
-      } catch {
-        ctx = {};
-      }
-      const who = speakerName(agent);
-      const prompt = buildTalkPrompt({ speaker: who, root, rows: readTalk(root, 80), context: ctx });
-      const text = await askAgent(agent, prompt, root);
-      const m = agentModel(agent);
-      appendTalk(root, { kind: 'ai', who, agent: agent.name, ...(m ? { model: m } : {}), text });
-    } catch (e) {
-      appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agentLabel(agent ?? name)} 没回上来：${errorMessage(e)}`, error: true });
+  for (;;) {
+    const solo = r.soloQueue.shift();
+    if (solo) {
+      // 各自先想：大家看到的记录都停在这一刻，互相看不到这一轮别人的回答。
+      const rows = readTalk(root, 80);
+      r.since = new Date().toISOString();
+      for (const n of solo.names) r.current.add(n);
+      await inParallel(solo.names, 4, async (n) => {
+        await speakOne(root, n, rows, context, solo.id);
+        r.current.delete(n);
+      });
+      continue;
     }
+    const name = r.queue.shift();
+    if (!name) break;
+    r.current.add(name);
+    r.since = new Date().toISOString();
+    await speakOne(root, name, readTalk(root, 80), context);
+    r.current.delete(name);
   }
-  r.current = null;
+  r.current.clear();
   r.since = null;
 }
 
-/**
- * 人说一句，并请几位 AI 依次回应。立即返回；回答在后台陆续写进记录。
- * 已经有一轮在跑时，新请的人排到队尾（他们发言时会看到这句话）。
- */
-export function say(root: string, text: string, ask: string[], context: () => TalkContext = () => ({})): { row: TalkRow; queued: string[]; done: Promise<void> } {
-  const t = text.trim();
-  if (!t) throw new RelayError('先写一句话。', 'empty');
+export function checkSpeakers(ask: string[]): string[] {
   const names: string[] = [];
   for (const n of ask) {
     const a = findAgent(n);
     if (!a) throw new RelayError(`工人名单里没有「${n}」。`, 'no-agent');
-    if (!canTalk(a)) throw new RelayError(`「${agentLabel(a)}」还不能参加讨论：在设置里给它填「讨论命令」。`, 'cannot-talk');
+    if (!canTalk(a)) throw new RelayError(`「${agentLabel(a)}」还不能参加群聊：在设置里给它填「讨论命令」。`, 'cannot-talk');
     if (!names.includes(n)) names.push(n);
   }
-  const row = appendTalk(root, { kind: 'human', who: '我', text: t });
+  return names;
+}
+
+/**
+ * 人说一句，并请几位 AI 回应。立即返回；回答在后台陆续写进记录。
+ * turn：一个接一个，后面的看得到前面的；solo：同时问，互相看不到（各自先想）。
+ * 已经有一轮在跑时，新请的人排到后面（他们发言时会看到这句话）。
+ */
+export function say(root: string, text: string, ask: string[], context: () => TalkContext = () => ({}), mode: TalkMode = 'turn'): { row: TalkRow; queued: string[]; done: Promise<void> } {
+  const t = text.trim();
+  if (!t) throw new RelayError('先写一句话。', 'empty');
+  const names = checkSpeakers(ask);
+  const row = appendTalk(root, { kind: 'human', who: '我', text: t, mode });
   const r = roundOf(root);
-  for (const n of names) if (!r.queue.includes(n) && r.current !== n) r.queue.push(n);
-  if (!r.running && r.queue.length) {
+  if (mode === 'solo' && names.length) {
+    r.soloQueue.push({ id: `solo-${Date.now().toString(36)}`, names });
+  } else {
+    for (const n of names) if (!r.queue.includes(n) && !r.current.has(n)) r.queue.push(n);
+  }
+  if (!r.running && (r.queue.length || r.soloQueue.length)) {
     r.running = runRound(root, context).finally(() => {
       r.running = null;
     });
   }
   return { row, queued: names, done: r.running ?? Promise.resolve() };
+}
+
+/** 群聊现在有没有人在说话（清空记录、投票前要等）。 */
+export function talkBusy(root: string): boolean {
+  const r = rounds.get(path.resolve(root));
+  return !!r && (!!r.running || r.current.size > 0);
 }

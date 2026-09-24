@@ -6,7 +6,6 @@ import { errorMessage } from './errors';
 import { git } from './git';
 import type { Level } from './harness';
 import { ToolChat, type ToolCall, type ToolDef } from './llm';
-import { NOTE_REL } from './prompts';
 import { matchProtected } from './protected';
 import { clip } from './runner';
 import type { ApiSpec } from './types';
@@ -19,7 +18,7 @@ import type { ApiSpec } from './types';
 export interface LlmAgentInput {
   spec: ApiSpec;
   cwd: string;
-  /** 上岗说明全文（.relay/ONBOARD.md）。 */
+  /** 这一棒的说明 + 接力本全文。 */
   brief: string;
   level: Level;
   gateCommand: string;
@@ -47,9 +46,9 @@ const SYSTEM = [
   '做法：',
   '- 先用 list_files / read_file / search 弄清楚现状，再动手；改动要小而准，不要重写无关的内容。',
   '- 改已有文件优先用 edit_file（精确替换一段）；新文件或整体重写用 write_file。',
-  '- 不要改 .relay/ 里的文件（.relay/NOTE.md 除外），不要碰 .git。',
+  '- .relay/ 里只能写：交接（.relay/交接/）、复核结论（.relay/复核/*.md）、任务清单（.relay/任务.md）；别的不要碰，也不要碰 .git。',
   '- 有检查命令时，改完用 run_check 验证；失败就修到通过。',
-  '- 做完后必须调用 finish，summary 写三行：做到哪了 / 下一步 / 没验证的假设。',
+  '- 做完后必须调用 finish，summary 写三行：做了什么 / 下一步 / 不确定的地方。',
   '- 说明文字用中文。',
 ].join('\n');
 
@@ -107,6 +106,9 @@ function tools(level: Level, hasGate: boolean): ToolDef[] {
 
 class ToolError extends Error {}
 
+/** .relay/ 里 AI 可以写的：交接、复核结论、任务清单。 */
+const RELAY_WRITABLE = /^\.relay\/(交接\/[^/]+\.md|复核\/[^/]+\.md|任务\.md)$/;
+
 function resolveIn(root: string, rel: unknown): { abs: string; rel: string } {
   if (typeof rel !== 'string' || !rel.trim()) throw new ToolError('缺少 path。');
   const abs = path.resolve(root, rel.trim());
@@ -117,7 +119,9 @@ function resolveIn(root: string, rel: unknown): { abs: string; rel: string } {
 
 function assertWritable(rel: string, protectedPaths: string[]): void {
   if (rel === '.git' || rel.startsWith('.git/')) throw new ToolError('不能改 .git。');
-  if ((rel === '.relay' || rel.startsWith('.relay/')) && rel !== NOTE_REL) throw new ToolError('不能改 .relay/ 里的文件（.relay/NOTE.md 除外）。');
+  if ((rel === '.relay' || rel.startsWith('.relay/')) && !RELAY_WRITABLE.test(rel)) {
+    throw new ToolError('.relay/ 里只能写交接（.relay/交接/）、复核结论（.relay/复核/*.md）和任务清单（.relay/任务.md）。');
+  }
   if (matchProtected([rel], protectedPaths).length) throw new ToolError(`${rel} 是不许改的文件。`);
 }
 
@@ -137,7 +141,7 @@ function listFiles(root: string, relDir: string): string {
       if (SKIP_DIRS.has(e.name)) continue;
       const full = path.join(dir, e.name);
       const r = path.relative(root, full).split(path.sep).join('/');
-      if (r === '.relay' || r.startsWith('.relay/')) continue;
+      if (r === '.relay/snapshots' || r === '.relay/runs') continue;
       if (e.isDirectory()) {
         out.push(`${r}/`);
         walk(full, depth + 1);
@@ -305,11 +309,6 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
     if (!finished && steps >= maxSteps) input.log(`到了 ${maxSteps} 步上限，停下。`);
   } catch (e) {
     return { finalText, steps, stopped: false, timedOut: false, error: errorMessage(e) };
-  }
-  const note = path.join(root, NOTE_REL);
-  if (finalText.trim() && !fs.existsSync(note)) {
-    fs.mkdirSync(path.dirname(note), { recursive: true });
-    fs.writeFileSync(note, finalText.trim() + '\n');
   }
   return { finalText, steps, stopped: false, timedOut: false };
 }

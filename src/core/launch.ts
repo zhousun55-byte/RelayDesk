@@ -7,7 +7,7 @@ export function shq(s: string): string {
 }
 
 /**
- * 把命令模板里的 {{名字}} 换成转义好的值。模板里给占位符加了引号（"{{worktree}}"）也照样对：
+ * 把命令模板里的 {{名字}} 换成转义好的值。模板里给占位符加了引号（"{{dir}}"）也照样对：
  * 连引号一起替换，不会变成 "'路径'"。
  */
 export function fillTemplate(cmd: string, vars: Record<string, string>): string {
@@ -82,7 +82,7 @@ export function checkCommand(cmd: string): CommandCheck {
       /* 保持原样 */
     }
     if (/cursor-agent/.test(real)) {
-      return { ok: false, found, problem: '这台电脑上的 cursor 命令其实是 cursor-agent（Cursor 的命令行 AI），打不开 Cursor 编辑器。改成：open -a Cursor {{worktree}}' };
+      return { ok: false, found, problem: '这台电脑上的 cursor 命令其实是 cursor-agent（Cursor 的命令行 AI），打不开 Cursor 编辑器。改成：open -a Cursor {{dir}}' };
     }
   }
   return { ok: true, found };

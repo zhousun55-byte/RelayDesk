@@ -15,7 +15,7 @@ export const PRESETS: Preset[] = [
   {
     id: 'claude',
     title: 'Claude Code（终端）',
-    hint: '能全自动干活、审查、讨论；也能手动在终端里上岗。',
+    hint: '接力台能替你调度它干活、复核、群聊；你也可以自己在终端里用它。',
     agent: {
       name: 'claude',
       label: 'Claude Code',
@@ -29,7 +29,7 @@ export const PRESETS: Preset[] = [
   {
     id: 'codex',
     title: 'Codex（终端）',
-    hint: '能全自动干活、审查、讨论；也能手动在终端里上岗。',
+    hint: '接力台能替你调度它干活、复核、群聊；你也可以自己在终端里用它。',
     agent: {
       name: 'codex',
       label: 'Codex',
@@ -43,31 +43,31 @@ export const PRESETS: Preset[] = [
   {
     id: 'cursor',
     title: 'Cursor（桌面）',
-    hint: '用 Cursor 打开隔离副本，在它的 AI 对话里干活。',
-    agent: { name: 'cursor', label: 'Cursor', kind: 'app', cmd: 'open -a Cursor {{worktree}}', tier: 'strong' },
+    hint: '用 Cursor 打开项目文件夹，在它的 AI 对话里接着做。',
+    agent: { name: 'cursor', label: 'Cursor', kind: 'app', cmd: 'open -a Cursor {{dir}}', tier: 'weak' },
   },
   {
     id: 'zcode',
     title: 'ZCode（桌面）',
-    hint: '用 ZCode 打开隔离副本。',
-    agent: { name: 'zcode', label: 'ZCode', kind: 'app', cmd: 'open -a ZCode {{worktree}}', tier: 'strong' },
+    hint: '用 ZCode 打开项目文件夹接着做。',
+    agent: { name: 'zcode', label: 'ZCode', kind: 'app', cmd: 'open -a ZCode {{dir}}', tier: 'weak' },
   },
   {
     id: 'mimo',
     title: 'MiMo（桌面）',
-    hint: '用小米 MiMo 打开隔离副本。',
-    agent: { name: 'mimo', label: 'MiMo', kind: 'app', cmd: 'open -a "Xiaomi MiMo" {{worktree}}', tier: 'strong' },
+    hint: '用小米 MiMo 打开项目文件夹接着做。',
+    agent: { name: 'mimo', label: 'MiMo', kind: 'app', cmd: 'open -a "Xiaomi MiMo" {{dir}}', tier: 'weak' },
   },
   {
     id: 'app',
     title: '其他桌面 App',
     hint: '把「应用名」换成 App 在「应用程序」里的名字。',
-    agent: { name: 'myapp', label: '我的 App', kind: 'app', cmd: 'open -a "应用名" {{worktree}}', tier: 'strong' },
+    agent: { name: 'myapp', label: '我的 App', kind: 'app', cmd: 'open -a "应用名" {{dir}}', tier: 'weak' },
   },
   {
     id: 'deepseek',
     title: 'DeepSeek（接口）',
-    hint: '走 API：能审查、讨论，也能用内置小代理干活。密钥放在环境变量 DEEPSEEK_API_KEY 里。',
+    hint: '走 API：接力台用内置小代理让它干活，也能群聊。密钥放在环境变量 DEEPSEEK_API_KEY 里。',
     agent: {
       name: 'deepseek',
       label: 'DeepSeek',

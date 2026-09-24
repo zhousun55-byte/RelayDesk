@@ -4,26 +4,26 @@ import { RelayError } from './errors';
 import type { Level } from './harness';
 import { relayHome } from './paths';
 
-/** 全自动流水线的设置（全机通用，存在 ~/.relay/auto.json）。 */
+/** 接力台调度的设置（全机通用，存在 ~/.relay/auto.json）。 */
 export interface AutoSettings {
-  /** 干活的人（工人名），按优先级。空 = 自动排（编程工具在前）。第一位是主力，失败了才轮到下一位。 */
-  workers: string[];
-  /** 审查的人，按优先级。空 = 自动排。每一轮会挑一个和干活的人不同的。 */
-  reviewers: string[];
-  /** 最多改几轮（干活 → 审查算一轮）。 */
-  maxRounds: number;
-  /** 审查通过后自动合回正式文件夹。 */
-  autoMerge: boolean;
-  /** safe：只改隔离副本、命令进沙箱；full：完全放开。 */
+  /** 派活的顺序（工人名）。空 = 强的在前、编程工具在前。额度用完的自动跳过。 */
+  order: string[];
+  /** safe：改文件只限项目文件夹、命令进工具自己的沙箱；full：完全放开。 */
   level: Level;
-  /** 干活一段最长多少分钟。 */
-  workTimeoutMin: number;
-  /** 审查一次最长多少分钟。 */
+  /** 干活一棒最长多少分钟。 */
+  stintTimeoutMin: number;
+  /** 复核 / 终审一棒最长多少分钟。 */
   reviewTimeoutMin: number;
+  /** 全自动最多接力几棒（防止没完没了）。 */
+  maxStints: number;
+  /** 所有人都没额度时，等最早恢复的那一位（不等就停下）。 */
+  waitForQuota: boolean;
+  /** 任务清单全部打勾后，请强模型把整件事过一遍再算完成。 */
+  finalReview: boolean;
 }
 
 export function defaultAutoSettings(): AutoSettings {
-  return { workers: [], reviewers: [], maxRounds: 3, autoMerge: true, level: 'safe', workTimeoutMin: 60, reviewTimeoutMin: 20 };
+  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true };
 }
 
 export function autoSettingsPath(): string {
@@ -34,7 +34,7 @@ function names(v: unknown, field: string): string[] {
   if (v === undefined || v === null || v === '') return [];
   const list = typeof v === 'string' ? v.split(/[,，\s]+/) : v;
   if (!Array.isArray(list)) throw new RelayError(`${field} 要是工人名的列表。`, 'bad-auto');
-  return [...new Set(list.map((x) => String(x).trim()).filter(Boolean))].slice(0, 20);
+  return [...new Set(list.map((x) => String(x).trim()).filter(Boolean))].slice(0, 30);
 }
 
 function int(v: unknown, field: string, min: number, max: number, dflt: number): number {
@@ -44,19 +44,25 @@ function int(v: unknown, field: string, min: number, max: number, dflt: number):
   return n;
 }
 
+function bool(v: unknown, dflt: boolean): boolean {
+  return v === undefined || v === null ? dflt : v === true || v === 'true';
+}
+
 export function normalizeAutoSettings(raw: unknown): AutoSettings {
   const d = defaultAutoSettings();
   const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const level = o.level === undefined ? d.level : o.level;
   if (level !== 'safe' && level !== 'full') throw new RelayError('权限档位只能是 safe（安全）或 full（完全放开）。', 'bad-auto');
+  // 1.x 的设置：干活的人 workers 当成派活顺序。
+  const order = o.order !== undefined ? names(o.order, '派活顺序') : names(o.workers, '派活顺序');
   return {
-    workers: names(o.workers, '干活的人'),
-    reviewers: names(o.reviewers, '审查的人'),
-    maxRounds: int(o.maxRounds, '最多轮数', 1, 10, d.maxRounds),
-    autoMerge: o.autoMerge === undefined ? d.autoMerge : o.autoMerge === true,
+    order,
     level,
-    workTimeoutMin: int(o.workTimeoutMin, '干活时限', 1, 600, d.workTimeoutMin),
-    reviewTimeoutMin: int(o.reviewTimeoutMin, '审查时限', 1, 120, d.reviewTimeoutMin),
+    stintTimeoutMin: int(o.stintTimeoutMin ?? o.workTimeoutMin, '一棒的时限', 1, 600, d.stintTimeoutMin),
+    reviewTimeoutMin: int(o.reviewTimeoutMin, '复核的时限', 1, 240, d.reviewTimeoutMin),
+    maxStints: int(o.maxStints, '最多几棒', 1, 100, d.maxStints),
+    waitForQuota: bool(o.waitForQuota, d.waitForQuota),
+    finalReview: bool(o.finalReview, d.finalReview),
   };
 }
 

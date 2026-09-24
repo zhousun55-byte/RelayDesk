@@ -1,54 +1,62 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { RelayError } from '../core/errors';
-import { commitAll, git, shortSha } from '../core/git';
-import { appendEvent, checkpoints, type CheckpointInfo } from '../core/journal';
-import { assertFree } from '../core/lock';
-import { isRelayPath } from '../core/status';
-import { openTask } from './context';
-
-export function listCheckpoints(dir: string): CheckpointInfo[] {
-  const ctx = openTask(dir);
-  return checkpoints(ctx.events, ctx.session.startCommit);
-}
-
-function lsTree(cwd: string, rev: string): string[] {
-  return git(cwd, ['ls-tree', '-r', '-z', '--name-only', rev], { raw: true })
-    .stdout.split('\0')
-    .filter((p) => p && !isRelayPath(p));
-}
+import { appendLedger, findStint, loadLedger, requireInit } from '../core/ledger';
+import { restoreFile, restoreSnapshot, snapExists } from '../core/snap';
+import { refreshBrief, relayBusy, track } from './track';
 
 /**
- * 退回到某个检查点。不改写历史：新提交一个「文件内容和那个检查点一模一样」的版本，
- * 交接记录、审计报告都还在，退回本身也记一笔。只动隔离副本，正式文件夹不碰。
- * 还没交接的改动会被丢掉（网页上会先确认）。
+ * 退回：把整个文件夹恢复成「第 N 棒之前」的样子。之后的棒作废（账本里还留着，标成已退回）。
+ * 退回前先存一张快照，所以退回本身也能撤销。
  */
-export function rollback(dir: string, target: string): { to: string; label: string; ts: string } {
-  const ctx = openTask(dir);
-  const { wt, events, session } = ctx;
-  assertFree(wt, '退回');
-  const cps = checkpoints(events, session.startCommit);
-  const t = target.trim();
-  const hit = cps.find((c) => c.sha === t || (t.length >= 4 && c.sha.startsWith(t)));
-  if (!hit) throw new RelayError(`${t} 不是这个任务的检查点。relay rollback 不带参数可以看列表。`, 'bad-checkpoint');
 
-  // 1. 丢掉没提交的业务改动和新建的文件（.relay 和被忽略的文件不动）。
-  git(wt, ['reset', '-q']);
-  git(wt, ['checkout', '--', '.', ':(exclude).relay']);
-  git(wt, ['clean', '-fdq', '--', '.', ':(exclude).relay']);
-  // 2. 检查点之后新增的文件删掉；其余文件恢复成检查点的样子。
-  const want = new Set(lsTree(wt, hit.sha));
-  for (const f of lsTree(wt, 'HEAD')) {
-    if (!want.has(f)) {
-      git(wt, ['rm', '-q', '-f', '--', f]);
-      fs.rmSync(path.join(wt, f), { force: true });
-    }
+export interface RollbackResult {
+  label: string;
+  dropped: number[];
+  files: number;
+}
+
+export function rollbackBefore(root: string, stintId: number): RollbackResult {
+  let v = requireInit(root);
+  if (relayBusy(v)) throw new RelayError('接力台正在调度一棒，先停下再退回。', 'busy');
+  // 先把正在进行的那一棒记完（它的改动也会被退回，但账上要有）。
+  track(root);
+  v = loadLedger(root);
+  if (v.open) throw new RelayError(`第 ${v.open.id} 棒还在进行中（有 AI 正在改文件）。等它停下，或者先让它交接。`, 'busy');
+  const s = findStint(v, stintId);
+  if (!s) throw new RelayError(`没有第 ${stintId} 棒。`, 'no-stint');
+  if (s.rolledBack) throw new RelayError(`第 ${stintId} 棒已经被退回过了。`, 'already');
+  if (!snapExists(root, s.from)) throw new RelayError(`第 ${stintId} 棒之前的快照找不到了。`, 'no-snap');
+  const dropped = v.stints.filter((x) => x.id >= stintId && !x.rolledBack).map((x) => x.id);
+  const label = `第 ${stintId} 棒之前`;
+  const r = restoreSnapshot(root, s.from, `退回到${label}`);
+  appendLedger(root, { type: 'rollback', ts: new Date().toISOString(), to: s.from, label, safety: r.safety, after: r.after, dropped });
+  refreshBrief(root);
+  return { label, dropped, files: r.files };
+}
+
+/** 撤销最近一次退回：恢复成退回前的样子，那几棒的改动回来。 */
+export function undoRollback(root: string): RollbackResult {
+  let v = requireInit(root);
+  if (relayBusy(v)) throw new RelayError('接力台正在调度一棒，先停下再撤销。', 'busy');
+  const last = v.lastRollback;
+  if (!last || last.restored) throw new RelayError('最近没有可以撤销的退回。', 'no-rollback');
+  track(root);
+  v = loadLedger(root);
+  if (v.open) throw new RelayError(`退回之后又有新的改动（第 ${v.open.id} 棒），不能直接撤销了。`, 'busy');
+  const after = v.stints.filter((x) => !x.rolledBack && x.to && x.to !== last.after);
+  if (after.some((x) => new Date(x.startedAt).getTime() > new Date(last.ts).getTime())) {
+    throw new RelayError('退回之后又有人接着做了，不能直接撤销（会把后来的活也冲掉）。可以退回到具体某一棒之前。', 'moved-on');
   }
-  if (want.size > 0) {
-    const r = git(wt, ['checkout', hit.sha, '--', '.', ':(exclude).relay']);
-    if (r.code !== 0) throw new RelayError(`退回失败：${r.stderr || r.stdout}`, 'git');
-  }
-  appendEvent(wt, { ts: new Date().toISOString(), type: 'rollback', to: hit.sha, worktree: wt });
-  commitAll(wt, `接力：退回到 ${shortSha(hit.sha)}`);
-  return { to: hit.sha, label: hit.agent, ts: hit.ts };
+  const label = `撤销「退回到${last.label}」`;
+  const r = restoreSnapshot(root, last.safety, label);
+  appendLedger(root, { type: 'rollback', ts: new Date().toISOString(), to: last.safety, label: '退回之前', safety: r.safety, after: r.after, dropped: [], restored: last.dropped });
+  refreshBrief(root);
+  return { label, dropped: [], files: r.files };
+}
+
+/** 只把一个文件恢复成第 N 棒之前的样子（复核时觉得某个文件被改坏了）。 */
+export function restoreFileBefore(root: string, stintId: number, file: string): void {
+  const v = requireInit(root);
+  const s = findStint(v, stintId);
+  if (!s) throw new RelayError(`没有第 ${stintId} 棒。`, 'no-stint');
+  restoreFile(root, s.from, file);
 }

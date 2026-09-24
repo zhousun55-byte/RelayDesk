@@ -1,132 +1,68 @@
-import type { ReviewTarget } from './journal';
-import { agentLabel } from './registry';
-import type { Tier } from './types';
-import { stampLocal } from './time';
+import { BRIEF_REL, reviewFileFor, TASK_REL } from './notes';
+import { snapGit } from './snap';
 
-/** 唯一喂给工人的一句话：让它先去读上岗说明。桌面工人会被复制到剪贴板。 */
-export const ONBOARD_HINT = '请先完整阅读当前文件夹里的 .relay/ONBOARD.md（接力上岗说明），然后按里面的要求开始工作。';
+/**
+ * 接力台调度一棒时给 AI 的第一句话。要短：细节都在接力本和 AGENTS.md / CLAUDE.md 的规矩里，
+ * 这里只说「你是谁、这一棒做什么、交接写在哪」。
+ */
 
-/** 工人停手前写自述的地方。交接时接力台会读走它、写进交接文档，然后删掉。 */
-export const NOTE_REL = '.relay/NOTE.md';
-
-export interface OnboardInput {
-  taskTitle: string;
-  /** task.md 全文。 */
-  taskBody: string;
-  branch: string;
-  worktree: string;
-  you: { agent: string; label: string; tier: Tier; llm?: string };
-  /** 要审的上一段（最近一次有改动的交接）；null = 没有。 */
-  review: (ReviewTarget & { label?: string }) | null;
-  handoffDoc: string | null;
-  latestAudit: { path: string; content: string } | null;
-  protectedPaths: string[];
+export interface StintPromptInput {
+  id: number;
+  /** Codex · gpt-6 */
+  label: string;
+  handoff: string;
   gateCommand: string;
-  /** 同步正式文件夹时留下的冲突文件。 */
-  conflicts: string[];
-  generatedAt: string;
-  /** 全自动流水线派的活：没有人在场；上一轮审查意见必须逐条处理。 */
-  auto?: AutoBrief;
 }
 
-export interface AutoBrief {
-  round: number;
-  /** 上一轮审查（要求修改时）。 */
-  review: { reviewer: string; summary: string; issues: string[] } | null;
+const ALONE = '没有人会回答你的问题，也不用等人确认：自己判断，直接做。';
+
+export function workPrompt(i: StintPromptInput): string {
+  return [
+    `你是「接力台」派来接着做这个项目的第 ${i.id} 棒：${i.label}。${ALONE}`,
+    '',
+    `1. 先完整读 \`${BRIEF_REL}\`（任务、进度、上一棒留的话、待复核的改动都在里面），再按 AGENTS.md / CLAUDE.md 里的「接力规矩」做。`,
+    `2. 这一棒的交接写在 \`${i.handoff}\`：现在就建（格式见接力本），边做边记。`,
+    `3. 把任务往前推：能做完就做完；做不完就做完一个完整的小块再收工。每做完一步在 \`${TASK_REL}\` 里打勾。`,
+    '4. 收工前把交接写完整，状态写「已交接」（整个任务都做完了写「全部完成」；做不下去写「卡住了」并写清楚卡在哪）。',
+    ...(i.gateCommand ? [`5. 收工前跑一遍检查：\`${i.gateCommand}\`。`] : []),
+  ].join('\n');
 }
 
-function clip(text: string, max: number): string {
-  const t = text.trim();
-  return t.length > max ? `${t.slice(0, max)}\n\n…（后面还有，太长没放进来）` : t;
+export interface ReviewPromptInput extends StintPromptInput {
+  targets: { id: number; label: string; tierWord: string }[];
 }
 
-/** 纯函数：拼上岗说明。改这里等于改上岗协议，测试要一起改。 */
-export function buildOnboard(input: OnboardInput): string {
-  const me = `${input.you.label}${input.you.llm ? ` · ${input.you.llm}` : ''}`;
-  const s: string[] = [];
-  s.push(
-    `# 上岗说明（接力台）`,
+export function reviewPrompt(i: ReviewPromptInput): string {
+  const list = i.targets.map((t) => `第 ${t.id} 棒（${t.label}，${t.tierWord}）`).join('、');
+  return [
+    `你是「接力台」派来复核的第 ${i.id} 棒：${i.label}。${ALONE}`,
     '',
-    `> 生成于 ${stampLocal(input.generatedAt)}。这一棒是你：**${me}**。`,
+    `要复核的是：${list}。它们的交接、真实改动和复核方法都写在 \`${BRIEF_REL}\` 的「先复核」一节里。`,
     '',
-    '## 任务',
-    input.taskBody.trim() || input.taskTitle,
+    '1. 逐棒对照它的交接看真实改动：说做了的真做了吗？有没有没说的改动？有没有改错、改坏、偷工减料？',
+    `2. ${i.gateCommand ? `跑检查：\`${i.gateCommand}\`；` : ''}能运行的就实际运行一下，确认功能真的能用。`,
+    '3. 发现问题直接改好（就在这个文件夹里改）。改得太乱的文件可以恢复成它改之前的样子（接力本里有命令）。',
+    `4. 每一棒写一份结论：${i.targets.map((t) => `\`${reviewFileFor(t.id)}\``).join('、')}（格式见接力本，「结论」一行一定要写）。`,
+    `5. 这一棒只复核和修问题，不做新功能。你自己的交接写在 \`${i.handoff}\`，状态写「已交接」。`,
+  ].join('\n');
+}
+
+export interface FinalPromptInput extends StintPromptInput {
+  from: string;
+  to: string;
+  reviewFile: string;
+}
+
+export function finalPrompt(i: FinalPromptInput): string {
+  return [
+    `你是「接力台」派来做终审的第 ${i.id} 棒：${i.label}。${ALONE}`,
     '',
-    '## 你在哪里干活',
-    `- 当前文件夹是这个任务的**隔离副本**（分支 \`${input.branch}\`）：\`${input.worktree}\``,
-    input.auto
-      ? '- 只在这里改。正式文件夹不用管：你做完后，接力台会自动交接、请另一个 AI 审查，通过了自动合回。'
-      : '- 只在这里改。正式文件夹不用管，做完后由人来「合回」。',
-    ''
-  );
-  if (input.auto) {
-    s.push('## 全自动模式', `这是全自动流水线的第 ${input.auto.round} 轮。没有人会回答你的问题，也不要等人确认：自己判断，直接做完。`, '');
-    const rv = input.auto.review;
-    if (rv) {
-      s.push(
-        `## 上一轮审查意见（${rv.reviewer}，必须逐条处理）`,
-        rv.summary,
-        '',
-        ...rv.issues.map((x, i) => `${i + 1}. ${x}`),
-        '',
-        '改完后在 `.relay/NOTE.md` 里逐条说明每个问题是怎么处理的。',
-        ''
-      );
-    }
-  }
-
-  const r = input.review;
-  if (r) {
-    const who = r.label ?? agentLabel(r.agent);
-    if (r.tier === 'weak') {
-      s.push(
-        '## 第一件事：审查上一位的改动（必须）',
-        `上一位是 **${who}${r.llm ? ` · ${r.llm}` : ''}**，能力标记为「弱」。动手前必须先审它的改动：`,
-        `1. \`git diff --stat ${r.from}..${r.to}\` 看改了哪些文件；\`git diff ${r.from}..${r.to}\` 逐个文件细看。`,
-        '2. 好的留下，在它的基础上继续。',
-        `3. 坏的按文件退回：\`git checkout ${r.from} -- <文件>\`。不要整体回档，不要 rebase / amend / reset。`,
-        ''
-      );
-    } else {
-      s.push(
-        '## 上一位做了什么',
-        `上一位是 **${who}${r.llm ? ` · ${r.llm}` : ''}**。它的全部改动：\`git diff ${r.from}..${r.to}\`。`,
-        '动手前先看一眼，确认它说「做完了」的地方真的做完了。',
-        ''
-      );
-    }
-  }
-
-  if (input.conflicts.length) {
-    s.push(
-      '## 先解决合并冲突',
-      `同步正式文件夹时，这些文件两边都改了：${input.conflicts.map((f) => `\`${f}\``).join('、')}。`,
-      '打开它们，把 `<<<<<<<` 和 `>>>>>>>` 之间的内容合成正确的版本，删掉这些标记。解决完才能交接。',
-      ''
-    );
-  }
-
-  s.push('## 交接文档（上一次交接时生成）', input.handoffDoc ? clip(input.handoffDoc, 8000) : '（你是第一位，还没有交接过。）', '');
-  if (input.latestAudit) {
-    s.push(`## 最近一份审计报告（${input.latestAudit.path}）`, clip(input.latestAudit.content, 8000), '');
-  }
-
-  s.push('## 规矩');
-  if (input.protectedPaths.length) s.push(`- 不许改：${input.protectedPaths.map((p) => `\`${p}\``).join('、')}`);
-  if (input.gateCommand.trim()) s.push(`- 交接时会自动跑检查命令 \`${input.gateCommand.trim()}\`，停手前最好自己先跑一遍。`);
-  s.push(
-    input.auto
-      ? '- 不要 git commit（接力台交接时会自动存检查点）；不要 rebase、amend、reset，也不要切换分支。只读写当前文件夹，不要去翻别的目录。'
-      : '- 可以 git commit，但不要 rebase、amend、reset，也不要切换分支。',
-    '- 不要改 `.relay/` 里的文件（`.relay/NOTE.md` 除外）。',
+    `任务清单已经全部打勾。请把整件事从头到尾过一遍，确认真的做完、做对了：`,
     '',
-    '## 停手之前（重要）',
-    `1. 把下面三行写进 \`${NOTE_REL}\`（没有就新建），留给下一位：`,
-    '   - 做到哪了：……',
-    '   - 下一步：……（写成能直接照做的一句话；想不清楚就写「卡在：……」）',
-    '   - 没验证的假设：……（你以为是对的、但没亲自验证过的地方；没有就写「无」）',
-    input.auto ? '2. 然后直接结束（退出），接力台会自动交接。' : '2. 告诉用户：可以去接力台点「交接」了。',
-    ''
-  );
-  return s.join('\n');
+    `1. 任务、进度和约定见 \`${TASK_REL}\`；接力的经过见 \`${BRIEF_REL}\`。`,
+    `2. 这件事的全部改动：\`${snapGit()} diff ${i.from.slice(0, 10)} ${i.to.slice(0, 10)}\`。`,
+    `3. 对照任务逐条确认；${i.gateCommand ? `跑检查 \`${i.gateCommand}\`；` : ''}能运行的就实际运行一下。`,
+    '4. 发现问题直接修好。',
+    `5. 结论写到 \`${i.reviewFile}\`（格式同复核）；交接写在 \`${i.handoff}\`。确认整件事没问题就把状态写「全部完成」，还有问题没修完就在任务清单里补上没做的步骤。`,
+  ].join('\n');
 }

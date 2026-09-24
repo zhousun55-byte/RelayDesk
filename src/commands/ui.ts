@@ -1,12 +1,14 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { Command } from 'commander';
+import fs from 'node:fs';
 import { augmentPath } from '../core/launch';
 import { lastProject, rememberProject } from '../core/memory';
-import { inspectProject } from '../core/project';
-import { stopAllAuto } from '../ops/auto';
+import { stopAllGo } from '../ops/go';
+import { unwatchAll } from '../ops/watch';
 import { createServer, listen } from '../server/server';
 import { ok, warn } from './print';
+import { findRoot } from './relay';
 
 function openBrowser(url: string): void {
   if (process.env.RELAY_TERMINAL === 'off') return;
@@ -26,31 +28,27 @@ async function pingRelay(port: number): Promise<boolean> {
 
 export function uiCommand(): Command {
   return new Command('ui')
-    .description('打开接力台（网页）：写一句话全自动做完；也能手动安排工人、交接、合回、讨论')
+    .description('打开接力台（网页）：看进度、派人接着做、全自动、复核、退回、群聊')
     .argument('[文件夹]', '要打开的项目（默认：当前文件夹；在家目录启动时用上次打开的）')
     .option('-p, --port <端口>', '端口', '7388')
     .option('--no-open', '只启动，不自动打开浏览器')
     .action(async (folder: string | undefined, opts: { port: string; open: boolean }) => {
       augmentPath();
-      let dir = folder ? path.resolve(folder) : process.cwd();
-      if (!folder) {
-        const here = inspectProject(dir);
-        const home = process.env.HOME ?? '';
-        if ((!here.isGit || dir === home) && lastProject()) dir = lastProject()!;
-      }
-      const info = inspectProject(dir);
-      if (info.isGit) rememberProject(info.root);
-      const q = `?dir=${encodeURIComponent(info.root)}`;
+      let dir = folder ? path.resolve(folder) : findRoot();
+      if (!folder && !fs.existsSync(path.join(dir, '.relay', 'journal.jsonl')) && lastProject()) dir = lastProject()!;
+      if (fs.existsSync(path.join(dir, '.relay', 'journal.jsonl'))) rememberProject(dir);
+      const q = `?dir=${encodeURIComponent(dir)}`;
       const wanted = Number(opts.port) || 7388;
 
       for (let port = wanted; port < wanted + 10; port++) {
         const stop = () => {
-          stopAllAuto();
+          stopAllGo();
+          unwatchAll();
           server.close();
           // 给正在干活的工具一点时间收尾（runner 会先发 SIGTERM）。
           setTimeout(() => process.exit(0), 300);
         };
-        const server = createServer({ defaultDir: info.root, autoDetect: true, onQuit: stop });
+        const server = createServer({ defaultDir: dir, autoDetect: true, watch: true, onQuit: stop });
         try {
           const actual = await listen(server, port);
           const url = `http://127.0.0.1:${actual}/${q}`;

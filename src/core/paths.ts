@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
-/** 接力台自己的目录：工人名单、会话指针、隔离工作副本都在这里，不在用户的项目里。 */
+/** 接力台自己的目录（全机通用的设置：工人名单、识别结果、额度、最近的项目）。 */
 export function relayHome(): string {
   const override = process.env.RELAY_HOME;
   return override && override.trim() ? path.resolve(override) : path.join(os.homedir(), '.relay');
@@ -16,11 +16,6 @@ export function repoKey(repoRoot: string): string {
   const h = crypto.createHash('sha256').update(repoRoot).digest('hex').slice(0, 8);
   const name = path.basename(repoRoot).replace(/[^\p{L}\p{N}._-]/gu, '_').slice(0, 40) || 'repo';
   return `${name}-${h}`;
-}
-
-/** 隔离工作副本一律建在仓库外：~/.relay/worktrees/<项目键>/<分支名>。 */
-export function worktreePathFor(repoRoot: string, branch: string): string {
-  return path.join(relayHome(), 'worktrees', repoKey(repoRoot), path.basename(branch));
 }
 
 export function isInside(parent: string, child: string): boolean {
