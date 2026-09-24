@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { RelayError } from './errors';
 import type { Verdict } from './ledger';
 import { stampLocal } from './time';
 
@@ -125,6 +126,100 @@ export function setTask(root: string, text: string, items: string[] = []): TaskD
   if (rest) doc = doc.replace(`${title}\n`, `${title}\n\n${rest}\n`);
   fs.writeFileSync(p, doc);
   return parseTask(doc);
+}
+
+/** 存档里旧任务的标题（按存档的先后）。 */
+export function archivedTaskTitles(root: string): string[] {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(path.join(root, DONE_TASKS_REL), 'utf8');
+  } catch {
+    return [];
+  }
+  return raw
+    .replace(/\r/g, '')
+    .split(/\n---\n/)
+    .slice(1)
+    .map((block) => parseTask(block).title)
+    .filter(Boolean);
+}
+
+// ---- 在网页上改任务：改标题、给清单打勾、加一步、删一步 ----
+
+export type TaskEdit = { op: 'title'; text: string } | { op: 'toggle'; index: number; done?: boolean } | { op: 'add'; text: string } | { op: 'remove'; index: number };
+
+const ITEM_LINE = /^(\s*[-*+]\s+\[)( |x|X|✓|√)(\]\s+)(.*)$/;
+
+/** 「进度」一节在哪几行，每一步在第几行（和 parseTask 的 items 一一对应）。 */
+function progressLines(lines: string[]): { start: number; items: number[]; placeholders: number[] } | null {
+  const start = lines.findIndex((l) => /^##\s+/.test(l) && /进度|清单|步骤|todo/i.test(l.replace(/^##\s+/, '')));
+  if (start < 0) return null;
+  const items: number[] = [];
+  const placeholders: number[] = [];
+  for (let i = start + 1; i < lines.length && !/^#{1,2}\s+/.test(lines[i]); i++) {
+    const m = lines[i].match(ITEM_LINE);
+    if (m) (PLACEHOLDER_ITEM.test(m[4].trim()) ? placeholders : items).push(i);
+  }
+  return { start, items, placeholders };
+}
+
+export function editTask(root: string, edit: TaskEdit): TaskDoc {
+  const p = path.join(root, TASK_REL);
+  let raw = '';
+  try {
+    raw = fs.readFileSync(p, 'utf8');
+  } catch {
+    /* 没有就从模板开始 */
+  }
+  const lines = (raw.trim() ? raw : taskTemplate()).replace(/\r/g, '').replace(/\n+$/, '').split('\n');
+  const oneLine = (s: string) => s.trim().replace(/\s*\n\s*/g, ' ');
+
+  if (edit.op === 'title') {
+    const text = oneLine(edit.text);
+    if (!text) throw new RelayError('任务不能是空的。', 'empty');
+    const h1 = lines.findIndex((l) => /^#\s+/.test(l));
+    if (h1 < 0) lines.unshift('# 任务', '', text, '');
+    else {
+      let at = -1;
+      for (let i = h1 + 1; i < lines.length && !/^##\s+/.test(lines[i]); i++) {
+        if (lines[i].trim()) {
+          at = i;
+          break;
+        }
+      }
+      if (at >= 0) lines[at] = text;
+      else lines.splice(h1 + 1, 0, '', text);
+    }
+  } else {
+    let sec = progressLines(lines);
+    if (!sec) {
+      // 没有「进度」一节：加在「约定」前面，没有「约定」就加在最后。
+      const rules = lines.findIndex((l) => /^##\s+/.test(l) && /约定|规矩|备注|决定/.test(l));
+      if (rules >= 0) lines.splice(rules, 0, '## 进度', '');
+      else lines.push('', '## 进度');
+      sec = progressLines(lines)!;
+    }
+    if (edit.op === 'add') {
+      const text = oneLine(edit.text);
+      if (!text) throw new RelayError('先写这一步要做什么。', 'empty');
+      if (!sec.items.length && sec.placeholders.length) lines[sec.placeholders[0]] = `- [ ] ${text}`;
+      else if (sec.items.length) lines.splice(sec.items[sec.items.length - 1] + 1, 0, `- [ ] ${text}`);
+      else {
+        const at = sec.start + 1;
+        lines.splice(at, 0, '', `- [ ] ${text}`);
+        if (lines[at + 2] !== undefined && lines[at + 2].trim()) lines.splice(at + 2, 0, '');
+      }
+    } else {
+      const at = sec.items[edit.index];
+      if (at === undefined) throw new RelayError('清单里没有这一步。', 'no-item');
+      if (edit.op === 'remove') lines.splice(at, 1);
+      else lines[at] = lines[at].replace(ITEM_LINE, (_m, a: string, mark: string, b: string, text: string) => `${a}${(edit.done ?? mark === ' ') ? 'x' : ' '}${b}${text}`);
+    }
+  }
+  const out = `${lines.join('\n')}\n`;
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, out);
+  return parseTask(out);
 }
 
 // ---- 交接 ----

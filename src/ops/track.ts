@@ -273,7 +273,8 @@ export function applyReviews(root: string, by: Stint | null, members: MemberInfo
       if (!fresh && prev && !!prev.weak === judged.weak) continue;
       const mark: ReviewMark = {
         by: reviewer?.id ?? 0,
-        byLabel: judged.byLog ? judged.label : r.by || judged.label || '不知道是谁',
+        // 显示认出来的身份（强弱也是按它定的），不用复核文件里自己写的「复核人」：两个 Claude Code 自称时常常分不出来。
+        byLabel: judged.label || r.by || '不知道是谁',
         file: r.file,
         verdict: r.verdict,
         at: nowIso(),

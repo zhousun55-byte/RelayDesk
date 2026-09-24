@@ -4,7 +4,7 @@ import path from 'node:path';
 import { defaultRelayConfig, relayConfigPath } from '../core/config';
 import { RelayError } from '../core/errors';
 import { appendLedger, loadLedger } from '../core/ledger';
-import { HANDOFF_DIR, REVIEW_DIR, TASK_REL, taskTemplate, setTask } from '../core/notes';
+import { HANDOFF_DIR, REVIEW_DIR, TASK_REL, readTask, taskTemplate, setTask } from '../core/notes';
 import { loadMemory, rememberProject } from '../core/memory';
 import { relayHome } from '../core/paths';
 import { installProtocol, protocolState } from '../core/protocol';
@@ -112,8 +112,9 @@ export function newTask(root: string, text: string, items: string[] = []): void 
   if (!t) throw new RelayError('先写下要做什么。', 'no-task');
   const v = loadLedger(root);
   if (!v.init) throw new RelayError('这个文件夹还没接入接力台。', 'not-init');
+  const before = readTask(root);
   const doc = setTask(root, t, items);
   const snap = takeSnapshot(root, '换任务').sha;
-  appendLedger(root, { type: 'task', ts: new Date().toISOString(), title: doc.title, snap });
+  appendLedger(root, { type: 'task', ts: new Date().toISOString(), title: doc.title, snap, prev: before.empty ? '' : before.title });
   refreshBrief(root);
 }

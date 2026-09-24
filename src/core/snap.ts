@@ -206,6 +206,15 @@ export function snapFile(root: string, sha: string, file: string): string | null
   return r.code === 0 ? r.stdout : null;
 }
 
+/** 文件夹里现在的文件（按快照的规则：.gitignore 和默认排除的都不算）；还没建快照仓库返回 null。 */
+export function workFiles(root: string): string[] | null {
+  if (!hasSnapRepo(root)) return null;
+  const r = sg(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { raw: true });
+  if (r.code !== 0) return null;
+  // 索引里还留着上一张快照之后删掉的文件。
+  return [...new Set(r.stdout.split('\0').filter(Boolean))].filter((f) => fs.existsSync(path.join(root, f)));
+}
+
 /** 快照里的文件列表。 */
 export function snapFiles(root: string, sha: string): string[] {
   const r = sg(root, ['ls-tree', '-r', '-z', '--name-only', sha], { raw: true });

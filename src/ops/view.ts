@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadLedger, statusWord, stintTitle, tierWord, verdictWord, type Stint } from '../core/ledger';
-import { readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskItem } from '../core/notes';
+import { loadLedger, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
+import { archivedTaskTitles, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
 import { protocolState } from '../core/protocol';
 import { untilText } from '../core/quota';
 import { goLogTail, loadGoState, type GoState } from './go';
@@ -39,6 +39,19 @@ export interface StintView {
   quotaUntil?: string;
 }
 
+/** 一段对话 = 一个任务：从写下它（或接入）开始，到换下一个任务为止。 */
+export interface ThreadView {
+  id: string;
+  title: string;
+  from: string;
+  /** 下一个任务开始的时间；最新的这个没有。 */
+  to: string | null;
+  /** 这段时间里开始的棒。 */
+  stints: number[];
+  pending: number;
+  current: boolean;
+}
+
 export interface ProjectView {
   root: string;
   name: string;
@@ -52,6 +65,8 @@ export interface ProjectView {
   stints: StintView[];
   lastRollback: { ts: string; label: string; dropped: number[]; undone: boolean } | null;
   config: { gate: string; protectedPaths: string[] };
+  /** 按任务分的对话（旧的在前）。 */
+  threads: ThreadView[];
 }
 
 function toView(s: Stint): StintView {
@@ -100,6 +115,56 @@ function toView(s: Stint): StintView {
   };
 }
 
+/** 按「换任务」把账本切成一段一段；没标题、没棒的空段并进下一段。 */
+export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadView[] {
+  if (!v.init) return [];
+  const changes = v.events.filter((e): e is TaskEvent => e.type === 'task');
+  const last = changes.length;
+  // 第一段的标题：换任务时记下的旧任务；旧版账本没记，就从存档里对（存档按换任务的先后追加，从后往前对齐；
+  // 存档比换任务的次数少，说明第一段是空任务，换的时候没存档）。
+  let first = task.title;
+  if (last) {
+    first = changes[0].prev ?? '';
+    if (changes[0].prev === undefined) {
+      const archived = archivedTaskTitles(root);
+      if (archived.length >= last) first = archived[archived.length - last];
+    }
+  }
+  // 之后每一段：被换掉时记下的标题（中途改过标题的，以最后的为准）；最新一段用任务文件里现在的。
+  const spans = [
+    { from: v.init.ts, title: first },
+    ...changes.map((e, i) => ({ from: e.ts, title: i === last - 1 ? task.title || e.title : changes[i + 1].prev || e.title })),
+  ];
+  const out: ThreadView[] = [];
+  let carry: string | null = null;
+  spans.forEach((sp, i) => {
+    const from = carry ?? sp.from;
+    const to = spans[i + 1]?.from ?? null;
+    const lo = i === 0 ? -Infinity : Date.parse(sp.from);
+    const hi = to ? Date.parse(to) : Infinity;
+    const mine = v.stints.filter((s) => {
+      const at = Date.parse(s.startedAt);
+      return at >= lo && at < hi;
+    });
+    const current = i === spans.length - 1;
+    if (!sp.title && !mine.length && !current) {
+      carry = from;
+      return;
+    }
+    carry = null;
+    out.push({
+      id: `t${i}`,
+      title: sp.title,
+      from: out.length ? from : v.init!.ts,
+      to,
+      stints: mine.map((s) => s.id),
+      pending: mine.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack).length,
+      current,
+    });
+  });
+  return out;
+}
+
 export function projectView(root: string): ProjectView {
   const v = loadLedger(root);
   const t = readTask(root);
@@ -130,6 +195,7 @@ export function projectView(root: string): ProjectView {
     stints: [...views].reverse(),
     lastRollback: lr && !lr.restored ? { ts: lr.ts, label: lr.label, dropped: lr.dropped, undone } : null,
     config: { gate: cfg.gate.command, protectedPaths: cfg.protectedPaths },
+    threads: threadsOf(root, v, t),
   };
 }
 

@@ -140,6 +140,8 @@ export interface TaskEvent {
   title: string;
   /** 换任务时的快照。 */
   snap?: string;
+  /** 被换掉的旧任务（网页上的历史列表用它当上一段的标题）；空字符串 = 旧任务是空的。旧版账本没有这一项。 */
+  prev?: string;
 }
 
 /** 接力台自己改了项目里的文件（比如更新 AGENTS.md 里的规矩）：从这里重新算，不算到哪一棒头上。 */
@@ -216,7 +218,9 @@ export function viewLedger(events: LedgerEvent[]): LedgerView {
       const s = { ...ev.stint };
       if (prev?.rolledBack) s.rolledBack = true;
       byId.set(s.id, s);
-      if (s.status !== 'working' && s.to) base = s.to;
+      // 只在这一棒结束（或结束的快照变了）时往前推。后来给旧棒补记复核、标记不用复核，是把旧棒原样重存一遍，
+      // 不能把起点拉回到它结束的地方——不然下一棒会把中间别人的改动再算一遍。
+      if (s.status !== 'working' && s.to && (!prev || prev.status === 'working' || prev.to !== s.to)) base = s.to;
     } else if (ev.type === 'rollback') {
       lastRollback = ev;
       base = ev.after;

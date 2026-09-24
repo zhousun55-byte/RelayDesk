@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
 import { withFakes } from './fakes';
 import { CLI, sandbox, until, type Sandbox } from './helpers';
 
@@ -99,6 +101,61 @@ test('网页开着时盯着文件夹：你在别的工具里改文件、写交�
     assert.equal(st.who.member, 'codex');
     assert.equal(st.review, 'skip');
     assert.deepEqual(st.facts.paths, ['filter.xmp']);
+  } finally {
+    ui.child.kill();
+  }
+});
+
+test('网页接口：右边的项目文件、读文件（出不了项目文件夹）、在网页上改任务、按任务分的对话', async () => {
+  const s = sandbox('srv-files');
+  withFakes(s);
+  s.relay(['detect', '--offline']);
+  s.write('src/a.ts', 'export const a = 1;\n');
+  s.write('node_modules/x/index.js', '');
+  const ui = await startUi(s);
+  try {
+    let tree = await ui.call(`/api/tree${q(s)}`);
+    assert.ok(tree.json.files.includes('src/a.ts'), '没接入也能看文件');
+    assert.ok(!tree.json.files.some((f: string) => f.startsWith('node_modules/') || f.startsWith('.git/')));
+    await ui.call('/api/init', { dir: s.repo });
+    await ui.call('/api/task', { dir: s.repo, text: '做两件事', steps: ['一', '二'] });
+    tree = await ui.call(`/api/tree${q(s)}`);
+    assert.ok(tree.json.files.includes('src/a.ts'));
+    assert.ok(!tree.json.files.some((f: string) => f.startsWith('.relay/') || f.startsWith('node_modules/')), '接力台自己的东西、依赖都不列');
+
+    const f = await ui.call(`/api/file${q(s)}&path=${encodeURIComponent('src/a.ts')}`);
+    assert.equal(f.json.text, 'export const a = 1;\n');
+    assert.equal(f.json.binary, false);
+    fs.writeFileSync(path.join(s.base, 'secret.txt'), '项目外面的文件\n');
+    fs.symlinkSync(s.base, path.join(s.repo, 'outside'));
+    for (const bad of ['../secret.txt', path.join(s.base, 'secret.txt'), '.relay/snapshots/HEAD', '.git/config', 'outside/secret.txt']) {
+      const r = await ui.call(`/api/file${q(s)}&path=${encodeURIComponent(bad)}`);
+      assert.equal(r.status, 400, `不能读 ${bad}`);
+    }
+    assert.equal((await ui.call('/api/reveal', { dir: s.repo, path: '../x' })).status, 400);
+
+    const e = await ui.call('/api/task/edit', { dir: s.repo, op: 'toggle', index: 1 });
+    assert.equal(e.status, 200, JSON.stringify(e.json));
+    assert.deepEqual(
+      e.json.task.items.map((i: { done: boolean }) => i.done),
+      [false, true]
+    );
+    await ui.call('/api/task/edit', { dir: s.repo, op: 'add', text: '三' });
+    await ui.call('/api/task/edit', { dir: s.repo, op: 'title', text: '做三件事' });
+    assert.match(s.read('.relay/任务.md'), /做三件事[\s\S]*- \[x\] 二\n- \[ \] 三/);
+    assert.match(s.read('.relay/接力本.md'), /- \[ \] 三/, '接力本跟着更新');
+    assert.equal((await ui.call('/api/task/edit', { dir: s.repo, op: 'toggle', index: 9 })).status, 400);
+    assert.equal((await ui.call('/api/task/edit', { dir: s.repo, op: 'bogus' })).status, 400);
+
+    await ui.call('/api/task', { dir: s.repo, text: '下一件事' });
+    const st = await ui.call(`/api/state${q(s)}`);
+    assert.deepEqual(
+      st.json.project.threads.map((t: { title: string; current: boolean }) => [t.title, t.current]),
+      [
+        ['做三件事', false],
+        ['下一件事', true],
+      ]
+    );
   } finally {
     ui.child.kill();
   }

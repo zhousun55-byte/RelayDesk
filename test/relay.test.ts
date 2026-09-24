@@ -294,6 +294,7 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   assert.equal(second.who.tier, 'strong');
   assert.equal(second.status, 'handed', '官方账号那一次没带 ANTHROPIC_* 变量，没被接到 DeepSeek');
   assert.equal(first.review, 'done');
+  assert.match(first.reviews[0].byLabel, /^Claude Code 官方账号/, '复核人写认出来的身份，不写它自称的「Claude Code」');
   const calls = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n');
   assert.ok(calls.some((l) => l.startsWith('claude --setting-sources project,local -p ') && l.includes('--model opus')), calls.join('\n'));
   assert.ok(calls.some((l) => l.startsWith('claude -p ')), '接 DeepSeek 的那位照常调用');

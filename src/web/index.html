@@ -2,47 +2,25 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <title>接力台</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='4' width='24' height='24' rx='4' fill='none' stroke='%23B4372A' stroke-width='3'/%3E%3Cpath d='M11 22 L21 10' stroke='%23B4372A' stroke-width='3.2' stroke-linecap='round'/%3E%3Ccircle cx='21' cy='10' r='2.6' fill='%23B4372A'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='10' y='10' width='19' height='19' rx='3' fill='%238a8a8a'/%3E%3Crect x='3' y='3' width='19' height='19' rx='3' fill='%230a0a0a'/%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="/app.css" />
+    <script src="/theme.js"></script>
   </head>
   <body>
-    <header class="top">
-      <div class="brand" aria-label="接力台">
-        <span class="brand-seal" aria-hidden="true">接力</span>
-        <span class="brand-name">接力台</span>
-      </div>
-      <div class="project">
-        <button type="button" id="project-btn" class="project-btn" aria-haspopup="true" aria-expanded="false">
-          <span id="project-name">…</span>
-          <svg class="caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
-        </button>
-        <div class="menu" id="project-menu" hidden></div>
-      </div>
-      <nav class="tabs" aria-label="页面">
-        <a href="#relay" data-view="relay" id="tab-relay">接力</a>
-        <a href="#talk" data-view="talk" id="tab-talk">群聊<span class="dot" id="talk-dot" hidden></span></a>
-        <a href="#settings" data-view="settings" id="tab-settings">设置</a>
-      </nav>
-    </header>
-
-    <div class="offline" id="offline" hidden>
-      连不上接力台了。它可能已经关掉：在桌面双击「接力台」就能重新打开（或者在终端执行 <code>relay ui</code>）。
+    <div class="app" id="app">
+      <aside class="left" id="left" aria-label="项目和对话"><div class="left-in" id="left-in"></div></aside>
+      <main class="center" id="center"></main>
+      <aside class="right" id="right" aria-label="项目文件"><div class="right-in" id="right-in"></div></aside>
+      <div class="grip" data-grip="left" aria-hidden="true"></div>
+      <div class="grip" data-grip="right" aria-hidden="true"></div>
     </div>
-
-    <main class="sheet" id="view-relay" data-view="relay"></main>
-    <main class="sheet" id="view-talk" data-view="talk" hidden></main>
-    <main class="sheet" id="view-settings" data-view="settings" hidden></main>
-
-    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-    <div class="scrim" id="scrim" hidden></div>
-    <div class="dialog" id="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" hidden></div>
-
+    <div class="layer" id="layer"></div>
     <script src="/app.js"></script>
   </body>
 </html>

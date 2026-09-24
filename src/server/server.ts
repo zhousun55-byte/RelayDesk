@@ -8,11 +8,12 @@ import { loadAutoSettings, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
 import { detectAll, enableProvider, loadDetected, syncRegistry } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
-import { copyToClipboard, fillTemplate, openTerminal, runOpener, shq, chooseFolder } from '../core/launch';
+import { projectFiles, projectPath, readProjectFile } from '../core/files';
+import { copyToClipboard, fillTemplate, openTerminal, reveal, runOpener, shq, chooseFolder } from '../core/launch';
 import { loadLedger, saveStint } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
 import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
-import { BRIEF_REL, TASK_REL } from '../core/notes';
+import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
 import { isInside } from '../core/paths';
 import { PRESETS } from '../core/presets';
 import { untilText } from '../core/quota';
@@ -80,21 +81,23 @@ function memberViews() {
 function projectList(current: string | null) {
   const roots = [...(current ? [current] : []), ...(loadMemory().recents ?? [])];
   const seen = new Set<string>();
-  const out: { root: string; name: string; init: boolean; current: boolean; pending: number }[] = [];
+  const out: { root: string; name: string; init: boolean; current: boolean; pending: number; live: boolean }[] = [];
   for (const r of roots) {
     const abs = path.resolve(r);
     if (seen.has(abs) || !fs.existsSync(abs)) continue;
     seen.add(abs);
     let init = false;
     let pending = 0;
+    let live = false;
     try {
       const v = loadLedger(abs);
       init = !!v.init;
       pending = v.stints.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack).length;
+      live = !!v.open;
     } catch {
       /* 读不了当没接入 */
     }
-    out.push({ root: abs, name: path.basename(abs), init, current: abs === current, pending });
+    out.push({ root: abs, name: path.basename(abs), init, current: abs === current, pending, live });
     if (out.length >= 15) break;
   }
   return out;
@@ -260,6 +263,8 @@ export function createServer(opts: ServerOptions): http.Server {
       const root = dirOf(q, {});
       return { rows: readTalk(root, 300), votes: readVotes(root).slice(-20), status: talkStatus(root) };
     },
+    '/api/tree': (q) => projectFiles(dirOf(q, {})),
+    '/api/file': (q) => readProjectFile(dirOf(q, {}), q.get('path') ?? ''),
     '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
     '/api/presets': () => ({ presets: PRESETS }),
     '/api/doctor': (q) => ({ lines: doctor(dirOf(q, {})) }),
@@ -287,6 +292,21 @@ export function createServer(opts: ServerOptions): http.Server {
       fs.writeFileSync(path.join(root, TASK_REL), raw.endsWith('\n') ? raw : `${raw}\n`);
       refreshBrief(root);
       return {};
+    },
+    '/api/task/edit': (q, b) => {
+      // 网页上改标题、打勾、加一步、删一步。
+      const root = dirOf(q, b);
+      requireProject(root);
+      const op = str(b.op);
+      const text = str(b.text) ?? '';
+      const index = Number(b.index);
+      let edit: TaskEdit;
+      if (op === 'title' || op === 'add') edit = { op, text };
+      else if ((op === 'toggle' || op === 'remove') && Number.isInteger(index) && index >= 0) edit = op === 'toggle' ? { op, index, ...(typeof b.done === 'boolean' ? { done: b.done } : {}) } : { op, index };
+      else throw new RelayError('不认识这个改法。', 'bad-edit');
+      const t = editTask(root, edit);
+      refreshBrief(root);
+      return { task: { title: t.title, items: t.items } };
     },
     '/api/go': (q, b) => {
       const root = dirOf(q, b);
@@ -330,6 +350,13 @@ export function createServer(opts: ServerOptions): http.Server {
       throw new RelayError('它没有可以打开的程序（接口模型用「让它接着做」）。', 'cannot-open');
     },
     '/api/copy-hint': () => ({ copied: copyToClipboard(HINT), hint: HINT }),
+    '/api/reveal': (q, b) => {
+      // 在访达里显示项目文件夹 / 选中其中一个文件。
+      const root = dirOf(q, b);
+      const rel = str(b.path);
+      const target = rel ? projectPath(root, rel).real : root;
+      return { revealed: reveal(target) };
+    },
     '/api/rollback': (q, b) => {
       const root = dirOf(q, b);
       if (goActive(root)) throw new RelayError('接力台正在调度，先停下再退回。', 'busy');

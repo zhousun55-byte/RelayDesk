@@ -8,7 +8,7 @@ import { claudeWorkIn } from '../src/core/claude-log';
 import { normalizeConfig } from '../src/core/config';
 import { fillTemplate, shellWords, shq } from '../src/core/launch';
 import { viewLedger, type LedgerEvent, type Stint } from '../src/core/ledger';
-import { handoffFilled, parseHandoff, parseReview, parseTask, taskComplete, taskTemplate, verdictOf } from '../src/core/notes';
+import { editTask, handoffFilled, parseHandoff, parseReview, parseTask, taskComplete, taskTemplate, verdictOf } from '../src/core/notes';
 import { PRESETS } from '../src/core/presets';
 import { globToRegExp, matchProtected } from '../src/core/protected';
 import { installProtocol, protocolBlock, protocolState, removeProtocol } from '../src/core/protocol';
@@ -20,9 +20,11 @@ import { parseNameStatusZ, parseNumstatZ } from '../src/core/status';
 import { buildTalkPrompt, readTalk, type TalkRow } from '../src/core/talk';
 import { memberTier, modelFromLabel, resolveWho, sameModel, tierForModel, type MemberLike } from '../src/core/tier';
 import { appendRule, parseBallot, tally } from '../src/core/vote';
+import { threadsOf } from '../src/ops/view';
 import { ignoredPath } from '../src/ops/watch';
 
 const T = '2026-01-01T00:00:00.000Z';
+const pad2 = (n: number) => String(n).padStart(2, '0');
 
 function tmp(name: string): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `relay-${name}-`)));
@@ -224,6 +226,82 @@ test('任务清单：读出标题、进度、约定；模板里的占位不算�
   assert.equal(taskComplete(parseTask('# 任务\n\n做\n\n## 进度\n\n- [x] a\n- [X] b\n')), true);
 });
 
+test('网页上改任务：改标题、打勾、加一步、删一步；模板里的占位换成第一步，别的内容不动', () => {
+  const root = tmp('task-edit');
+  const file = path.join(root, '.relay', '任务.md');
+  fs.mkdirSync(path.dirname(file));
+  fs.writeFileSync(file, taskTemplate());
+  let t = editTask(root, { op: 'title', text: '做滤镜' });
+  assert.equal(t.title, '做滤镜');
+  t = editTask(root, { op: 'add', text: '读代码' });
+  assert.deepEqual(t.items, [{ done: false, text: '读代码' }], '模板里的占位换成了第一步');
+  editTask(root, { op: 'add', text: '写导出' });
+  t = editTask(root, { op: 'toggle', index: 0 });
+  assert.deepEqual(
+    t.items.map((i) => i.done),
+    [true, false]
+  );
+  t = editTask(root, { op: 'toggle', index: 0, done: true });
+  assert.equal(t.items[0].done, true, '给了 done 就按它来，不是来回切');
+  t = editTask(root, { op: 'remove', index: 1 });
+  assert.deepEqual(
+    t.items.map((i) => i.text),
+    ['读代码']
+  );
+  assert.match(t.raw, /## 约定/);
+  assert.throws(() => editTask(root, { op: 'toggle', index: 5 }), /没有这一步/);
+  assert.throws(() => editTask(root, { op: 'add', text: '  ' }), /先写这一步/);
+  // 自己写的任务没有「进度」一节：加在「约定」前面，约定原样留着。
+  fs.writeFileSync(file, '# 任务\n\n自己写的任务\n\n## 约定\n\n- 别动 config\n');
+  t = editTask(root, { op: 'add', text: '第一步' });
+  assert.deepEqual(
+    t.items.map((i) => i.text),
+    ['第一步']
+  );
+  assert.equal(t.title, '自己写的任务');
+  assert.equal(t.rules, '- 别动 config');
+  assert.ok(t.raw.indexOf('## 进度') < t.raw.indexOf('## 约定'));
+});
+
+test('对话历史：按换任务切成一段一段，棒归到它开始时的那段；空的第一段并进下一段；旧版账本从存档里对标题', () => {
+  const at = (h: number, m = 0) => `2026-01-01T${pad2(h)}:${pad2(m)}:00.000Z`;
+  const ev: LedgerEvent[] = [
+    { type: 'init', ts: at(0), snap: 'S0' },
+    { type: 'task', ts: at(1), title: 'A', prev: '' },
+    { type: 'stint', ts: at(1, 30), stint: stint(1, { startedAt: at(1, 10), review: 'done' }) },
+    { type: 'task', ts: at(2), title: 'B', prev: 'A' },
+    { type: 'stint', ts: at(2, 30), stint: stint(2, { startedAt: at(2, 10) }) },
+  ];
+  const root = tmp('threads');
+  let th = threadsOf(root, viewLedger(ev), parseTask(taskTemplate('B（后来改过）')));
+  assert.deepEqual(
+    th.map((t) => [t.title, t.stints, t.current, t.pending]),
+    [
+      ['A', [1], false, 0],
+      ['B（后来改过）', [2], true, 1],
+    ],
+    '最新一段用任务文件里现在的标题'
+  );
+  assert.equal(th[0].from, at(0), '接入到写下第一个任务之间是空的，并进了第一段');
+  assert.equal(th[0].to, at(2));
+  // 旧版账本：换任务时没记旧任务。存档比换任务的次数少，说明接入时的任务是空的。
+  const old = ev.map((e) => (e.type === 'task' ? { ...e, prev: undefined } : e));
+  fs.mkdirSync(path.join(root, '.relay'));
+  fs.writeFileSync(path.join(root, '.relay', '做完的任务.md'), `# 做完的任务\n\n---\n\n> 存档于 x\n\n${taskTemplate('A')}`);
+  th = threadsOf(root, viewLedger(old), parseTask(taskTemplate('B')));
+  assert.deepEqual(
+    th.map((t) => t.title),
+    ['A', 'B']
+  );
+  // 接入时就写了任务 X：存档里有 X 和 A，第一段就是 X。
+  fs.writeFileSync(path.join(root, '.relay', '做完的任务.md'), `# 做完的任务\n\n---\n\n> 存档于 x\n\n${taskTemplate('X')}\n---\n\n> 存档于 y\n\n${taskTemplate('A')}`);
+  th = threadsOf(root, viewLedger(old), parseTask(taskTemplate('B')));
+  assert.deepEqual(
+    th.map((t) => t.title),
+    ['X', 'A', 'B']
+  );
+});
+
 test('交接：认出身份、状态、各节；只建了空模板的不算写过', () => {
   const h = parseHandoff('# 交接：Codex · gpt-6\n\n- 工具：\n- 模型：gpt-6\n- 状态：已交接\n\n## 做了什么\n\n- 加了导出按钮\n- 修了 bug\n\n## 没做完 / 下一步\n\n- 写测试\n');
   assert.equal(h.who, 'Codex · gpt-6');
@@ -380,6 +458,24 @@ test('账本：同一棒记好几次取最后一条；退回作废之后的棒�
   );
   ev.push({ type: 'base', ts: T, snap: 'S4', why: '更新规矩' });
   assert.equal(viewLedger(ev).base, 'S4');
+});
+
+test('账本：给旧棒补记复核、标记不用复核，下一棒还是从最后一棒结束的地方算', () => {
+  const ev: LedgerEvent[] = [
+    { type: 'init', ts: T, snap: 'S0' },
+    { type: 'stint', ts: T, stint: stint(1, { status: 'working', to: undefined }) },
+    { type: 'stint', ts: T, stint: stint(1) },
+    { type: 'stint', ts: T, stint: stint(2, { status: 'working', to: undefined }) },
+    { type: 'stint', ts: T, stint: stint(2) },
+    // 第 2 棒复核了第 1 棒：第 1 棒原样重存一遍，带上复核结论。
+    { type: 'stint', ts: T, stint: stint(1, { review: 'done' }) },
+  ];
+  assert.equal(viewLedger(ev).base, 'S2', '补记复核不能把起点拉回第 1 棒结束的地方');
+  ev.push({ type: 'stint', ts: T, stint: stint(2, { review: 'skip' }) });
+  assert.equal(viewLedger(ev).base, 'S2');
+  // 同一棒结束的快照真的变了（比如后来补上了交接、重新对了账），起点跟着走。
+  ev.push({ type: 'stint', ts: T, stint: stint(2, { to: 'S2b' }) });
+  assert.equal(viewLedger(ev).base, 'S2b');
 });
 
 test('接力本：有待复核时先写复核（给出改动文件、看文件原样的命令、结论写哪）；列出强弱名单和交接格式', () => {
