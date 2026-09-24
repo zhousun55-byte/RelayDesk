@@ -210,9 +210,7 @@ export function refreshBrief(root: string, now = new Date()): boolean {
       if (h) handoffs.set(s.handoff, h);
     }
   }
-  const members = allMembers()
-    .filter((m) => m.kind !== 'app' || m.tierSet || m.model)
-    .map((m) => ({ label: m.label, ...(m.model ? { model: m.model } : {}), tier: m.tier }));
+  const members = allMembers().map((m) => ({ label: m.label, ...(m.model ? { model: m.model } : {}), tier: m.tier }));
   const text = buildBrief({
     task: readTask(root),
     ledger: v,

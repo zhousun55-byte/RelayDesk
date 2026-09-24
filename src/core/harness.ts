@@ -60,6 +60,8 @@ export interface Invocation {
   stdin?: string;
   format: StreamFormat;
   outFile?: string;
+  /** 额外的环境变量（比如告诉 ZCode 命令行内核它的配置在哪）。 */
+  env?: Record<string, string>;
 }
 
 export interface HarnessSpec {
@@ -349,6 +351,20 @@ const cursorAgent: HarnessSpec = {
   },
 };
 
+/**
+ * ZCode 桌面版自带的命令行内核按「自己所在位置」找内置接口配置，直接调 zcode.cjs 时找不到
+ * （报「无法定位 CLI ZCode Built-in Provider Config」）。用它认的环境变量告诉它在哪。
+ */
+export function zcodeBuiltinConfig(loc: Located): string | null {
+  const cjs = loc.exec.find((x) => x.endsWith('zcode.cjs'));
+  if (!cjs) return null;
+  const resources = path.dirname(path.dirname(cjs));
+  for (const p of [path.join(path.dirname(cjs), 'provider', 'zcode-builtin.json'), path.join(resources, 'config', 'provider', 'zcode-builtin.json')]) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 function locateZcode(): Located | null {
   const bin = locateBin('zcode');
   if (bin || !scanApps()) return bin;
@@ -383,7 +399,8 @@ const zcode: HarnessSpec = {
   invoke(loc, i) {
     // --prompt 默认是 yolo（全放开）；安全档用 edit（自动改文件），只读用 plan。
     const mode = i.readOnly ? 'plan' : i.level === 'full' ? 'yolo' : 'edit';
-    return { argv: [...loc.exec, '-p', i.prompt, '--cwd', i.cwd, '--mode', mode, '--no-color'], format: 'lines' };
+    const cfg = zcodeBuiltinConfig(loc);
+    return { argv: [...loc.exec, '-p', i.prompt, '--cwd', i.cwd, '--mode', mode, '--no-color'], format: 'lines', ...(cfg ? { env: { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: cfg } } : {}) };
   },
 };
 
@@ -555,6 +572,15 @@ const grok: HarnessSpec = {
 };
 
 export const HARNESSES: HarnessSpec[] = [claude, codex, cursorAgent, zcode, antigravity, gemini, qwen, opencode, droid, copilot, grok];
+
+/** 认得的工具报错：翻成能照着做的一句话（认不出返回 null）。 */
+export function explainFailure(harnessId: string | undefined, text: string): string | null {
+  if (harnessId === 'zcode' && /Select a model before continuing|Model creation failed/i.test(text)) {
+    return 'ZCode 命令行还没选默认模型（桌面版里选的它不认）。在终端里运行一次 ZCode 的命令行，输入 /model 选好模型，之后接力台就能调度它。';
+  }
+  if (/not logged in|please log ?in|unauthorized|401/i.test(text)) return '看起来没登录（或者登录过期了）：在终端里打开这个工具重新登录一下。';
+  return null;
+}
 
 export function findHarness(id: string | undefined): HarnessSpec | null {
   if (!id) return null;

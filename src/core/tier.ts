@@ -58,6 +58,8 @@ export interface MemberLike {
   model?: string;
   tier: Tier;
   harness?: string;
+  /** 强弱是你在设置里定的。 */
+  tierSet?: boolean;
 }
 
 /**
@@ -76,7 +78,17 @@ export function resolveWho(claim: { who?: string; tool?: string; model?: string 
   const byTool = tool ? members.filter((m) => m.harness === tool.id || m.name === tool.id || new RegExp(tool.re.source, 'i').test(m.label)) : [];
   const byModel = model ? members.filter((m) => m.model && norm(m.model) === norm(model)) : [];
   const hit = byTool.find((m) => byModel.includes(m)) ?? (model ? byModel[0] ?? (byTool.length === 1 && !byTool[0].model ? byTool[0] : undefined) : byTool[0]);
-  const tier: Tier3 = model ? (hit && hit.model && norm(hit.model) === norm(model) ? hit.tier : tierForModel(model)) : hit ? hit.tier : 'unknown';
+  // 你在设置里给这个工具定过强弱：以你为准（不管它这次用的什么模型）。
+  const decided = [hit, ...byTool].find((m) => m?.tierSet);
+  const tier: Tier3 = decided
+    ? decided.tier
+    : model
+      ? hit && hit.model && norm(hit.model) === norm(model)
+        ? hit.tier
+        : tierForModel(model)
+      : hit
+        ? hit.tier
+        : 'unknown';
   const label = hit ? `${hit.label}${model ?? hit.model ? ` · ${model ?? hit.model}` : ''}` : claimed || text.trim();
   return {
     ...(hit ? { member: hit.name } : {}),

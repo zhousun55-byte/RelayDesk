@@ -1,6 +1,7 @@
 'use strict';
 /* 接力台网页。没有构建步骤、不连外网：直接由 relay ui 提供。
-   所有状态都来自 /api/state（服务端算好的），这里只负责显示和把按钮变成请求。 */
+   状态都来自 /api/state（服务端算好），这里只负责显示和把按钮变成请求。
+   原则：一眼看清「任务到哪了、现在谁在做、谁该接着做」；细节都收起来，点开才看。 */
 
 // ---------- 小工具 ----------
 
@@ -12,10 +13,9 @@ function h(tag, props, ...kids) {
     for (const [k, v] of Object.entries(props)) {
       if (v === null || v === undefined || v === false) continue;
       if (k === 'class') el.className = v;
-      else if (k === 'style') el.style.cssText = v;
       else if (k === 'html') el.innerHTML = v;
       else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
-      else if (k === 'value' || k === 'checked' || k === 'disabled' || k === 'open') el[k] = v;
+      else if (k === 'value' || k === 'checked' || k === 'disabled') el[k] = v;
       else el.setAttribute(k, v === true ? '' : String(v));
     }
   }
@@ -26,21 +26,11 @@ function h(tag, props, ...kids) {
   return el;
 }
 
-function svg(tag, attrs, ...kids) {
-  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
-  for (const [k, v] of Object.entries(attrs || {})) {
-    if (k === 'style') el.style.cssText = v;
-    else el.setAttribute(k, String(v));
-  }
-  el.append(...kids);
-  return el;
-}
-
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-/** 行内格式：先转义，再加 code / strong 标签，所以不会注入。 */
+/** 行内格式：先转义，再加 code / strong，所以不会注入。 */
 function inline(escaped) {
   return escaped.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 }
@@ -51,8 +41,7 @@ function diffHtml(text) {
     .split('\n')
     .map((l) => {
       let cls = 'l';
-      if (l.startsWith('# ↓')) cls += ' note';
-      else if (/^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |Binary)/.test(l)) cls += ' meta';
+      if (/^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |Binary|# )/.test(l)) cls += ' meta';
       else if (l.startsWith('@@')) cls += ' hunk';
       else if (l.startsWith('+')) cls += ' add';
       else if (l.startsWith('-')) cls += ' del';
@@ -61,7 +50,7 @@ function diffHtml(text) {
     .join('');
 }
 
-/** 很小的 Markdown：标题、列表、引用、代码块（diff 高亮）、行内代码、粗体。 */
+/** 很小的 Markdown：标题、列表、引用、代码块、行内代码、粗体。 */
 function md(src) {
   const lines = String(src || '').replace(/\r/g, '').split('\n');
   const out = [];
@@ -93,7 +82,7 @@ function md(src) {
       out.push(`<blockquote>${inline(esc(l.replace(/^>\s?/, '')))}</blockquote>`);
       continue;
     }
-    const lm = l.match(/^\s*[-*]\s+(.*)$/) || l.match(/^\s*\d+\.\s+(.*)$/);
+    const lm = l.match(/^\s*[-*]\s+(.*)$/) || l.match(/^\s*\d+[.、]\s+(.*)$/);
     if (lm) {
       if (!list) out.push('<ul>');
       list = true;
@@ -114,404 +103,257 @@ function md(src) {
 const pad = (n) => String(n).padStart(2, '0');
 
 function fmtTime(ts) {
+  if (!ts) return '';
   const d = new Date(ts);
-  if (Number.isNaN(d.getTime()) || !ts) return '';
+  if (Number.isNaN(d.getTime())) return '';
   const now = new Date();
   const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  if (d.toDateString() === now.toDateString()) return hm;
+  if (d.toDateString() === now.toDateString()) return `今天 ${hm}`;
   const y = new Date(now);
   y.setDate(now.getDate() - 1);
   if (d.toDateString() === y.toDateString()) return `昨天 ${hm}`;
-  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}-${pad(d.getDate())} ${hm}`;
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${hm}`;
 }
 
 function since(ts) {
   const s = Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 1000));
   if (!Number.isFinite(s)) return '';
-  return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分钟`;
+  if (s < 60) return `${s} 秒`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟`;
+  return `${Math.floor(s / 3600)} 小时 ${Math.floor((s % 3600) / 60)} 分`;
 }
-
-const short = (sha) => String(sha || '').slice(0, 7);
 
 function tildify(p) {
   const home = S.st && S.st.home;
   return home && p && p.startsWith(home) ? `~${p.slice(home.length)}` : p || '';
 }
 
-function hash(s) {
-  let x = 0;
-  for (const c of String(s)) x = (x * 31 + c.codePointAt(0)) >>> 0;
-  return x;
-}
-
-/** 每个工人一种线路色：按名字哈希，撞了就顺延，换页面也不变。 */
-function colorMap(workers) {
-  const used = new Set();
-  const map = {};
-  for (const w of workers) {
-    let i = hash(w.name) % 8;
-    for (let k = 0; k < 8 && used.has(i); k++) i = (i + 1) % 8;
-    used.add(i);
-    map[w.name] = `var(--l${i})`;
-  }
-  return map;
-}
-
-const colorOf = (name) => (name && S.colors[name]) || 'var(--main)';
-
-function btn(label, onclick, cls = '', extra = {}) {
-  return h('button', { type: 'button', class: `btn ${cls}`.trim(), onclick, ...extra }, label);
-}
-
-function link(label, onclick) {
-  return h('button', { type: 'button', class: 'link', onclick }, label);
-}
-
-function banner(kind, content, action) {
-  return h('div', { class: `banner ${kind}` }, h('div', { class: 'grow' }, content), action || null);
-}
-
-function empty(text) {
-  return h('div', { class: 'empty' }, text);
+/** 计票用「正」字：一 丅 下 止 正。 */
+function zheng(n) {
+  const parts = ['', '一', '丅', '下', '止'];
+  if (!n) return '·';
+  return '正'.repeat(Math.floor(n / 5)) + parts[n % 5];
 }
 
 // ---------- 状态 ----------
 
-const params = new URLSearchParams(location.search);
 const S = {
-  dir: params.get('dir') || params.get('root') || '',
-  view: ['task', 'talk', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'task',
+  dir: new URLSearchParams(location.search).get('dir') || '',
+  view: 'relay',
   st: null,
-  talk: null,
-  colors: {},
-  acting: null,
-  sub: 'changes',
-  diff: null,
-  audit: null,
-  openStop: null,
-  pick: null,
-  files: { side: 'task', sub: '', list: null, preview: null, error: null },
-  talkPick: loadPick(),
-  workerForm: null,
-  cfgRoot: null,
-  doctor: null,
-  keep: {},
-  offline: false,
+  /** 展开的棒。 */
+  open: new Set(),
+  /** 已经见过的印章（新出现的才有盖章动画）。 */
+  seenSeals: new Set(),
+  firstPaint: true,
+  showAll: false,
+  showChecklist: false,
+  showLog: false,
+  dismissed: '',
+  talk: { rows: [], votes: [], status: { speaking: [], queue: [] } },
+  talkAsk: null,
+  talkMode: 'turn',
+  draft: '',
+  voteDraft: { question: '', options: '' },
+  /** 还没提交的输入（页面重画时不丢）。 */
+  initDraft: '',
+  taskDraft: { title: '', steps: '' },
+  detail: new Map(),
 };
 
-function loadPick() {
-  try {
-    const v = JSON.parse(localStorage.getItem('relay.talkPick') || 'null');
-    return Array.isArray(v) ? v : null;
-  } catch {
-    return null;
-  }
-}
-
-function savePick() {
-  try {
-    localStorage.setItem('relay.talkPick', JSON.stringify(S.talkPick));
-  } catch {
-    /* 私密窗口等情况下存不了，不影响使用 */
-  }
-}
-
-function resetProjectLocal() {
-  S.diff = null;
-  S.audit = null;
-  S.openStop = null;
-  S.pick = null;
-  S.sub = 'changes';
-  S.files = { side: 'task', sub: '', list: null, preview: null, error: null };
-  S.talk = null;
-  S.cfgRoot = null;
-  S.doctor = null;
-}
-
-function writeUrl() {
-  const q = S.dir ? `?dir=${encodeURIComponent(S.dir)}` : '';
-  history.replaceState(null, '', `${location.pathname}${q}${S.view !== 'task' ? `#${S.view}` : ''}`);
-}
-
-/** 输入框的内容存在 S.keep 里：页面每隔几秒重画一次，打到一半的字不会丢。 */
-function keepInput(id, el) {
-  el.dataset.keep = id;
-  if (S.keep[id] !== undefined) el.value = S.keep[id];
-  else S.keep[id] = el.value;
-  el.addEventListener('input', () => {
-    S.keep[id] = el.type === 'checkbox' ? el.checked : el.value;
-  });
-  return el;
-}
-
-/** 内容有变化才重画一块区域；重画后把焦点和光标放回原来的输入框。 */
-function mount(box, key, build) {
-  if (box.__key === key) return;
-  const active = document.activeElement;
-  const keepId = active && active.dataset ? active.dataset.keep : null;
-  let sel = null;
-  if (keepId && typeof active.selectionStart === 'number') sel = [active.selectionStart, active.selectionEnd];
-  box.replaceChildren(build());
-  box.__key = key;
-  if (keepId) {
-    const el = box.querySelector(`[data-keep="${CSS.escape(keepId)}"]`);
-    if (el) {
-      el.focus({ preventScroll: true });
-      if (sel) {
-        try {
-          el.setSelectionRange(sel[0], sel[1]);
-        } catch {
-          /* 有的输入框不支持选区 */
-        }
-      }
-    }
-  }
-}
-
-// ---------- 请求 ----------
-
 async function api(path, body) {
-  let res;
+  const init = body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dir: S.dir || undefined, ...body }) };
+  const res = await fetch(path, init);
+  let j;
   try {
-    res = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+    j = await res.json();
   } catch {
-    const e = new Error('连不上接力台。它可能已经关掉了。');
-    e.code = 'offline';
-    throw e;
+    throw new Error(`接力台返回了看不懂的内容（${res.status}）`);
   }
-  let data = {};
+  if (!j.ok) throw Object.assign(new Error(j.error || '出错了'), { code: j.code });
+  return j;
+}
+
+/** GET 地址带上当前项目。 */
+function q(path) {
+  return S.dir ? `${path}${path.includes('?') ? '&' : '?'}dir=${encodeURIComponent(S.dir)}` : path;
+}
+
+let toastTimer = null;
+function toast(text, bad = false) {
+  const t = $('toast');
+  t.textContent = text;
+  t.className = `toast${bad ? ' bad' : ''}`;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), bad ? 6000 : 3200);
+}
+
+/** 按钮点下去：请求期间变灰（慢的话按钮上写「…」），出错弹提示，做完刷新。 */
+async function act(btn, fn, okText) {
+  let slow = null;
+  const label = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    slow = setTimeout(() => {
+      if (btn.isConnected) btn.textContent = `${label}…`;
+    }, 400);
+  }
   try {
-    data = await res.json();
-  } catch {
-    data = {};
-  }
-  if (!res.ok || data.ok === false) {
-    const e = new Error(data.error || `出错了（${res.status}）`);
-    e.code = data.code;
-    throw e;
-  }
-  return data;
-}
-
-const get = (path, q = {}) => api(`${path}?${new URLSearchParams({ dir: S.dir, ...q })}`);
-const post = (path, body = {}) => api(path, { dir: S.dir, ...body });
-
-let refreshing = null;
-
-async function refresh() {
-  if (refreshing) return refreshing;
-  refreshing = (async () => {
-    try {
-      const st = await get('/api/state');
-      setOffline(false);
-      const root = st.project.root;
-      if (root && root !== S.dir) {
-        if (S.st && S.st.project.root !== root) resetProjectLocal();
-        S.dir = root;
-        writeUrl();
-      }
-      S.st = st;
-      S.colors = colorMap(st.workers);
-      if (!st.project.task) {
-        S.diff = null;
-        S.openStop = null;
-      }
-      render();
-      noticeTaskChange(st.project.task);
-    } catch (e) {
-      if (e.code === 'offline') setOffline(true);
-      else if (e.code === 'no-dir' && S.dir) {
-        toast(`${e.message}，改打开上次的项目。`, true);
-        S.dir = '';
-        writeUrl();
-      } else toast(e.message, true);
-    } finally {
-      refreshing = null;
-    }
-  })();
-  return refreshing;
-}
-
-async function loadTalk() {
-  try {
-    S.talk = await get('/api/talk');
-    render();
-  } catch (e) {
-    if (e.code !== 'offline') toast(e.message, true);
-  }
-}
-
-async function loadDoctor() {
-  S.doctor = { loading: true, lines: (S.doctor && S.doctor.lines) || [] };
-  render();
-  try {
-    const r = await get('/api/doctor');
-    S.doctor = { loading: false, lines: r.lines };
-  } catch (e) {
-    S.doctor = { loading: false, lines: [{ level: 'bad', text: e.message }] };
-  }
-  render();
-}
-
-function setOffline(on) {
-  S.offline = on;
-  $('offline').hidden = !on;
-}
-
-/** 做一件事：期间按钮都变灰；做完刷新状态。出错就弹提示。 */
-async function act(label, fn) {
-  if (S.acting) {
-    toast(`正在${S.acting}，请稍等。`);
-    return null;
-  }
-  S.acting = label;
-  render();
-  try {
-    return await fn();
+    const r = await fn();
+    if (okText) toast(typeof okText === 'function' ? okText(r) : okText);
+    await refresh();
+    return r;
   } catch (e) {
     toast(e.message, true);
     return null;
   } finally {
-    S.acting = null;
-    await refresh();
+    clearTimeout(slow);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
   }
 }
 
-// ---------- 提示、对话框 ----------
-
-let toastTimer = null;
-
-function toast(msg, isError = false) {
-  const el = $('toast');
-  el.textContent = msg;
-  el.className = `toast${isError ? ' error' : ''}`;
-  el.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    el.hidden = true;
-  }, isError ? 10000 : 4500);
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-let dlg = null;
+// ---------- 弹窗 ----------
+
+function openDialog(title, body, foot) {
+  const d = $('dialog');
+  d.replaceChildren(h('h3', { id: 'dialog-title' }, title), body, foot ? h('div', { class: 'foot' }, foot) : null);
+  d.hidden = false;
+  $('scrim').hidden = false;
+  const f = d.querySelector('textarea, input, .foot .primary, .foot .seal-btn, .foot button');
+  if (f) f.focus();
+}
 
 function closeDialog() {
-  if (dlg && dlg.busyNow) return;
   $('dialog').hidden = true;
   $('scrim').hidden = true;
   $('dialog').replaceChildren();
-  dlg = null;
 }
 
-function dialog(spec) {
-  if (dlg) {
-    dlg.busyNow = false;
-    closeDialog();
+function confirmDialog(title, text, okLabel, danger = false) {
+  return new Promise((resolve) => {
+    const ok = h('button', { class: `btn ${danger ? 'seal-btn' : 'primary'}`, onclick: () => (closeDialog(), resolve(true)) }, okLabel);
+    const no = h('button', { class: 'btn', onclick: () => (closeDialog(), resolve(false)) }, '算了');
+    openDialog(title, h('div', { class: 'doc' }, h('p', null, text)), [no, ok]);
+  });
+}
+
+function askDialog(title, hint, placeholder, okLabel) {
+  return new Promise((resolve) => {
+    const input = h('input', { type: 'text', placeholder, style: 'width:100%' });
+    const ok = h('button', { class: 'btn primary', onclick: () => (closeDialog(), resolve(input.value.trim())) }, okLabel);
+    input.addEventListener('keydown', (e) => e.key === 'Enter' && ok.click());
+    openDialog(title, h('div', null, h('p', { class: 'faint', style: 'margin:0 0 10px' }, hint), input), [h('button', { class: 'btn', onclick: () => (closeDialog(), resolve('')) }, '算了'), ok]);
+  });
+}
+
+$('scrim').addEventListener('click', closeDialog);
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!$('dialog').hidden) closeDialog();
+  closeMenu();
+  closePops();
+});
+
+// ---------- 刷新 ----------
+
+let pollTimer = null;
+
+async function refresh(fromPoll = false) {
+  try {
+    const st = await api(q('/api/state'));
+    S.st = st;
+    if (!S.dir) S.dir = st.project.root;
+    setOffline(false);
+    // 设置页上可能有没保存的修改：定时刷新不重画它，点了按钮才重画。
+    if (fromPoll && S.view === 'settings') return;
+    render();
+  } catch (e) {
+    if (e instanceof TypeError) setOffline(true);
+    else toast(e.message, true);
   }
-  const box = $('dialog');
-  const d = {
-    busyNow: false,
-    saved: null,
-    close() {
-      d.busyNow = false;
-      closeDialog();
-    },
-    busy(text) {
-      d.busyNow = true;
-      const body = box.querySelector('.dialog-body');
-      d.saved = [...body.childNodes];
-      body.replaceChildren(h('div', { class: 'progress' }, h('span', { class: 'spin' }), text));
-      box.querySelectorAll('.buttons button').forEach((b) => (b.disabled = true));
-    },
-    error(msg) {
-      d.busyNow = false;
-      const body = box.querySelector('.dialog-body');
-      body.replaceChildren(h('p', { class: 'form-error' }, msg), ...(d.saved || []));
-      box.querySelectorAll('.buttons button').forEach((b) => (b.disabled = false));
-    },
-    replace(next) {
-      d.busyNow = false;
-      draw(next);
-    },
-  };
-  function draw({ title, body, buttons }) {
-    const list = buttons || [{ label: '好', cls: 'primary' }];
-    box.replaceChildren(
-      h('h3', { id: 'dialog-title' }, title),
-      h('div', { class: 'dialog-body' }, body),
-      h(
-        'div',
-        { class: 'buttons' },
-        list.map((b) =>
-          btn(b.label, async () => {
-            if (!b.keepOpen) d.close();
-            if (b.run) await b.run(d);
-          }, b.cls || '')
-        )
-      )
-    );
-    const first = box.querySelector('textarea, input[type="text"]') || box.querySelector('.buttons .btn.primary, .buttons .btn.solid') || box.querySelector('.buttons .btn');
-    if (first) first.focus();
-  }
-  draw(spec);
-  box.hidden = false;
-  $('scrim').hidden = false;
-  dlg = d;
-  return d;
 }
 
-function copybox(text) {
-  const code = h('code', null, text);
-  return h(
-    'div',
-    { class: 'copybox' },
-    code,
-    btn('复制', async () => {
-      try {
-        await navigator.clipboard.writeText(text);
-        toast('已复制。');
-      } catch {
-        const r = document.createRange();
-        r.selectNodeContents(code);
-        const s = getSelection();
-        s.removeAllRanges();
-        s.addRange(r);
-        toast('已选中，按 ⌘C 复制。');
-      }
-    }, 'small')
-  );
+function setOffline(v) {
+  $('offline').hidden = !v;
 }
 
-// ---------- 顶栏 ----------
-
-function renderBar() {
+function schedule() {
+  clearTimeout(pollTimer);
   const p = S.st && S.st.project;
-  $('project-name').textContent = p ? p.name : '…';
-  $('project-path').textContent = p ? tildify(p.root) : '';
-  document.title = p ? `${p.name} · 接力台` : '接力台';
-  for (const b of document.querySelectorAll('.tabs button')) b.setAttribute('aria-selected', String(b.dataset.view === S.view));
-  const n = S.st && S.st.talk ? S.st.talk.count : 0;
-  $('talk-count').textContent = n ? String(n) : '';
+  const live = p && (p.now.kind === 'relay' || p.now.kind === 'waiting' || (p.go && p.go.status === 'running'));
+  const t = S.talk;
+  const talking = S.view === 'talk' && (t.status.speaking.length || t.status.queue.length || t.votes.some((v) => v.status !== 'done'));
+  const ms = document.hidden ? 15000 : talking ? 1200 : live ? 1500 : 3000;
+  pollTimer = setTimeout(async () => {
+    if (!busyTyping() && $('dialog').hidden) {
+      await refresh(true);
+      if (S.view === 'talk') await loadTalk();
+    }
+    schedule();
+  }, ms);
 }
 
-function openMenu() {
-  const menu = $('project-menu');
-  const projects = (S.st && S.st.projects) || [];
-  menu.replaceChildren(
-    ...projects.map((p) =>
-      h(
-        'button',
-        { type: 'button', class: `menu-item${p.current ? ' on' : ''}`, onclick: () => switchProject(p.root) },
-        h('span', { class: `dot${p.hasTask ? ' busy' : ''}`, title: p.hasTask ? '有进行中的任务' : '' }),
-        h('span', null, p.name, p.hasTask ? h('span', { class: 'muted small' }, ' · 有进行中的任务') : null),
-        h('span', { class: 'p' }, tildify(p.root))
-      )
-    ),
-    projects.length ? h('hr') : null,
-    h('button', { type: 'button', class: 'menu-item', onclick: chooseFolder }, h('span', { class: 'dot' }), h('span', null, '选择其他文件夹…'))
-  );
-  menu.hidden = false;
-  $('project-btn').setAttribute('aria-expanded', 'true');
+/** 正在填东西时不刷新页面（不然输入框会被重画，焦点和没保存的内容都会丢）。 */
+function busyTyping() {
+  const a = document.activeElement;
+  if (!a || !['TEXTAREA', 'INPUT', 'SELECT'].includes(a.tagName)) return false;
+  return !(a.tagName === 'INPUT' && (a.type === 'checkbox' || a.type === 'radio'));
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refresh().then(schedule);
+});
+
+// ---------- 顶栏：项目、页签 ----------
+
+function render() {
+  const st = S.st;
+  if (!st) return;
+  const p = st.project;
+  $('project-name').textContent = p.name || '选一个项目文件夹';
+  $('project-btn').title = p.root;
+  document.title = p.name ? `${p.name} · 接力台` : '接力台';
+  $('talk-dot').hidden = !(st.talk.speaking && st.talk.speaking.length);
+  for (const v of ['relay', 'talk', 'settings']) {
+    $(`view-${v}`).hidden = S.view !== v;
+    const tab = $(`tab-${v}`);
+    if (S.view === v) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
+  }
+  const scroll = window.scrollY;
+  if (S.view === 'relay') renderRelay();
+  else if (S.view === 'talk') renderTalk();
+  else renderSettings();
+  window.scrollTo(0, scroll);
+  S.firstPaint = false;
+}
+
+function setView(v) {
+  S.view = v;
+  history.replaceState(null, '', `${location.pathname}${location.search}#${v}`);
+  render();
+  if (v === 'talk') loadTalk();
+  schedule();
+}
+
+for (const a of document.querySelectorAll('.tabs a')) {
+  a.addEventListener('click', (e) => {
+    e.preventDefault();
+    setView(a.dataset.view);
+  });
 }
 
 function closeMenu() {
@@ -519,2059 +361,1177 @@ function closeMenu() {
   $('project-btn').setAttribute('aria-expanded', 'false');
 }
 
-async function switchProject(root) {
+function closePops() {
+  for (const m of document.querySelectorAll('.menu.pop')) m.remove();
+}
+
+$('project-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const m = $('project-menu');
+  if (!m.hidden) return closeMenu();
+  const st = S.st;
+  const items = [];
+  for (const p of (st && st.projects) || []) {
+    if (p.current) continue;
+    items.push(
+      h(
+        'button',
+        { onclick: () => switchProject(p.root) },
+        p.name,
+        p.pending ? h('span', { class: 'badge bad', style: 'margin-left:8px' }, `${p.pending} 棒待复核`) : !p.init ? h('span', { class: 'faint', style: 'margin-left:8px' }, '没接入') : null,
+        h('span', { class: 'sub' }, tildify(p.root))
+      )
+    );
+  }
+  if (items.length) items.push(h('div', { class: 'sep' }));
+  items.push(h('button', { onclick: chooseFolder }, '打开别的文件夹…', h('span', { class: 'sub' }, '接力台会记住你打开过的项目')));
+  if (st && st.project.root) {
+    items.push(h('button', { onclick: () => (closeMenu(), copyText(st.project.root).then((ok) => toast(ok ? '路径复制好了' : st.project.root))) }, '复制这个文件夹的路径', h('span', { class: 'sub' }, tildify(st.project.root))));
+  }
+  m.replaceChildren(...items);
+  m.hidden = false;
+  $('project-btn').setAttribute('aria-expanded', 'true');
+});
+
+document.addEventListener('click', (e) => {
+  if (!$('project-menu').hidden && !$('project-menu').contains(e.target)) closeMenu();
+  for (const m of document.querySelectorAll('.menu.pop')) if (!m.contains(e.target)) m.remove();
+});
+
+function switchProject(root) {
   closeMenu();
-  if (root === S.dir) return;
   S.dir = root;
-  resetProjectLocal();
-  writeUrl();
-  await refresh();
-  if (S.view === 'talk') loadTalk();
+  S.open.clear();
+  S.detail.clear();
+  S.seenSeals.clear();
+  S.firstPaint = true;
+  S.showAll = false;
+  S.talkAsk = null;
+  history.replaceState(null, '', `/?dir=${encodeURIComponent(root)}#${S.view}`);
+  refresh().then(() => S.view === 'talk' && loadTalk());
 }
 
 async function chooseFolder() {
   closeMenu();
   try {
-    toast('在弹出的窗口里选一个文件夹……');
-    const r = await post('/api/choose-folder');
-    $('toast').hidden = true;
-    await switchProject(r.dir);
+    const r = await api('/api/choose-folder', {});
+    switchProject(r.dir);
   } catch (e) {
-    if (e.code === 'cancelled') $('toast').hidden = true;
-    else toast(e.message, true);
+    if (e.code !== 'cancelled') toast(e.message, true);
   }
 }
 
-function setView(v) {
-  S.view = v;
-  writeUrl();
-  if (v === 'talk') loadTalk();
-  if (v === 'settings' && !S.doctor) loadDoctor();
-  render();
-  window.scrollTo(0, 0);
+// ---------- 成员 ----------
+
+function members() {
+  return (S.st && S.st.members) || [];
 }
 
-// ---------- 总渲染 ----------
-
-function render() {
-  renderBar();
-  for (const v of ['task', 'talk', 'settings']) $(`view-${v}`).hidden = S.view !== v;
-  if (!S.st) {
-    mount($(`view-${S.view}`), 'loading', () => h('div', { class: 'skeleton' }, '正在读取……'));
-    return;
-  }
-  if (S.view === 'task') renderTask();
-  else if (S.view === 'talk') renderTalk();
-  else renderSettings();
+function ready() {
+  return members().filter((m) => m.canWork && !m.cooling);
 }
 
-// ---------- 任务页 ----------
-
-function renderTask() {
-  const st = S.st;
-  const p = st.project;
-  const box = $('view-task');
-  if (!p.task) {
-    mount(
-      box,
-      JSON.stringify(['idle', p.root, p.isGit, p.hasConfig, p.hasCommits, p.past, st.workers.map((w) => [w.name, w.kind]), p.mainDirty, S.acting, p.configError, p.taskError, st.auto, st.team, st.detecting]),
-      () => viewIdle(st)
-    );
-    return;
-  }
-  mount(box, JSON.stringify(['task', p.root, p.task, st.workers, st.busy, S.acting, S.sub, S.diff, S.audit, S.openStop, S.pick, S.files, S.colors, p.config && p.config.keySet, st.auto, st.team]), () =>
-    viewTask(st)
-  );
+function tierEl(t) {
+  const word = t === 'strong' ? '强' : t === 'weak' ? '弱' : '？';
+  const title = t === 'strong' ? '强模型：它交接的不用复核' : t === 'weak' ? '弱模型：它做的要等强模型复核' : '不知道是谁：按弱处理，要复核';
+  return h('span', { class: `tier ${t || 'unknown'}`, title, 'aria-label': title }, word);
 }
 
-function pastGlyph(result) {
-  const color = result === 'merged' ? 'var(--go)' : result === 'abandoned' ? 'var(--ink-3)' : 'var(--warn)';
-  const kids = [
-    svg('path', { d: 'M6 1v32', style: 'stroke:var(--main);stroke-width:3;stroke-linecap:round;fill:none' }),
-    svg('path', {
-      d: result === 'merged' ? 'M6 5c0 5 12 3 12 8v8c0 5-12 3-12 8' : 'M6 5c0 5 12 3 12 8v10',
-      style: `stroke:${color};stroke-width:3;stroke-linecap:round;fill:none${result === 'unfinished' ? ';stroke-dasharray:3 4' : ''}`,
-    }),
-  ];
-  if (result === 'abandoned') kids.push(svg('path', { d: 'M13 24h10', style: `stroke:${color};stroke-width:3;stroke-linecap:round` }));
-  return svg('svg', { viewBox: '0 0 26 34', 'aria-hidden': 'true' }, ...kids);
+function seal(kind, text, key) {
+  const fresh = key && !S.firstPaint && !S.seenSeals.has(key);
+  if (key) S.seenSeals.add(key);
+  return h('span', { class: `seal ${kind}${fresh ? ' fresh' : ''}`, role: 'img', 'aria-label': text }, text);
 }
 
-function pastList(past) {
-  if (!past.length) return h('p', { class: 'hint' }, '还没有做过任务。每个任务都会在这里留一条线：合回的回到主线，放弃的在半路截断。');
-  const word = { merged: '已合回', abandoned: '已放弃', unfinished: '没做完' };
-  return h(
-    'ul',
-    { class: 'past' },
-    past.map((t) =>
-      h('li', null, pastGlyph(t.result), h('div', null, h('div', { class: 't' }, t.title), h('div', { class: 'm' }, h('span', { class: 'num' }, fmtTime(t.date)), ` · ${word[t.result]}`)))
-    )
-  );
+// ---------- 接力页 ----------
+
+function renderRelay() {
+  const el = $('view-relay');
+  const p = S.st.project;
+  if (!p.init) return el.replaceChildren(...welcome(p));
+  el.replaceChildren(...taskBlock(p), nowBlock(p), ...pendingBlock(p), ...logBlock(p), footBlock(p));
 }
 
-function steps() {
-  const items = [
-    ['写下要做什么', '点「全自动完成」。接力台在别处建一个隔离副本，正式文件夹一直不动。'],
-    ['AI 自己干活', '主力按任务改隔离副本；做不出来会自动换下一位。'],
-    ['另一个 AI 审查', '不合格就把意见交给下一轮接着改，最多几轮可以在设置里调。'],
-    ['通过后合回', '随时能停、能继续；也可以「只开始任务」，自己安排工人上岗、交接、合回。'],
-  ];
-  return h('ol', { class: 'howto' }, items.map(([t, d], i) => h('li', null, h('span', { class: 'hnum num', 'aria-hidden': 'true' }, String(i + 1)), h('strong', null, t), h('span', { class: 'hdesc' }, d))));
-}
-
-function viewIdle(st) {
-  const p = st.project;
-  const task = keepInput('task', h('textarea', { class: 'task-input', rows: 4, 'aria-label': '要做什么', placeholder: '一句话说清楚。例如：帮我做一份 iPhone 5s 风格的 Lightroom 滤镜（XMP 文件）' }));
-  task.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) {
-      e.preventDefault();
-      if (st.team.workers.length) startAutoRun(true);
-      else startTask();
-    }
-  });
-  return h(
-    'div',
-    { class: 'grid' },
-    h('aside', { class: 'side' }, h('p', { class: 'side-title' }, '以前的任务'), pastList(p.past)),
-    h(
-      'div',
-      null,
-      p.configError ? banner('stop', p.configError) : null,
-      p.taskError ? banner('stop', p.taskError) : null,
-      !p.isGit || !p.hasConfig || !p.hasCommits
-        ? banner('info', `「${p.name}」第一次用：开始任务时会自动把它设为接力项目${p.isGit ? '' : '（先建一个 git 记录，把现有文件存为第一版，文件本身不改）'}。`)
-        : null,
-      st.auto ? autoPanel(st) : null,
-      st.detecting
-        ? banner('info', '正在自动识别这台电脑上的 AI 工具（Claude Code、Codex、Cursor Agent……）和模型接口，十几秒就好。')
-        : !st.team.workers.length
-          ? banner('info', '没找到能全自动干活的 AI 工具（要装好并登录 Claude Code、Codex、Cursor Agent 等之一）。装好后去「设置」点「重新识别」。', btn('去设置', () => setView('settings'), 'small'))
-          : null,
-      h(
-        'section',
-        { class: 'board' },
-        h(
-          'div',
-          { class: 'compose' },
-          h('p', { class: 'eyebrow' }, '新任务'),
-          h('h1', null, '要做什么？'),
-          task,
-          h(
-            'details',
-            { open: !!S.keep.acceptance },
-            h('summary', null, '怎样算做完（可不填）'),
-            keepInput('acceptance', h('textarea', { rows: 3, 'aria-label': '验收标准', placeholder: '例如：导入 Lightroom 不报错；照片整体偏暖，暗部带一点青' }))
-          ),
-          h(
-            'div',
-            { class: 'foot' },
-            btn(S.acting === '全自动' ? '正在开始……' : '全自动完成', () => startAutoRun(true), 'primary', { disabled: !!S.acting || !st.team.workers.length }),
-            btn(S.acting === '开始任务' ? '正在开始……' : '只开始任务（手动安排）', startTask, '', { disabled: !!S.acting }),
-            h('span', { class: 'hint kbd-hint' }, h('kbd', null, '⌘'), h('kbd', null, 'Enter'), ' 全自动')
-          ),
-          p.mainDirty ? h('p', { class: 'hint' }, `正式文件夹里有 ${p.mainDirty} 个没提交的改动，它们不会带进任务。`) : null
-        ),
-        h('div', { class: 'compose-team' }, teamLine(st.team))
-      ),
-      h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('h2', null, '怎么用')), steps())
-    )
-  );
-}
-
-async function startTask() {
-  const task = String(S.keep.task || '').trim();
-  if (!task) {
-    toast('先写下要做什么。', true);
-    const el = document.querySelector('[data-keep="task"]');
-    if (el) el.focus();
-    return;
-  }
-  await act('开始任务', async () => {
-    const r = await post('/api/start', { task, acceptance: S.keep.acceptance || '' });
-    S.keep.task = '';
-    S.keep.acceptance = '';
-    resetProjectLocal();
-    toast([`任务开始了：${r.title}`, ...r.notes].join(' '));
-  });
-}
-
-// —— 全自动 ——
-
-const AUTO_WORDS = { running: '进行中', done: '完成', ready: '审查通过，等你合回', 'needs-human': '需要你来看一下', failed: '没做成', stopped: '已停止' };
-
-function autoRunning(st) {
-  return !!(st.auto && st.auto.state && st.auto.state.status === 'running');
-}
-
-/** 一位成员的线路标签：线路色点 + 名字（+ 模型）。 */
-function memberChip(m) {
-  return h('span', { class: 'lchip', style: `--c:${colorOf(m.name)}` }, h('i', { 'aria-hidden': 'true' }), m.label, m.model ? h('small', null, m.model) : null);
-}
-
-function routeChips(list) {
-  if (!list.length) return [h('span', { class: 'muted small' }, '（没有）')];
-  const out = [];
-  list.forEach((m, i) => {
-    if (i) out.push(h('span', { class: 'lsep', 'aria-hidden': 'true' }, '→'));
-    out.push(memberChip(m));
-  });
-  return out;
-}
-
-/** 全自动的安排：谁干活、谁审查（按顺序，前一位做不出来才换下一位）、几轮、什么档位。 */
-function teamLine(team, edit = true) {
-  const s = team.settings;
-  return h(
-    'div',
-    { class: 'team' },
-    h('div', { class: 'team-row' }, h('span', { class: 'team-k' }, '干活'), h('div', { class: 'team-chips' }, routeChips(team.workers))),
-    h('div', { class: 'team-row' }, h('span', { class: 'team-k' }, '审查'), h('div', { class: 'team-chips' }, routeChips(team.reviewers))),
-    h(
-      'div',
-      { class: 'team-meta' },
-      `最多 ${s.maxRounds} 轮 · ${s.level === 'full' ? '完全放开' : '安全档'} · ${s.autoMerge ? '通过后自动合回' : '通过后等你合回'}`,
-      edit ? h('span', null, '　', link('改安排', () => setView('settings'))) : null
-    )
-  );
-}
-
-function tookText(st) {
-  return st.endedAt ? `${Math.max(1, Math.round((new Date(st.endedAt) - new Date(st.startedAt)) / 1000))} 秒` : since(st.startedAt);
-}
-
-/** 全自动的一步：线路上的一站，颜色跟着这一步的工人走。 */
-function autoStepEl(st) {
-  const icon = { ok: '✓', fail: '✕', skip: '–', running: '' }[st.status] ?? '·';
-  const c = st.agent ? colorOf(st.agent) : st.kind === 'merge' ? 'var(--go)' : 'var(--main)';
-  return h(
-    'li',
-    { class: `rstop is-${st.status}`, style: `--c:${c}` },
-    h('span', { class: 'rdot', 'aria-hidden': 'true' }, icon),
-    h(
-      'div',
-      { class: 'rbody' },
-      h('div', { class: 'rlabel' }, h('span', null, st.label), h('span', { class: 'rtook num' }, tookText(st))),
-      st.detail ? h('div', { class: 'rdetail' }, st.detail) : null
-    )
-  );
-}
-
-/** 长的结论拆成「第一句（标题）+ 其余（说明）」。 */
-function headline(text) {
-  const t = String(text || '');
-  const i = t.indexOf('。');
-  if (t.length <= 44 || i < 0 || i === t.length - 1) return [t, ''];
-  return [t.slice(0, i + 1), t.slice(i + 1)];
-}
-
-const AUTO_TONE = { running: 'run', done: 'go', ready: 'go', 'needs-human': 'warn', failed: 'bad', stopped: 'warn' };
-
-function autoPanel(st) {
-  const a = st.auto && st.auto.state;
-  const team = st.team;
-  const running = autoRunning(st);
-  const hasTask = !!st.project.task;
-  if (!a && !hasTask) return null;
-  const tone = a ? AUTO_TONE[a.status] || 'warn' : 'idle';
-  const current = running ? [...a.steps].reverse().find((x) => x.status === 'running') : null;
-  const pill = a
-    ? h(
-        'span',
-        { class: `pill ${tone === 'go' ? 'go' : tone === 'bad' ? 'stop' : tone === 'run' ? 'line' : 'warn'}`, style: current && current.agent ? `--c:${colorOf(current.agent)}` : '--c:var(--go)' },
-        running ? h('span', { class: 'spin' }) : null,
-        `${AUTO_WORDS[a.status]}${a.interrupted ? '（被中断）' : ''}`
-      )
-    : null;
-  const buttons = [];
-  if (running) buttons.push(btn(S.acting === '停止' ? '正在停止……' : '停止', stopAutoRun, 'danger', { disabled: !!S.acting }));
-  else if (hasTask) buttons.push(btn(a ? '继续全自动' : '全自动做完它', () => startAutoRun(false), 'primary', { disabled: !!S.acting || !team.workers.length || !!st.busy }));
-  const tail = a && st.auto.tail;
-  return h(
-    'section',
-    { class: `board auto-board tone-${tone}` },
-    running ? h('div', { class: 'auto-rail', 'aria-hidden': 'true', style: current && current.agent ? `--c:${colorOf(current.agent)}` : '' }) : null,
-    h(
-      'div',
-      { class: 'auto-head' },
-      h(
-        'div',
-        { class: 'auto-titles' },
-        h('p', { class: 'eyebrow' }, '全自动', a ? h('span', { class: 'num' }, running ? ` · 第 ${a.round} 轮 / 最多 ${a.maxRounds} 轮` : ` · 一共 ${a.round} 轮`) : null),
-        h('h2', { class: 'auto-title' }, a ? headline(a.phase)[0] : '让 AI 们自己把这个任务做完'),
-        a && headline(a.phase)[1] ? h('p', { class: 'auto-more' }, headline(a.phase)[1]) : null,
-        h('p', { class: 'auto-goal' }, a ? [`目标：${a.goal}`, h('span', { class: 'muted' }, `　${fmtTime(a.startedAt)} 开始`)] : '干活 → 另一个 AI 审查 → 要改就再来一轮 → 通过后合回。')
-      ),
-      pill
-    ),
-    a ? h('ol', { class: 'route' }, a.steps.map(autoStepEl)) : null,
-    tail
-      ? h('details', { class: 'auto-log-box', open: running }, h('summary', null, '日志', h('span', { class: 'muted' }, ` · ${tail.label}`)), h('pre', { class: 'auto-log' }, tail.text || '（还没有输出）'))
-      : null,
-    h('div', { class: 'auto-foot' }, buttons.length ? h('div', { class: 'row' }, buttons) : null, teamLine(team)),
-    !team.workers.length ? h('div', { class: 'auto-note' }, banner('info', '还没有能全自动干活的 AI 工具。去「设置」点「重新识别」。', btn('去设置', () => setView('settings'), 'small'))) : null,
-    (team.problems || []).length ? h('div', { class: 'auto-note' }, (team.problems || []).map((pr) => h('p', { class: 'hint warn-text' }, `⚠ ${pr}`))) : null
-  );
-}
-
-async function startAutoRun(withGoal) {
-  const goal = withGoal ? String(S.keep.task || '').trim() : '';
-  if (withGoal && !goal) {
-    toast('先写下要做什么。', true);
-    const el = document.querySelector('[data-keep="task"]');
-    if (el) el.focus();
-    return;
-  }
-  await act('全自动', async () => {
-    const r = await post('/api/auto/start', { goal, acceptance: withGoal ? S.keep.acceptance || '' : '' });
-    if (withGoal) {
-      S.keep.task = '';
-      S.keep.acceptance = '';
-      resetProjectLocal();
-    }
-    toast(`全自动开始了：${r.state.goal}`);
-  });
-}
-
-async function stopAutoRun() {
-  await act('停止', async () => {
-    const r = await post('/api/auto/stop');
-    toast(r.stopped ? '已发出停止请求，正在干活的工具会被结束。' : '现在没有在跑的全自动。');
-  });
-}
-
-// —— 支线图 ——
-
-function buildStops(t) {
-  const cps = new Set((t.checkpoints || []).map((c) => c.sha));
-  const stops = [
-    { id: 'origin', cls: 'station', dot: 'var(--main)', when: fmtTime(t.startedAt), what: '从正式文件夹分出', sub: `基准 ${t.base}${t.mainBranch ? ` · ${t.mainBranch}` : ''}` },
-  ];
-  t.timeline.forEach((it, i) => {
-    const id = `${i}-${it.kind}`;
-    switch (it.kind) {
-      case 'start':
-        break;
-      case 'open':
-      case 'run':
-        stops.push({ id, cls: 'shift', dot: colorOf(it.agent), when: fmtTime(it.ts), tag: `${it.who} 上岗 · ${it.kind === 'open' ? '桌面' : it.auto ? '全自动' : '终端'}`, sub: it.detail });
-        break;
-      case 'exit':
-        stops.push({ id, cls: 'minor', dot: colorOf(it.agent), when: fmtTime(it.ts), what: it.text });
-        break;
-      case 'handoff':
-        stops.push({
-          id,
-          cls: 'station',
-          dot: colorOf(it.agent),
-          when: fmtTime(it.ts),
-          what: `${it.who} 交接`,
-          sub: it.size,
-          badge: it.ok === undefined ? null : it.ok ? ['ok', '检查通过'] : ['bad', '检查没过'],
-          sha: it.sha,
-          report: it.report,
-          detail: it.detail,
-          canBack: cps.has(it.sha),
-          handoff: true,
-        });
-        break;
-      case 'take':
-      case 'sync':
-      case 'rollback':
-      case 'gate':
-        stops.push({ id, cls: 'minor', dot: it.kind === 'rollback' ? 'var(--warn)' : 'var(--main)', when: fmtTime(it.ts), what: it.text, detail: it.detail });
-        break;
-      default:
-        break;
-    }
-  });
-  if (t.onShift && t.onShift.kind !== 'op') {
-    stops.push({
-      id: 'now',
-      cls: 'train',
-      dot: colorOf(t.onShift.agent),
-      when: '现在',
-      what: `${t.onShift.label}${t.onShift.llm ? ` · ${t.onShift.llm}` : ''} 正在干活`,
-      sub: t.pending.length ? `已经改了 ${t.pending.length} 个文件` : '还没看到改动',
-    });
-  } else if (t.pending.length) {
-    stops.push({ id: 'now', cls: 'alert', dot: 'var(--warn)', when: '现在', what: `${t.pending.length} 个改动还没交接` });
-  }
-  const ready = t.phase === 'mergeable';
-  stops.push({
-    id: 'end',
-    cls: 'terminal',
-    dot: ready ? 'var(--go)' : 'var(--main)',
-    what: '合回正式文件夹',
-    sub: ready ? '可以合回了' : t.totals.files ? `目前改了 ${t.totals.files} 个文件` : '还没有要合回的改动',
-  });
-  // 线段颜色：谁在岗就是谁的颜色；交接之后、下一个人上岗之前是空闲的浅灰；通往终点的一段，能合回才画成实线。
-  let seg = 'var(--rule)';
-  for (const s of stops) {
-    if (s.cls === 'shift' || s.cls === 'train') seg = s.dot;
-    else if (s.handoff) seg = 'var(--rule)';
-    s.seg = seg;
-  }
-  const pre = stops[stops.length - 2];
-  if (pre) {
-    pre.seg = ready ? 'var(--go)' : 'var(--ink-3)';
-    pre.dashed = !ready;
-  }
-  return stops;
-}
-
-function stopEl(s) {
-  const expandable = !!(s.handoff || s.detail);
-  const open = expandable && S.openStop === s.id;
-  const head = h(
-    expandable ? 'button' : 'div',
+function welcome(p) {
+  const text = h('input', { type: 'text', placeholder: '写一句要做什么（也可以先不写）', style: 'flex:1;min-width:220px', value: S.initDraft, oninput: (e) => (S.initDraft = e.target.value) });
+  const go = h(
+    'button',
     {
-      class: 'stop-head',
-      type: expandable ? 'button' : null,
-      'aria-expanded': expandable ? String(open) : null,
-      onclick: expandable
-        ? () => {
-            S.openStop = open ? null : s.id;
-            render();
-          }
-        : null,
+      class: 'btn primary',
+      onclick: (e) =>
+        act(e.currentTarget, () => api('/api/init', { task: text.value.trim() || undefined }), (r) => (r.actions && r.actions.length ? `接入好了：${r.actions.join('；')}` : '接入好了')).then((r) => r && (S.initDraft = '')),
     },
-    s.when ? h('span', { class: 'when' }, s.when) : null,
-    s.tag ? h('span', { class: 'tag' }, s.tag) : h('span', { class: 'what' }, s.what, s.badge ? h('span', { class: `badge ${s.badge[0]}` }, s.badge[1]) : null),
-    s.sub ? h('span', { class: 'sub' }, s.sub) : null
+    '接入这个文件夹'
   );
-  const body = open
-    ? h(
-        'div',
-        { class: 'open' },
-        s.detail ? h('p', null, s.detail) : null,
-        s.sha ? h('p', { class: 'muted' }, '检查点 ', h('span', { class: 'mono' }, short(s.sha))) : null,
-        h(
-          'div',
-          { class: 'row' },
-          s.report ? link('看审计报告', () => showAudit(s.report)) : null,
-          s.canBack ? link('退回到这里…', () => openRollback(s.sha, `${s.what}（${s.when}）`)) : null
-        )
-      )
-    : null;
-  return h('li', { class: `stop ${s.cls}${s.dashed ? ' dashed' : ''}`, style: `--dot:${s.dot};--seg:${s.seg}` }, h('span', { class: 'dot', 'aria-hidden': 'true' }), head, body);
-}
-
-function lineMap(t) {
-  return h('ol', { class: 'line', 'aria-label': '支线图：这个任务从正式文件夹分出后的经过' }, buildStops(t).map(stopEl));
-}
-
-// —— 任务状态牌 ——
-
-function phasePill(t, busyOp, autoOn) {
-  if (autoOn) return h('span', { class: 'pill line', style: `--c:${t.onShift ? colorOf(t.onShift.agent) : 'var(--go)'}` }, '全自动');
-  if (busyOp || t.phase === 'busy') return h('span', { class: 'pill' }, h('span', { class: 'spin' }), '处理中');
-  if (t.phase === 'working' && t.onShift) return h('span', { class: 'pill line', style: `--c:${colorOf(t.onShift.agent)}` }, '在岗');
-  const map = {
-    conflict: ['stop', '有冲突'],
-    unsaved: ['warn', '待交接'],
-    fresh: ['', '等人上岗'],
-    blocked: ['stop', '拦住了'],
-    mergeable: ['go', '可以合回'],
-    broken: ['stop', '出问题了'],
-  };
-  const [cls, word] = map[t.phase] || ['', t.phase];
-  return h('span', { class: `pill ${cls}` }, word);
-}
-
-function phaseActions(t, busyOp, autoOn) {
-  if (autoOn || (t.onShift && t.onShift.auto)) return [h('span', { class: 'hint' }, '全自动正在进行：会自己交接、审查、合回。要中途停下，用上面的「停止」。')];
-  if (busyOp || t.phase === 'busy') return [];
-  const out = [];
-  switch (t.phase) {
-    case 'working':
-      if (t.onShift.kind === 'app') {
-        out.push(btn('交接', openHandoff, 'primary'), btn(`再打开 ${t.onShift.label}`, () => startShift(t.onShift.agent, t.onShift.llm)), btn('复制上岗那句话', copyHint, 'ghost'));
-      } else {
-        out.push(h('span', { class: 'hint' }, '在终端里让它结束（或连按两次 Ctrl-C），然后回来交接。'));
-      }
-      break;
-    case 'unsaved':
-      out.push(btn('交接', openHandoff, 'primary'));
-      break;
-    case 'conflict':
-      out.push(h('span', { class: 'hint' }, '在下面选一个工人来解决冲突。'), btn('撤销同步', abortSync, 'ghost'));
-      break;
-    case 'blocked':
-      out.push(btn('看交接文档', () => ((S.sub = 'handoff'), render())), btn('仍然合回…', () => openMerge(true), 'danger'));
-      break;
-    case 'mergeable':
-      out.push(btn('合回正式文件夹', () => openMerge(false), 'primary'));
-      break;
-    case 'broken':
-      out.push(btn('放弃这个任务…', () => openAbandon(t), 'danger'));
-      break;
-    default:
-      break;
-  }
-  return out;
-}
-
-function boardEl(t, busyOp, autoOn, autoPhase) {
-  return h(
-    'section',
-    { class: 'board' },
+  text.addEventListener('keydown', (e) => e.key === 'Enter' && go.click());
+  return [
     h(
       'div',
-      { class: 'board-head' },
-      h('p', { class: 'eyebrow' }, '任务 · ', h('span', { class: 'num' }, fmtTime(t.startedAt)), ' 开始'),
-      h('h1', { class: 'task-title' }, t.title),
-      t.taskText ? h('details', null, h('summary', null, '任务说明'), h('div', { class: 'doc', style: 'margin-top:10px', html: md(t.taskText) })) : null
-    ),
-    h('div', { class: 'phase' }, phasePill(t, busyOp, autoOn), h('p', null, autoOn && autoPhase ? `全自动进行中：${autoPhase}` : busyOp ? `正在${busyOp}……` : t.phaseText)),
-    h('div', { class: 'actions' }, phaseActions(t, busyOp, autoOn))
-  );
-}
-
-function banners(t, p, autoOn) {
-  const out = [];
-  const off = !!S.acting || !!autoOn;
-  if (t.stray.length) {
-    out.push(
-      banner(
-        'warn',
-        [h('strong', null, '正式文件夹在任务期间被改了：'), t.stray.map((s) => `${s.path}（${s.word}）`).join('、'), h('div', { class: 'hint' }, '多半是 AI 开错了文件夹，改到了正式版上。收进任务后，正式文件夹会恢复原样。')],
-        btn('收进任务', takeStray, 'primary small', { disabled: off })
+      { class: 'welcome' },
+      h('h1', null, `「${p.name}」还没接入`),
+      h('p', { class: 'muted' }, '接入之后，不管换哪个 AI 接着做，进度都接得上，弱模型的活也有人把关。'),
+      h(
+        'ul',
+        { class: 'promise' },
+        h('li', null, h('b', null, '接得上'), h('span', null, '各家 AI 开工先读「接力本」：任务、进度、上一棒留的话都在里面。')),
+        h('li', null, h('b', null, '有账可查'), h('span', null, '每一棒改了什么、自己说了什么都记下来；额度用完被打断、没留话的，接力台替它记一笔。')),
+        h('li', null, h('b', null, '有人把关'), h('span', null, '弱模型做的棒盖「待核」章，强模型额度回来后先复核、改好，再往下做。')),
+        h('li', null, h('b', null, '能退回'), h('span', null, '每一棒前后都存了快照，改坏了就退回到那一棒之前。'))
+      ),
+      h('div', { class: 'row' }, text, go),
+      h(
+        'p',
+        { class: 'will' },
+        '会做的事：在这个文件夹里建 ',
+        h('code', null, '.relay/'),
+        '，在 ',
+        h('code', null, 'AGENTS.md'),
+        ' 和 ',
+        h('code', null, 'CLAUDE.md'),
+        ' 末尾加一段接力规矩（你自己写的内容不动），存一张快照。不需要 git，也不碰你的 git。',
+        h('br'),
+        '文件夹：',
+        tildify(p.root)
       )
-    );
-  }
-  if (t.mainAhead && t.phase !== 'working' && t.phase !== 'conflict') {
-    out.push(
-      banner('info', `正式文件夹有 ${t.mainAhead} 个新提交，任务里还没有。合回时会自动合并；担心冲突的话可以先同步。`, btn('同步到任务里', syncMain, 'small', { disabled: off }))
-    );
-  }
-  if (t.review && t.review.weak && (t.phase === 'fresh' || t.phase === 'mergeable')) {
-    out.push(banner('info', `上一段是「${t.review.label}」干的，它的能力标记为「弱」。下一位上岗时会被要求先审查这一段的改动。`));
-  }
-  if (p.configError) out.push(banner('stop', p.configError));
-  return out;
+    ),
+  ];
 }
 
-// —— 让谁上岗 ——
-
-function workersSection(t, st, busyOp) {
-  const workers = st.workers.filter((w) => w.kind !== 'api');
-  if (!workers.length) {
-    return h(
-      'section',
-      { class: 'section' },
-      h('div', { class: 'section-head' }, h('h2', null, '让谁上岗')),
-      banner('info', '还没有能干活的工人。去「设置」添加一个。', btn('去设置', () => setView('settings'), 'small'))
-    );
-  }
-  const shift = t.onShift && t.onShift.kind !== 'op' ? t.onShift : null;
-  const tickets = workers.map((w) => {
-    const here = shift && shift.agent === w.name;
-    const disabled = !!busyOp || (shift && shift.kind === 'cli');
-    return h(
+function taskBlock(p) {
+  const t = p.task;
+  if (t.empty) {
+    const title = h('input', { type: 'text', placeholder: '一句话说清楚要做成什么样', style: 'width:100%', value: S.taskDraft.title, oninput: (e) => (S.taskDraft.title = e.target.value) });
+    const steps = h('textarea', { placeholder: '拆成几步（每行一步；可以不写，让接手的 AI 来拆）', rows: 3, style: 'width:100%', value: S.taskDraft.steps, oninput: (e) => (S.taskDraft.steps = e.target.value) });
+    const save = h(
       'button',
       {
-        type: 'button',
-        class: `ticket${S.pick === w.name ? ' on' : ''}`,
-        style: `--c:${colorOf(w.name)}`,
-        disabled,
-        'aria-expanded': String(S.pick === w.name),
-        onclick: () => {
-          S.pick = S.pick === w.name ? null : w.name;
-          render();
-        },
+        class: 'btn primary',
+        onclick: (e) =>
+          act(
+            e.currentTarget,
+            () =>
+              api('/api/task', {
+                text: title.value,
+                steps: steps.value
+                  .split('\n')
+                  .map((x) => x.trim())
+                  .filter(Boolean),
+              }),
+            '任务写好了'
+          ).then((r) => r && (S.taskDraft = { title: '', steps: '' })),
       },
-      here ? h('span', { class: 'here' }, '在岗') : null,
-      h('span', { class: 'name' }, w.label),
-      h('span', { class: 'meta' }, [w.kind === 'app' ? '桌面' : '终端', w.tier === 'weak' ? '弱' : '强', w.model].filter(Boolean).join(' · ')),
-      w.check && !w.check.ok ? h('span', { class: 'prob' }, w.check.problem) : null
+      '写好了'
     );
-  });
-  const w = workers.find((x) => x.name === S.pick);
-  if (w) tickets.push(launchPanel(w, shift));
-  const api = st.workers.filter((x) => x.kind === 'api');
-  return h(
-    'section',
-    { class: 'section' },
-    h(
-      'div',
-      { class: 'section-head' },
-      h('h2', null, t.phase === 'conflict' ? '让谁来解决冲突' : '让谁上岗'),
-      api.length ? h('span', { class: 'hint' }, `${api.map((a) => a.label).join('、')} 是模型接口：在全自动里干活、审查，或者参加讨论`) : null
-    ),
-    h('div', { class: 'tickets' }, tickets)
-  );
-}
-
-function launchPanel(w, shift) {
-  const here = shift && shift.agent === w.name;
-  const other = shift && !here ? shift : null;
-  const model = keepInput(`model-${w.name}`, h('input', { type: 'text', id: 'pick-model', value: w.model || '', placeholder: '例如 grok-4.6、claude-opus' }));
-  const go = () => startShift(w.name, S.keep[`model-${w.name}`]);
-  model.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.isComposing) go();
-  });
-  return h(
-    'div',
-    { class: 'launch', style: `--c:${colorOf(w.name)}` },
-    h('div', { class: 'field' }, h('label', { for: 'pick-model' }, `这一段 ${w.label} 用的模型（可不填，只做记录）`), model),
-    btn(here ? `再打开 ${w.label}` : w.kind === 'app' ? `用 ${w.label} 打开` : `在终端里启动 ${w.label}`, go, 'primary', { disabled: !!S.acting }),
-    btn('取消', () => ((S.pick = null), render()), 'ghost'),
-    other ? h('p', { class: 'hint', style: 'flex-basis:100%;margin:0' }, `${other.label} 还在岗。先交接，再让 ${w.label} 上岗。`) : null
-  );
-}
-
-async function startShift(name, model, force = false) {
-  if (S.acting) return;
-  S.acting = '安排上岗';
-  render();
-  let r = null;
-  try {
-    r = await post('/api/work', { agent: name, model: model || '', force });
-    S.pick = null;
-  } catch (e) {
-    if (e.code === 'pending' || e.code === 'locked-app') {
-      S.acting = null;
-      offerForce(name, model, e.message);
-      await refresh();
-      return;
+    title.addEventListener('keydown', (e) => e.key === 'Enter' && save.click());
+    return [
+      h('h1', { class: 'task-title' }, '要做什么？'),
+      h('p', { class: 'muted', style: 'margin:6px 0 14px' }, '写下来，每个接手的 AI 都会看到。也可以直接告诉某个 AI，它会写到这里。'),
+      h('div', { class: 'new-task', style: 'display:grid;gap:10px' }, title, steps, h('div', null, save)),
+    ];
+  }
+  const out = [h('h1', { class: 'task-title' }, h('button', { onclick: editTask, title: '改任务' }, t.title))];
+  const rest = t.body.split('\n').slice(1).join('\n').trim();
+  if (rest) out.push(h('p', { class: 'task-body' }, rest.length > 240 ? `${rest.slice(0, 240)}…` : rest));
+  if (t.total) {
+    const next = t.items.find((i) => !i.done);
+    const prog =
+      t.total <= 24
+        ? h(
+            'div',
+            { class: 'cells', 'aria-hidden': 'true' },
+            t.items.map((i) => h('i', { class: i.done ? 'done' : '' }))
+          )
+        : h('div', { class: 'bar' }, h('span', { style: `width:${Math.round((t.done / t.total) * 100)}%` }));
+    const nextText = next ? `下一步：${next.text.length > 30 ? `${next.text.slice(0, 30)}…` : next.text}` : '全部打勾了';
+    out.push(
+      h(
+        'div',
+        { class: 'progress' },
+        prog,
+        h('span', { class: 'num' }, `${t.done} / ${t.total}`),
+        h('button', { class: 'link', 'aria-expanded': S.showChecklist ? 'true' : 'false', onclick: () => ((S.showChecklist = !S.showChecklist), render()) }, S.showChecklist ? '收起清单' : nextText)
+      )
+    );
+    if (S.showChecklist) {
+      let marked = false;
+      out.push(
+        h(
+          'ul',
+          { class: 'checklist' },
+          t.items.map((i) => {
+            const isNext = !i.done && !marked;
+            if (isNext) marked = true;
+            return h('li', { class: i.done ? 'done' : isNext ? 'next' : '' }, i.text);
+          })
+        )
+      );
     }
-    toast(e.message, true);
-  } finally {
-    S.acting = null;
+  } else {
+    out.push(h('p', { class: 'faint', style: 'margin-top:10px' }, '还没拆成步骤。接手的 AI 会先拆好写进清单；你也可以', h('button', { class: 'link', onclick: editTask }, '自己拆'), '。'));
   }
-  await refresh();
-  if (r) showShiftResult(r);
+  if (t.rules && (S.showChecklist || !t.total)) out.push(h('div', { class: 'rules' }, h('b', null, '约定'), h('div', { class: 'doc', html: md(t.rules) })));
+  return out;
 }
 
-function offerForce(name, model, msg) {
-  dialog({
-    title: '上一位还没交接',
-    body: [
-      h('p', null, msg),
-      h('p', { class: 'hint' }, '建议先交接：把它的改动存成检查点、写好审计，下一位接手时看得清楚。也可以强行上岗，交接记录里会注明是强行接替的。'),
-    ],
-    buttons: [{ label: '取消' }, { label: '强行上岗', cls: 'danger', run: () => startShift(name, model, true) }, { label: '先交接', cls: 'primary', run: () => openHandoff() }],
-  });
+async function editTask() {
+  let raw = '';
+  try {
+    raw = (await api(q('/api/task'))).raw;
+  } catch (e) {
+    return toast(e.message, true);
+  }
+  const ta = h('textarea', { class: 'code', value: raw, spellcheck: 'false' });
+  const save = h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, () => api('/api/task/save', { raw: ta.value }), '任务存好了').then((r) => r && closeDialog()) }, '保存');
+  const fresh = h(
+    'button',
+    {
+      class: 'btn',
+      onclick: async () => {
+        const text = await askDialog('换一个新任务', '旧任务会存进 .relay/做完的任务.md。', '一句话说清楚要做成什么样', '换');
+        if (text) await act(null, () => api('/api/task', { text }), '换好了新任务');
+      },
+    },
+    '换一个新任务'
+  );
+  openDialog(
+    '改任务（.relay/任务.md）',
+    h('div', null, h('p', { class: 'faint', style: 'margin:0 0 8px' }, '「进度」里每行一步：- [ ] 没做，- [x] 做完了。「约定」里写所有 AI 都要遵守的。'), ta),
+    [fresh, h('span', { style: 'flex:1' }), h('button', { class: 'btn', onclick: closeDialog }, '算了'), save]
+  );
 }
 
-function showShiftResult(r) {
-  if (r.kind === 'app') {
-    dialog({
-      title: r.reopened ? `又打开了一次 ${r.label}` : `${r.label} 已打开隔离副本`,
-      body: [
-        r.reopened ? h('p', { class: 'hint' }, '还是同一段，不算换人。') : null,
-        h('p', null, r.copied ? '上岗那句话已经复制好了，到它的 AI 对话框里粘贴发送：' : '把这句话发给它的 AI 对话框：'),
-        copybox(r.hint),
-        h('p', { class: 'hint' }, '隔离副本在 ', h('span', { class: 'mono' }, tildify(r.worktree)), '。它停手后，回到这里点「交接」。'),
-        (r.notes || []).map((n) => h('p', { class: 'hint' }, n)),
-      ],
-      buttons: [{ label: '知道了', cls: 'primary' }],
-    });
-    return;
+/** 默认让谁接着做：有待复核就先挑强的（它会先复核）；否则按顺序第一个有额度的。 */
+function defaultWorker(p) {
+  const r = ready();
+  if (!r.length) return null;
+  if (p.pending.length) return r.find((m) => m.tier === 'strong') || r[0];
+  return r[0];
+}
+
+function nowBlock(p) {
+  const box = h('section', { class: 'now', 'aria-label': '现在' });
+  const g = p.go;
+  const running = p.now.kind === 'relay' || p.now.kind === 'waiting' || (g && (g.status === 'running' || g.status === 'waiting'));
+  if (running) {
+    const waiting = p.now.kind === 'waiting' || (g && g.status === 'waiting');
+    const cur = g && g.current;
+    const what = cur ? `${cur.label} 正在${cur.kind === 'review' ? '复核' : cur.kind === 'final' ? '终审' : '干活'}（第 ${cur.stint} 棒，${since(cur.since)}）` : p.now.text;
+    box.append(
+      h('div', { class: 'now-line' }, h('span', { class: `pulse ${waiting ? 'wait' : 'live'}` }), h('span', null, waiting ? g.phase : what)),
+      h(
+        'div',
+        { class: 'row actions' },
+        h('button', { class: 'btn', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '叫停了：正在干活的工具会被结束') }, '停下'),
+        cur ? h('button', { class: 'link', 'aria-expanded': S.showLog ? 'true' : 'false', onclick: () => ((S.showLog = !S.showLog), render()) }, S.showLog ? '收起' : '看它在干什么') : null,
+        g && g.mode === 'auto' ? h('span', { class: 'faint' }, '全自动：额度用完换人，弱模型的棒先请强模型复核') : null
+      )
+    );
+    if (S.showLog && g && g.logTail) {
+      const log = h('pre', { class: 'log' }, g.logTail);
+      box.append(log);
+      requestAnimationFrame(() => (log.scrollTop = log.scrollHeight));
+    }
+    return box;
   }
-  if (r.opened) {
-    toast(`已在「终端」里启动 ${r.label}。它退出后，回来点「交接」。`);
-    return;
+
+  box.append(h('div', { class: 'now-line' }, h('span', { class: `pulse ${p.now.kind === 'native' ? 'live' : 'idle'}` }), h('span', null, p.now.kind === 'native' ? p.now.text : '空闲。')));
+
+  // 上一次调度的结果（看过就收起来）
+  if (g && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && S.dismissed !== g.id) {
+    const cls = g.status === 'done' ? 'done' : g.status === 'failed' ? 'bad' : 'warn';
+    box.append(h('div', { class: `result ${cls}` }, h('span', { class: 'grow' }, g.result), h('button', { class: 'link', onclick: () => ((S.dismissed = g.id), render()) }, '知道了')));
   }
-  dialog({
-    title: `在终端里启动 ${r.label}`,
-    body: [h('p', null, '接力台没能自动打开「终端」。把下面这条命令粘贴到「终端」里运行：'), copybox(r.command), r.error ? h('p', { class: 'hint' }, `原因：${r.error}`) : null],
-    buttons: [{ label: '知道了', cls: 'primary' }],
-  });
+
+  const w = defaultWorker(p);
+  const acts = h('div', { class: 'row actions' });
+  if (w) {
+    const main = h('button', { class: 'btn primary', onclick: (e) => goWith(e.currentTarget, w) }, `让 ${w.label} 接着做`);
+    const more = h('button', { class: 'btn primary', 'aria-label': '换人', title: '换人', 'aria-haspopup': 'true', onclick: (e) => (e.stopPropagation(), whoMenu(e.currentTarget)) }, '▾');
+    acts.append(h('span', { class: 'split' }, main, more));
+  } else {
+    acts.append(h('button', { class: 'btn', 'aria-haspopup': 'true', onclick: (e) => (e.stopPropagation(), whoMenu(e.currentTarget)) }, '换人接着做 ▾'));
+  }
+  acts.append(
+    h(
+      'button',
+      {
+        class: 'btn',
+        disabled: p.task.empty || !ready().length,
+        title: p.task.empty ? '先写下任务' : '一直接力到清单全部打勾：额度用完换人，弱模型的活先请强模型复核，最后强模型终审',
+        onclick: (e) => act(e.currentTarget, () => api('/api/auto', {}), '全自动开始了'),
+      },
+      '全自动做完'
+    )
+  );
+  box.append(acts);
+  if (!ready().length) {
+    const cooling = members().filter((m) => m.canWork && m.cooling);
+    box.append(
+      h(
+        'p',
+        { class: 'aside' },
+        cooling.length
+          ? `能调度的都没额度了：${cooling.map((m) => `${m.label} ${m.coolingText}`).join('、')}。`
+          : '接力台现在调度不了任何 AI（没装、没登录）。你自己在别的工具里接着做也一样，接力台照样记账。'
+      )
+    );
+  }
+  box.append(h('p', { class: 'aside' }, '也可以自己在任何 AI 工具里打开这个文件夹，对它说', h('span', { class: 'kai' }, '「接着做」'), '。', h('button', { class: 'link', onclick: copyHint }, '复制完整的开场白')));
+  return box;
 }
 
 async function copyHint() {
-  try {
-    const r = await post('/api/copy-hint');
-    if (!r.copied) await navigator.clipboard.writeText(r.hint);
-    toast('上岗那句话已复制，粘贴到它的 AI 对话框里。');
-  } catch (e) {
-    toast(e.message, true);
-  }
+  const ok = await copyText(S.st.hint);
+  if (!ok) await api('/api/copy-hint', {}).catch(() => null);
+  toast('复制好了，粘贴给任何 AI 就行');
 }
 
-// —— 交接、合回、放弃、退回 ——
-
-function openHandoff() {
-  const t = S.st && S.st.project.task;
-  if (!t) return;
-  const who = t.onShift ? t.onShift.label : t.lastWorker ? t.lastWorker.label : '';
-  const note = h('textarea', { rows: 3, placeholder: '例如：配色做完了，还差导出测试' });
-  const withModel = S.st.project.config && S.st.project.config.keySet;
-  dialog({
-    title: '交接',
-    body: [
-      h('p', null, `${who ? `${who} 这一段` : '这一段'}会被存成一个检查点（以后可以退回到这里），然后写审计、跑检查。${withModel ? '还会请审计模型写一段阅读面，可能要一两分钟。' : ''}`),
-      t.pending.length
-        ? h('p', { class: 'hint' }, `这次会存下：${t.pending.slice(0, 8).join('、')}${t.pending.length > 8 ? ' …' : ''}`)
-        : h('p', { class: 'hint' }, '这一段没有改动：交接只是让当前工人下岗，好换人。'),
-      h('div', { class: 'field' }, h('label', null, '留给下一位的话（可不填）'), note),
-    ],
-    buttons: [
-      { label: '取消' },
-      {
-        label: '交接',
-        cls: 'primary',
-        keepOpen: true,
-        run: async (d) => {
-          d.busy('正在交接：存检查点 → 写审计 → 跑检查……');
-          try {
-            const r = await post('/api/handoff', { note: note.value });
-            d.replace(handoffResult(r));
-          } catch (e) {
-            d.error(e.message);
-          }
-          refresh();
-        },
-      },
-    ],
-  });
+function goWith(btn, m, kind) {
+  return act(btn, () => api('/api/go', { who: m.name, ...(kind ? { kind } : {}) }), `${m.label} 开始${kind === 'review' ? '复核' : '接着做'}了`);
 }
 
-function facts(rows) {
-  return h(
-    'ul',
-    { class: 'facts' },
-    rows.filter(Boolean).map(([k, v]) => h('li', null, h('span', null, k), h('span', null, v)))
-  );
+function popMenu(anchor, items) {
+  closePops();
+  const menu = h('div', { class: 'menu pop', role: 'menu' }, items);
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.position = 'absolute';
+  menu.style.top = `${window.scrollY + r.bottom + 6}px`;
+  const left = Math.max(12, Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 12));
+  menu.style.left = `${left}px`;
+  const first = menu.querySelector('button:not([disabled])');
+  if (first) first.focus();
 }
 
-/** 检查结果的说法。没配置检查命令时服务端记的是「(未配置)」，不能说成通过。 */
-function gateLine(g) {
-  if (!g) return '没有改动，沿用上一次';
-  if (g.command === '(未配置)') return '没配置检查命令（不检查）';
-  return g.status === 'pass' ? `✅ 通过（${g.command}）` : `❌ 没通过（${g.command}）`;
-}
-
-function handoffResult(r) {
-  return {
-    title: '交接好了',
-    body: [
-      facts([
-        ['谁', r.label],
-        ['改动', r.empty ? '没有改动' : `${r.files} 个文件  +${r.added} −${r.removed}`],
-        ['检查点', h('span', { class: 'mono' }, short(r.checkpoint))],
-        ['检查', gateLine(r.gate)],
-        ['审计', r.audit.status === 'ok' ? '有模型写的阅读面' : `只有事实${r.audit.note ? `（${r.audit.note}）` : ''}`],
-      ]),
-      (r.notes || []).map((n) => h('p', { class: 'hint', style: 'margin-top:10px' }, n)),
-    ],
-    buttons: [{ label: '好', cls: 'primary' }],
-  };
-}
-
-/** 「不许改」的小红标签（项目设置里的保护路径）。 */
-function protectedTag(hits, p) {
-  return hits && hits.includes(p) ? h('span', { class: 'badge bad', style: 'margin-left:8px' }, '不许改') : null;
-}
-
-function miniFiles(changes, hits = []) {
-  if (!changes.length) return null;
-  const rows = changes.slice(0, 8).map((f) => h('li', null, h('div', { class: 'file-row', style: 'cursor:default' }, h('span', { class: `st ${f.status}` }, f.status), h('span', { class: 'path' }, f.path, protectedTag(hits, f.path)), h('span', null))));
-  return h('div', { style: 'margin:12px 0' }, h('ul', { class: 'files' }, rows), changes.length > 8 ? h('p', { class: 'hint' }, `…还有 ${changes.length - 8} 个`) : null);
-}
-
-/** 强制合回前要让人看清的全部拦截原因。 */
-function blockReasons(t) {
-  const out = [];
-  if (t.gate && t.gate.status === 'fail' && t.gate.command !== '(未配置)') out.push(`检查没通过（${t.gate.command}）。`);
-  if (t.protectedHits && t.protectedHits.length) out.push(`改到了不许改的文件：${t.protectedHits.join('、')}。`);
-  if (t.pending.length) out.push(`还有 ${t.pending.length} 个改动没交接，合回时不会带上。`);
-  if (t.onShift && t.onShift.kind === 'app') out.push(`${t.onShift.label} 还在岗，它没交接的改动不会带上。`);
-  return out.length ? out : [t.phaseText];
-}
-
-function openMerge(force) {
-  const t = S.st && S.st.project.task;
-  if (!t) return;
-  const keep = h('input', { type: 'checkbox' });
-  const hits = t.protectedHits || [];
-  const ack = force && hits.length ? h('input', { type: 'checkbox' }) : null;
-  const needAck = h('p', { class: 'form-error', hidden: true }, '先勾选上面那一项：确认你知道改到了不许改的文件。');
-  dialog({
-    title: force ? '仍然合回？' : '合回正式文件夹',
-    body: [
-      h('p', null, `会把这个任务的改动（${t.totals.files} 个文件，+${t.totals.added} −${t.totals.removed}）作为一个提交放进正式文件夹。隔离副本会删掉，接力分支保留备查。`),
-      force ? h('div', { class: 'form-error' }, h('strong', null, '被拦下的原因：'), blockReasons(t).map((r) => h('div', null, `· ${r}`))) : null,
-      miniFiles(t.changes, hits),
-      ack ? h('label', { class: 'checkline' }, ack, `我知道 ${hits.join('、')} 是不许改的文件，仍然要把它合进正式文件夹`) : null,
-      needAck,
-      h('label', { class: 'checkline' }, keep, '把审计报告也留进正式文件夹（.relay/audits/）'),
-    ],
-    buttons: [
-      { label: '取消' },
-      {
-        label: force ? '仍然合回' : '合回',
-        cls: force ? 'danger solid' : 'primary',
-        keepOpen: true,
-        run: async (d) => {
-          if (ack && !ack.checked) {
-            needAck.hidden = false;
-            return;
-          }
-          d.busy('正在合回……');
-          try {
-            const r = await post('/api/merge', { force, keepAudits: keep.checked });
-            d.replace({
-              title: '合回好了',
-              body: [
-                h('p', null, r.commit ? `正式文件夹多了一个提交（${short(r.commit)}），包含 ${r.files.length} 个文件的改动。` : '任务已经收尾。'),
-                (r.notes || []).map((n) => h('p', { class: 'hint' }, n)),
-                h('p', { class: 'hint' }, `接力分支 ${r.branch} 保留备查。`),
-              ],
-            });
-            resetProjectLocal();
-          } catch (e) {
-            d.error(e.message);
-          }
-          refresh();
-        },
-      },
-    ],
-  });
-}
-
-function openAbandon(t) {
-  const onShift = t.onShift && t.onShift.kind === 'app' ? t.onShift : null;
-  dialog({
-    title: '放弃这个任务？',
-    body: [
-      h('p', null, '隔离副本会删掉；里面剩下的东西会先存进接力分支留底，以后还能找回。正式文件夹不会有任何变化。'),
-      onShift ? h('p', { class: 'form-error' }, `${onShift.label} 还在岗，它没交接的改动也会一起存进留底。`) : null,
-    ],
-    buttons: [
-      { label: '取消' },
-      {
-        label: '放弃任务',
-        cls: 'danger solid',
-        keepOpen: true,
-        run: async (d) => {
-          d.busy('正在放弃……');
-          try {
-            await post('/api/abandon', { force: !!onShift || t.phase === 'broken' });
-            d.close();
-            resetProjectLocal();
-            toast('已放弃这个任务。');
-          } catch (e) {
-            d.error(e.message);
-          }
-          refresh();
-        },
-      },
-    ],
-  });
-}
-
-function openRollback(sha, label) {
-  dialog({
-    title: '退回到这里？',
-    body: [
-      h('p', null, `隔离副本里的文件会恢复成「${label}」时的样子。`),
-      h('p', { class: 'hint' }, '之后的交接记录和审计报告都还在，退回本身也会记一笔；还没交接的改动会丢掉。正式文件夹不受影响。'),
-    ],
-    buttons: [
-      { label: '取消' },
-      {
-        label: '退回',
-        cls: 'danger solid',
-        keepOpen: true,
-        run: async (d) => {
-          d.busy('正在退回……');
-          try {
-            await post('/api/rollback', { sha });
-            d.close();
-            S.openStop = null;
-            S.diff = null;
-            toast('已退回。');
-          } catch (e) {
-            d.error(e.message);
-          }
-          refresh();
-        },
-      },
-    ],
-  });
-}
-
-function openRollbackList(t) {
-  const cps = [...t.checkpoints].reverse();
-  let picked = cps[0] ? cps[0].sha : null;
-  const list = h(
-    'div',
-    null,
-    cps.map((c, i) =>
-      h(
-        'label',
-        { class: 'checkline', style: 'padding:6px 0' },
-        h('input', { type: 'radio', name: 'cp', checked: i === 0, onchange: () => (picked = c.sha) }),
-        h('span', { class: 'num' }, fmtTime(c.ts) || '—'),
-        h('span', null, c.who || (c.label === '交接' ? `${c.agent} 交接后` : '任务开始时')),
-        h('span', { class: 'mono muted' }, short(c.sha))
-      )
-    )
-  );
-  dialog({
-    title: '退回到哪一站？',
-    body: [h('p', { class: 'hint' }, '隔离副本会恢复成那时的样子；之后的记录都保留。正式文件夹不受影响。'), list],
-    buttons: [
-      { label: '取消' },
-      {
-        label: '退回',
-        cls: 'danger solid',
-        keepOpen: true,
-        run: async (d) => {
-          if (!picked) return;
-          d.busy('正在退回……');
-          try {
-            await post('/api/rollback', { sha: picked });
-            d.close();
-            toast('已退回。');
-          } catch (e) {
-            d.error(e.message);
-          }
-          refresh();
-        },
-      },
-    ],
-  });
-}
-
-async function takeStray() {
-  await act('收进任务', async () => {
-    const r = await post('/api/take');
-    if (r.taken.length) toast(`已收进任务：${r.taken.join('、')}。记得交接。`);
-    for (const s of r.skipped) toast(`${s.path}：${s.why}`, true);
-  });
-}
-
-async function syncMain() {
-  await act('同步', async () => {
-    const r = await post('/api/sync');
-    if (r.status === 'up-to-date') toast('任务里已经有正式文件夹的全部提交了。');
-    else if (r.status === 'merged') toast('同步好了。');
-    else toast(`有冲突：${r.conflicts.join('、')}。选一个工人来解决。`, true);
-  });
-}
-
-async function abortSync() {
-  await act('撤销同步', async () => {
-    await post('/api/sync', { abort: true });
-    toast('已撤销同步。');
-  });
-}
-
-// —— 详情分页 ——
-
-async function loadDiff(p) {
-  if (S.diff && S.diff.path === p) {
-    S.diff = null;
-    render();
-    return;
-  }
-  S.diff = { path: p, loading: true };
-  render();
-  try {
-    const r = await get('/api/diff', { path: p });
-    if (S.diff && S.diff.path === p) S.diff = { path: p, text: r.diff };
-  } catch (e) {
-    S.diff = { path: p, error: e.message };
-  }
-  render();
-}
-
-/** 不切换开关，重新读一遍已经打开的改动对比。 */
-async function reloadDiff(p) {
-  try {
-    const r = await get('/api/diff', { path: p });
-    if (S.diff && S.diff.path === p) S.diff = { path: p, text: r.diff };
-  } catch (e) {
-    if (S.diff && S.diff.path === p) S.diff = { path: p, error: e.message };
-  }
-  render();
-}
-
-/** 重新读当前文件夹的列表和正在看的文件，不清空界面。 */
-async function refreshFilesQuietly() {
-  const f = S.files;
-  try {
-    const r = await get('/api/files', { side: f.side, sub: f.sub });
-    let preview = f.preview;
-    if (preview && preview.path && !preview.loading) {
-      try {
-        preview = await get('/api/file', { side: f.side, path: preview.path });
-      } catch (e) {
-        preview = { path: preview.path, error: e.message };
-      }
-    }
-    if (S.files.side === f.side && S.files.sub === f.sub) S.files = { ...S.files, list: r.entries, preview };
-  } catch {
-    /* 文件夹可能已经没了（任务合回或放弃），下次刷新会重画 */
-  }
-  render();
-}
-
-/** 任务有了新进展（交接、退回、收进、同步、没交接的改动变了）：打开着的改动对比和文件预览跟着更新。 */
-let taskVer = null;
-function noticeTaskChange(t) {
-  const ver = t ? JSON.stringify([t.branch, t.timeline.length, t.pending]) : null;
-  const changed = taskVer !== null && ver !== taskVer;
-  taskVer = ver;
-  if (!changed || !t) return;
-  if (S.diff && S.diff.path && !S.diff.loading) reloadDiff(S.diff.path);
-  if (S.files && S.files.list && !S.files.loading) refreshFilesQuietly();
-}
-
-async function loadAudit(report) {
-  S.audit = { path: report, loading: true };
-  render();
-  try {
-    const r = await get('/api/audit', { path: report });
-    if (S.audit && S.audit.path === report) S.audit = { path: report, text: r.text };
-  } catch (e) {
-    S.audit = { path: report, error: e.message };
-  }
-  render();
-}
-
-/** 从支线图跳到某份审计报告。 */
-async function showAudit(report) {
-  S.sub = 'audit';
-  await loadAudit(report);
-  const el = document.querySelector('.subtabs');
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-async function loadFiles(side, sub) {
-  S.files = { ...S.files, side, sub, list: null, preview: null, error: null, loading: true };
-  render();
-  try {
-    const r = await get('/api/files', { side, sub });
-    S.files = { ...S.files, list: r.entries, sub: r.sub, loading: false };
-  } catch (e) {
-    S.files = { ...S.files, error: e.message, list: [], loading: false };
-  }
-  render();
-}
-
-async function openFile(name) {
-  const p = S.files.sub ? `${S.files.sub}/${name}` : name;
-  S.files = { ...S.files, preview: { path: p, loading: true } };
-  render();
-  try {
-    const r = await get('/api/file', { side: S.files.side, path: p });
-    S.files = { ...S.files, preview: r };
-  } catch (e) {
-    S.files = { ...S.files, preview: { path: p, error: e.message } };
-  }
-  render();
-}
-
-function changesPanel(t) {
-  if (!t.changes.length && !t.pending.length) return empty('还没有改动。工人干了活、交接之后，这里会列出相对正式文件夹改了哪些文件。');
-  const parts = [];
-  if (t.pending.length) {
-    parts.push(banner('warn', `还没交接的改动（交接后才算数）：${t.pending.slice(0, 10).join('、')}${t.pending.length > 10 ? ' …' : ''}`));
-  }
-  if (t.changes.length) {
-    parts.push(
-      h('p', { class: 'hint', style: 'margin:14px 0 8px' }, `相对正式文件夹：${t.totals.files} 个文件，`, h('span', { class: 'plus num' }, `+${t.totals.added}`), ' ', h('span', { class: 'minus num' }, `−${t.totals.removed}`), '。点文件看具体改了什么。')
-    );
-    parts.push(
-      h(
-        'ul',
-        { class: 'files' },
-        t.changes.map((f) =>
-          h(
-            'li',
-            null,
-            h(
-              'button',
-              { type: 'button', class: `file-row${S.diff && S.diff.path === f.path ? ' on' : ''}`, onclick: () => loadDiff(f.path) },
-              h('span', { class: `st ${f.status}` }, f.status),
-              h('span', { class: 'path', title: f.orig ? `${f.orig} → ${f.path}` : f.path }, f.orig ? `${f.orig} → ${f.path}` : f.path, protectedTag(t.protectedHits, f.path)),
-              h('span', { class: 'num small' }, f.added === null ? h('span', { class: 'muted' }, '二进制') : [h('span', { class: 'plus' }, `+${f.added}`), ' ', h('span', { class: 'minus' }, `−${f.removed}`)])
-            )
-          )
+function whoMenu(anchor) {
+  const items = [];
+  const drive = members().filter((m) => m.canWork);
+  if (drive.length) {
+    items.push(h('div', { class: 'group' }, '接力台替你调度（在后台跑，跑完自动记账）'));
+    for (const m of drive) {
+      items.push(
+        h(
+          'button',
+          { role: 'menuitem', disabled: !!m.cooling, onclick: () => (closePops(), goWith(null, m)) },
+          h('span', { class: 'row', style: 'gap:8px' }, tierEl(m.tier), m.label, m.model ? h('span', { class: 'faint' }, m.model) : null),
+          m.cooling ? h('span', { class: 'sub' }, `额度用完，${m.coolingText}`) : null
         )
-      )
-    );
+      );
+    }
   }
-  if (S.diff) {
-    if (S.diff.loading) parts.push(h('p', { class: 'hint' }, '正在读取……'));
-    else if (S.diff.error) parts.push(h('p', { class: 'form-error' }, S.diff.error));
-    else parts.push(h('div', { class: 'diff', html: diffHtml(S.diff.text || '（没有文字差异，可能是二进制文件）') }));
-  }
-  return h('div', null, parts);
-}
-
-function auditPanel(t) {
-  const reports = t.timeline.filter((i) => i.report).reverse();
-  if (!reports.length) return empty('还没有审计报告。每次交接都会写一份：事实部分由 git 生成，另有可选的模型阅读面。');
-  const current = S.audit ? S.audit.path : null;
-  if (!current) setTimeout(() => loadAudit(reports[0].report), 0);
-  return h(
-    'div',
-    null,
-    h(
-      'div',
-      { class: 'reports' },
-      reports.map((r) => h('button', { type: 'button', class: `chip-btn${current === r.report ? ' on' : ''}`, onclick: () => loadAudit(r.report) }, `${fmtTime(r.ts)} · ${r.who}`))
-    ),
-    !S.audit || S.audit.loading ? h('p', { class: 'hint' }, '正在读取……') : S.audit.error ? h('p', { class: 'form-error' }, S.audit.error) : h('div', { class: 'doc', html: md(S.audit.text) })
-  );
-}
-
-function filesPanel(t) {
-  const f = S.files;
-  if (f.side === 'task' && !t.worktreeExists) f.side = 'main';
-  if (!f.list && !f.error) {
-    if (!f.loading) setTimeout(() => loadFiles(f.side, f.sub), 0);
-    return h('p', { class: 'hint' }, '正在读取……');
-  }
-  const crumbs = [h('button', { type: 'button', onclick: () => loadFiles(f.side, '') }, f.side === 'task' ? '隔离副本' : '正式文件夹')];
-  const parts = f.sub ? f.sub.split('/') : [];
-  parts.forEach((seg, i) => {
-    crumbs.push(' / ', h('button', { type: 'button', onclick: () => loadFiles(f.side, parts.slice(0, i + 1).join('/')) }, seg));
-  });
-  const entries = (f.list || []).map((e) =>
-    h(
-      'li',
-      null,
-      h(
-        'button',
-        {
-          type: 'button',
-          class: `file-row${f.preview && f.preview.path === (f.sub ? `${f.sub}/${e.name}` : e.name) ? ' on' : ''}`,
-          onclick: () => (e.dir ? loadFiles(f.side, f.sub ? `${f.sub}/${e.name}` : e.name) : openFile(e.name)),
-        },
-        h('span', { class: 'ico', 'aria-hidden': 'true' }, e.dir ? '▸' : '·'),
-        h('span', { class: 'path' }, e.name + (e.dir ? '/' : ''))
-      )
-    )
-  );
-  let preview = h('div', { class: 'empty' }, '点左边的文件看内容。');
-  const pv = f.preview;
-  if (pv) {
-    if (pv.loading) preview = h('p', { class: 'hint' }, '正在读取……');
-    else if (pv.error) preview = h('p', { class: 'form-error' }, pv.error);
-    else if (pv.image) preview = h('img', { src: `/api/raw?${new URLSearchParams({ dir: S.dir, side: f.side, path: pv.path })}`, alt: pv.path });
-    else if (pv.binary) preview = h('div', { class: 'empty' }, `这是二进制文件（${Math.round(pv.size / 1024)} KB），这里不显示内容。`);
-    else preview = h('pre', null, pv.text + (pv.truncated ? '\n\n…（文件太长，只显示了开头）' : ''));
-  }
-  return h(
-    'div',
-    null,
-    h(
-      'div',
-      { class: 'browser-bar' },
-      h(
-        'div',
-        { class: 'seg', role: 'group', 'aria-label': '看哪个文件夹' },
-        h('button', { type: 'button', 'aria-pressed': String(f.side === 'task'), disabled: !t.worktreeExists, onclick: () => loadFiles('task', '') }, '隔离副本'),
-        h('button', { type: 'button', 'aria-pressed': String(f.side === 'main'), onclick: () => loadFiles('main', '') }, '正式文件夹')
-      ),
-      h('div', { class: 'crumbs' }, crumbs),
-      h('span', { style: 'flex:1' }),
-      btn('在访达中显示', () => post('/api/reveal', { side: f.side, path: pv && !pv.error ? pv.path : f.sub }).catch((e) => toast(e.message, true)), 'ghost small')
-    ),
-    f.error ? h('p', { class: 'form-error' }, f.error) : null,
-    h('div', { class: 'browser' }, h('ul', { class: 'files entries' }, entries.length ? entries : h('li', null, h('div', { class: 'file-row muted' }, '（空文件夹）'))), h('div', { class: 'preview' }, preview))
-  );
-}
-
-function detailsEl(t) {
-  const tabs = [
-    ['changes', `改动${t.totals.files ? ` · ${t.totals.files}` : ''}`],
-    ['handoff', '交接文档'],
-    ['audit', '审计报告'],
-    ['files', '文件'],
-  ];
-  let panel;
-  if (S.sub === 'changes') panel = changesPanel(t);
-  else if (S.sub === 'handoff')
-    panel = t.handoffDoc ? h('div', { class: 'doc', html: md(t.handoffDoc) }) : empty('还没有交接过。第一次交接后，这里就是给下一位看的交接文档。');
-  else if (S.sub === 'audit') panel = auditPanel(t);
-  else panel = filesPanel(t);
-  return h(
-    'div',
-    null,
-    h(
-      'div',
-      { class: 'subtabs', role: 'tablist' },
-      tabs.map(([id, label]) =>
+  const self = members().filter((m) => m.kind === 'app' || (m.kind === 'harness' && m.agent && m.agent.cmd));
+  if (self.length) {
+    items.push(h('div', { class: 'sep' }), h('div', { class: 'group' }, '你自己在它的窗口里接着做（打开它，开场白已复制）'));
+    for (const m of self) {
+      items.push(
         h(
           'button',
           {
-            type: 'button',
-            role: 'tab',
-            'aria-selected': String(S.sub === id),
-            onclick: () => {
-              S.sub = id;
-              render();
+            role: 'menuitem',
+            onclick: async () => {
+              closePops();
+              const r = await act(null, () => api('/api/open', { who: m.name }));
+              if (r) {
+                if (!r.copied) await copyText(r.hint);
+                toast(`${m.label} 打开了。把开场白粘贴给它就行`);
+              }
             },
           },
-          label
+          h('span', { class: 'row', style: 'gap:8px' }, tierEl(m.tier), m.label, m.kind === 'harness' ? h('span', { class: 'faint' }, '在终端里') : null)
         )
-      )
-    ),
-    h('div', { class: 'subpanel' }, panel)
-  );
-}
-
-function dangerZone(t, autoOn) {
-  return h(
-    'div',
-    { class: 'danger-zone' },
-    t.checkpoints.length > 1 && t.phase !== 'working' && !autoOn ? btn('退回到……', () => openRollbackList(t), 'small') : null,
-    btn('放弃任务……', () => openAbandon(t), 'danger small', { disabled: !!S.acting || !!autoOn, title: autoOn ? '全自动正在跑，先停止它' : '' })
-  );
-}
-
-function viewTask(st) {
-  const p = st.project;
-  const t = p.task;
-  const busyOp = st.busy ? st.busy.op : S.acting;
-  const autoOn = autoRunning(st);
-  return h(
-    'div',
-    { class: 'grid' },
-    h('aside', { class: 'side' }, h('p', { class: 'side-title' }, '支线图'), lineMap(t), dangerZone(t, autoOn)),
-    h(
-      'div',
-      null,
-      // 全自动跑过（或正在跑）时它是主角，放最上面；手动安排的任务先看任务本身，全自动只是一个可选的按钮。
-      st.auto && st.auto.state ? autoPanel(st) : null,
-      boardEl(t, busyOp, autoOn, st.auto && st.auto.state ? st.auto.state.phase : ''),
-      banners(t, p, autoOn),
-      st.auto && st.auto.state ? null : autoPanel(st),
-      t.phase !== 'broken' && t.phase !== 'busy' && !autoOn ? workersSection(t, st, busyOp) : null,
-      t.worktreeExists ? detailsEl(t) : null
-    )
-  );
-}
-
-// ---------- 讨论页 ----------
-
-function talkers() {
-  return S.st.workers.filter((w) => w.canTalk);
-}
-
-function pickedNames() {
-  const names = talkers().map((w) => w.name);
-  if (!S.talkPick) return names;
-  return S.talkPick.filter((n) => names.includes(n));
-}
-
-function renderTalk() {
-  const box = $('view-talk');
-  const st = S.st;
-  const rows = S.talk ? S.talk.rows : null;
-  const status = S.talk ? S.talk.status : null;
-  const wasBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
-  const before = box.__key;
-  mount(
-    box,
-    JSON.stringify(['talk', st.project.root, st.workers.map((w) => [w.name, w.label, w.canTalk, w.model]), pickedNames(), rows ? rows.length : -1, rows && rows.length ? rows[rows.length - 1].ts : '', status, !!st.project.task, S.colors, S.acting]),
-    () => viewTalk(st, rows, status)
-  );
-  if (box.__key !== before && (wasBottom || S.talkStick)) {
-    S.talkStick = false;
-    window.scrollTo(0, document.body.scrollHeight);
-  }
-}
-
-function personRow(w, picked) {
-  const box = h('input', {
-    type: 'checkbox',
-    checked: picked.includes(w.name),
-    onchange: (e) => {
-      const now = pickedNames().filter((n) => n !== w.name);
-      if (e.target.checked) now.push(w.name);
-      const order = talkers().map((x) => x.name);
-      S.talkPick = order.filter((n) => now.includes(n));
-      savePick();
-      render();
-    },
-  });
-  return h(
-    'li',
-    null,
-    h(
-      'label',
-      { class: 'person', style: `--c:${colorOf(w.name)}` },
-      box,
-      h('span', { class: 'n' }, w.label),
-      h('span', { class: 'd' }, [w.kind === 'api' ? '接口' : w.kind === 'app' ? '桌面' : '终端', w.model].filter(Boolean).join(' · '), w.check && !w.check.ok && w.kind === 'api' ? h('span', { style: 'color:var(--warn)' }, ` · ${w.check.problem}`) : null)
-    )
-  );
-}
-
-function msgEl(row, hasTask) {
-  if (row.kind === 'system') return h('div', { class: `msg system${row.error ? ' error' : ''}` }, row.text);
-  const mine = row.kind === 'human';
-  return h(
-    'div',
-    { class: `msg ${mine ? 'human' : 'ai'}`, style: mine ? null : `--c:${colorOf(row.agent)}` },
-    h('div', { class: 'top' }, h('span', { class: 'who' }, row.who), h('span', { class: 'when' }, fmtTime(row.ts))),
-    h('div', { class: 'body' }, h('div', { class: 'text' }, row.text)),
-    !hasTask
-      ? h(
-          'div',
-          { class: 'tools' },
-          link('用这句开始任务', () => {
-            S.keep.task = row.text;
-            setView('task');
-          })
-        )
-      : null
-  );
-}
-
-function viewTalk(st, rows, status) {
-  const people = talkers();
-  const others = st.workers.filter((w) => !w.canTalk);
-  const picked = pickedNames();
-  const hasTask = !!st.project.task;
-  const ta = keepInput('talk', h('textarea', { rows: 2, 'aria-label': '要说的话', placeholder: '写下你的问题或看法……（⌘ Enter 发送）' }));
-  ta.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) {
-      e.preventDefault();
-      sendTalk();
+      );
     }
-  });
-  const label = (n) => (people.find((w) => w.name === n) || { label: n }).label;
-  const thinking = status && status.current
-    ? h(
-        'div',
-        { class: 'msg ai thinking', style: `--c:${colorOf(status.current.agent)}` },
-        h('div', { class: 'top' }, h('span', { class: 'who' }, status.current.label)),
-        h('div', { class: 'body' }, '正在想', h('span', { class: 'dots' }, h('i'), h('i'), h('i')), h('span', { class: 'muted num' }, `  ${since(status.current.since)}`))
-      )
-    : null;
-  const queue = status && status.queue && status.queue.length ? h('p', { class: 'queue' }, `接下来：${status.queue.map((q) => q.label).join('、')}`) : null;
-  return h(
-    'div',
-    { class: 'grid' },
-    h(
-      'aside',
-      { class: 'side' },
-      h('p', { class: 'side-title' }, '请谁发言'),
-      people.length
-        ? h('ul', { class: 'people' }, people.map((w) => personRow(w, picked)))
-        : h('p', { class: 'hint' }, '还没有能参加讨论的 AI。在「设置」里给工人填「讨论命令」（比如 claude -p），或者添加一个 API 模型（比如 DeepSeek）。'),
-      others.length ? h('p', { class: 'hint', style: 'margin-top:14px' }, `${others.map((w) => w.label).join('、')} 没有讨论命令，不参加讨论。`) : null,
-      h('p', { style: 'margin-top:14px' }, link('去设置', () => setView('settings')))
-    ),
-    h(
-      'div',
-      { class: 'talk-main' },
+  }
+  if (!items.length) items.push(h('div', { class: 'group' }, '名单里还没有 AI。去「设置」里重新识别一下。'));
+  popMenu(anchor, items);
+}
+
+function pendingBlock(p) {
+  if (!p.pending.length) return [];
+  const reviewer = ready().find((m) => m.tier === 'strong');
+  const cooling = members().filter((m) => m.tier === 'strong' && m.canWork && m.cooling);
+  const busy = p.now.kind === 'relay' || (p.go && p.go.status === 'running');
+  const out = [h('h2', { class: 'label' }, '待复核', h('span', { class: 'count' }, `${p.pending.length} 棒`))];
+  const list = h('div', { class: 'pending' });
+  for (const s of p.pending) {
+    list.append(
       h(
         'div',
-        { class: 'talk-head' },
-        h('div', null, h('h1', null, '讨论'), h('p', null, '选几个 AI，问一句，它们按顺序发言，每个都看得到前面所有人说的话。只说话，不改文件。')),
-        rows && rows.length ? btn('清空讨论', clearTalk, 'ghost small', { disabled: !!(status && status.current) }) : null
-      ),
-      h(
-        'div',
-        { class: 'transcript' },
-        rows === null ? h('p', { class: 'hint' }, '正在读取……') : rows.length ? rows.map((r) => msgEl(r, hasTask)) : empty('还没有人说话。在下面写下你的问题，比如「这个滤镜的色调怎么定比较好？」'),
-        thinking,
-        queue
-      ),
-      h(
-        'div',
-        { class: 'composer' },
+        { class: 'pend' },
+        seal('pending', '待核', `p${s.id}`),
         h(
           'div',
-          { class: 'composer-box' },
-          ta,
+          { class: 'grow' },
+          h('div', { class: 'who' }, `第 ${s.id} 棒 · ${s.who.label}`, tierEl(s.who.tier)),
+          h('p', { class: 'what kai' }, s.summary || (s.ghost ? '它没留交接' : '（没写做了什么）')),
           h(
             'div',
-            { class: 'composer-foot' },
-            h('span', { class: 'hint' }, picked.length ? `会请 ${picked.map(label).join('、')} 依次回答` : '左边先选要请谁发言'),
-            btn('发送', sendTalk, 'primary', { disabled: !picked.length || !!S.acting })
+            { class: 'row' },
+            h('span', { class: 'faint' }, [factsText(s), s.gate ? (s.gate.status === 'pass' ? '检查通过' : '检查没过') : '', fmtTime(s.endedAt)].filter(Boolean).join(' · ')),
+            h('span', { style: 'flex:1' }),
+            h('button', { class: 'btn small quiet', onclick: () => showDiff(s) }, '看改动'),
+            h('button', { class: 'btn small quiet', title: '比如其实是你自己改的', onclick: (e) => act(e.currentTarget, () => api('/api/mark', { stint: s.id }), `第 ${s.id} 棒标成不用复核了`) }, '不用复核')
           )
         )
       )
+    );
+  }
+  out.push(list);
+  const foot = h('div', { class: 'row', style: 'margin-top:12px' });
+  if (reviewer && !busy) foot.append(h('button', { class: 'btn seal-btn', onclick: (e) => goWith(e.currentTarget, reviewer, 'review') }, `请 ${reviewer.label} 复核`));
+  foot.append(
+    h(
+      'span',
+      { class: 'faint', style: 'flex:1;min-width:200px' },
+      reviewer
+        ? '复核：对照它的交接看真实改动，错的直接修好，再盖章。'
+        : cooling.length
+          ? `强模型都没额度了（${cooling.map((m) => `${m.label} ${m.coolingText}`).join('、')}）。到时候再请它复核；你自己打开强模型说「接着做」，它也会先复核。`
+          : '名单里没有能调度的强模型。自己打开一个强模型说「接着做」，它会先复核。'
     )
   );
+  out.push(foot);
+  return out;
 }
 
-async function sendTalk() {
-  const text = String(S.keep.talk || '').trim();
-  if (!text) return;
-  const ask = pickedNames();
-  if (!ask.length) {
-    toast('先在左边选要请谁发言。', true);
-    return;
+function factsText(s) {
+  const f = s.facts;
+  if (!f) return '';
+  return f.files ? `改了 ${f.files} 个文件 +${f.added} −${f.removed}` : '没改文件';
+}
+
+function sealFor(s) {
+  if (s.rolledBack) return seal('void', '作废', `v${s.id}`);
+  if (s.kind === 'final') return seal('final', '终审', `f${s.id}`);
+  if (s.status === 'working') return null;
+  if (s.review === 'needed') return seal('pending', '待核', `p${s.id}`);
+  if (s.review === 'done') return seal('', '已核', `d${s.id}`);
+  return null;
+}
+
+function logBlock(p) {
+  const list = p.stints;
+  if (!list.length) return [h('h2', { class: 'label' }, '接力记录'), h('p', { class: 'empty' }, '还没有人接过棒。上面派一个 AI，或者自己在别的工具里开始做。')];
+  const shown = S.showAll ? list : list.slice(0, 8);
+  const ol = h('ol', { class: 'log-list' });
+  for (const s of shown) ol.append(entry(s, p));
+  const out = [h('h2', { class: 'label' }, '接力记录', h('span', { class: 'count' }, `${list.length} 棒`)), ol];
+  if (list.length > shown.length) out.push(h('button', { class: 'link more', onclick: () => ((S.showAll = true), render()) }, `更早的 ${list.length - shown.length} 棒`));
+  if (p.lastRollback) {
+    const r = p.lastRollback;
+    out.push(
+      h(
+        'p',
+        { class: 'faint', style: 'margin-top:14px' },
+        `${fmtTime(r.ts)} 退回到了「${r.label}」，第 ${r.dropped.join('、')} 棒作废了。`,
+        r.undone ? null : h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/rollback/undo', {}), '撤销了：那几棒的改动回来了') }, '撤销这次退回')
+      )
+    );
   }
+  return out;
+}
+
+function entry(s, p) {
+  const isOpen = S.open.has(s.id);
+  const live = s.status === 'working';
+  const kind = s.kind === 'review' ? '复核' : s.kind === 'final' ? '终审' : '';
+  const badges = [];
+  if (s.status === 'quota') badges.push(h('span', { class: 'badge quota' }, '额度用完'));
+  if (s.status === 'failed') badges.push(h('span', { class: 'badge bad' }, '出错了'));
+  if (s.status === 'unfinished') badges.push(h('span', { class: 'badge quota' }, '没留交接'));
+  if (s.status === 'stopped') badges.push(h('span', { class: 'badge quota' }, '叫停了'));
+  if (s.gate && s.gate.status === 'fail') badges.push(h('span', { class: 'badge bad' }, '检查没过'));
+  if (s.protectedHits) badges.push(h('span', { class: 'badge bad' }, '改到了不许改的文件'));
+  const last = s.reviews.length ? s.reviews[s.reviews.length - 1] : null;
+  const li = h(
+    'li',
+    { class: `entry${s.rolledBack ? ' void' : ''}${live ? ' open-now' : ''}` },
+    h('div', { class: 'no' }, String(s.id), h('small', null, '棒')),
+    h(
+      'div',
+      null,
+      h(
+        'div',
+        { class: 'head' },
+        h('button', { class: 'name', 'aria-expanded': isOpen ? 'true' : 'false', title: isOpen ? '收起' : '看交接、改动、复核', onclick: () => toggle(s.id) }, s.who.label),
+        tierEl(s.who.tier),
+        kind ? h('span', { class: 'kind-tag' }, kind) : null,
+        live ? h('span', { class: 'badge ok' }, '进行中') : null,
+        badges
+      ),
+      s.summary || s.note ? h('p', { class: 'said kai' }, s.summary || s.note) : null,
+      h(
+        'div',
+        { class: 'meta' },
+        h('span', null, fmtTime(s.endedAt || s.startedAt)),
+        s.facts ? h('span', null, factsText(s)) : null,
+        h('span', null, s.via === 'relay' ? '接力台调度' : '自己在工具里做'),
+        s.review === 'done' && last ? h('span', null, `${last.byLabel} 复核：${last.verdictWord}`) : null
+      )
+    ),
+    h('div', { class: 'stamp' }, sealFor(s))
+  );
+  if (isOpen) li.append(detailBox(s, p));
+  return li;
+}
+
+function toggle(id) {
+  if (S.open.has(id)) S.open.delete(id);
+  else {
+    S.open.add(id);
+    loadDetail(id);
+  }
+  render();
+}
+
+async function loadDetail(id) {
   try {
-    await post('/api/talk/say', { text, ask });
-    S.keep.talk = '';
-    S.talkStick = true;
-    await loadTalk();
+    const d = await api(q(`/api/stint?id=${id}`));
+    S.detail.set(id, d);
+    render();
   } catch (e) {
     toast(e.message, true);
   }
 }
 
-function clearTalk() {
-  dialog({
-    title: '清空讨论？',
-    body: [h('p', null, '现在的讨论记录会改名存档（留在项目的 .relay 文件夹里），页面上从头开始。')],
-    buttons: [
-      { label: '取消' },
-      {
-        label: '清空',
-        cls: 'danger solid',
-        run: async () => {
-          try {
-            await post('/api/talk/clear');
-            await loadTalk();
-            refresh();
-          } catch (e) {
-            toast(e.message, true);
-          }
-        },
-      },
-    ],
-  });
-}
-
-// ---------- 设置页 ----------
-
-const WF = ['name', 'label', 'kind', 'cmd', 'mode', 'tier', 'model', 'effort', 'harness', 'ask', 'apiBase', 'apiModel', 'apiKey', 'apiFormat', 'note'];
-
-/** 认得的编程工具（绑定后能全自动）。和 core/harness.ts 的 HARNESSES 对应。 */
-const HARNESS_OPTIONS = [
-  ['', '不绑定（只能手动在终端里用）'],
-  ['claude', 'Claude Code'],
-  ['codex', 'Codex'],
-  ['cursor-agent', 'Cursor Agent'],
-  ['zcode', 'ZCode 命令行'],
-  ['agy', 'Antigravity'],
-  ['gemini', 'Gemini CLI'],
-  ['qwen', 'Qwen Code'],
-  ['opencode', 'OpenCode'],
-  ['droid', 'Factory Droid'],
-  ['copilot', 'GitHub Copilot CLI'],
-  ['grok', 'Grok CLI'],
-];
-
-function fillWorkerForm(a) {
-  const v = {
-    name: a.name || '',
-    label: a.label || '',
-    kind: a.kind || 'cli',
-    cmd: a.cmd || '',
-    mode: (a.prompt && a.prompt.mode) || 'file',
-    tier: a.tier || 'strong',
-    model: a.model || '',
-    effort: a.effort || '',
-    harness: a.harness || '',
-    ask: a.ask || '',
-    apiBase: (a.api && a.api.baseUrl) || '',
-    apiModel: (a.api && a.api.model) || '',
-    apiKey: (a.api && a.api.apiKeyEnv) || '',
-    apiFormat: (a.api && a.api.format) || 'openai',
-    note: a.note || '',
-  };
-  for (const k of WF) S.keep[`wf-${k}`] = v[k];
-}
-
-/** 表单上没有的字段（自动识别的标记、用户同意过的密钥来源）原样带回去，保存时不会丢。 */
-function workerFromForm() {
-  const g = (k) => String(S.keep[`wf-${k}`] ?? '').trim();
-  const base = (S.workerForm && S.workerForm.base) || {};
-  const kind = g('kind') || 'cli';
-  const a = { name: g('name'), label: g('label'), kind, tier: g('tier') || 'strong', model: kind === 'api' ? g('apiModel') : g('model'), note: g('note') };
-  if (kind === 'api') {
-    a.api = { baseUrl: g('apiBase'), model: g('apiModel'), apiKeyEnv: g('apiKey') };
-    if (g('apiFormat') === 'anthropic') a.api.format = 'anthropic';
-    if (base.api && base.api.keyFrom) a.api.keyFrom = base.api.keyFrom;
-    if (base.detected) a.detected = true;
-  } else {
-    a.cmd = g('cmd');
-    a.prompt = { mode: g('mode') || 'file' };
-    a.ask = g('ask');
-    if (kind === 'cli') {
-      if (g('harness')) a.harness = g('harness');
-      if (g('effort')) a.effort = g('effort');
-    }
-    // 自动识别加的条目：命令没改才保留标记（改过就是你的了，识别不会再覆盖它）。
-    if (base.detected && a.cmd === (base.cmd || '')) a.detected = true;
+function detailBox(s, p) {
+  const d = S.detail.get(s.id);
+  const box = h('div', { class: 'detail' });
+  if (!d) {
+    box.append(h('p', { class: 'faint' }, '读取中…'));
+    return box;
   }
-  return a;
-}
-
-function newWorker() {
-  S.workerForm = { mode: 'new', original: null, error: null, preset: '', base: {} };
-  fillWorkerForm({ kind: 'cli', tier: 'strong', prompt: { mode: 'file' } });
-  render();
-}
-
-function editWorker(w) {
-  S.workerForm = { mode: 'edit', original: w.name, error: null, base: w };
-  fillWorkerForm(w);
-  render();
-}
-
-async function saveWorker() {
-  const f = S.workerForm;
-  if (!f) return;
-  try {
-    await post('/api/workers/save', { agent: workerFromForm(), originalName: f.mode === 'edit' ? f.original : undefined });
-    S.workerForm = null;
-    toast('工人已保存。');
-    await refresh();
-    loadDoctor();
-  } catch (e) {
-    S.workerForm = { ...f, error: e.message };
-    render();
+  if (d.handoff) box.append(h('h5', null, s.ghost ? '接力台代写的交接' : '它自己写的交接'), h('div', { class: `doc${s.ghost ? '' : ' handwritten'}`, html: md(d.handoff) }));
+  else box.append(h('h5', null, '交接'), h('p', { class: 'faint' }, s.status === 'working' ? '还没写交接。' : '没有交接。'));
+  if (s.who.claimed) box.append(h('p', { class: 'faint' }, `它自己写的身份：${s.who.claimed}`));
+  for (const r of d.reviews) box.append(h('h5', null, '复核'), h('div', { class: 'doc handwritten', html: md(r.text) }));
+  if (s.facts && s.facts.paths.length) {
+    box.append(
+      h('h5', null, `改了哪些文件（${s.facts.files}）`),
+      h(
+        'ul',
+        { class: 'files' },
+        s.facts.paths.slice(0, 60).map((f) => h('li', null, h('button', { onclick: () => showDiff(s, f) }, f)))
+      )
+    );
   }
-}
-
-function deleteWorker(w) {
-  dialog({
-    title: `删除工人「${w.label}」？`,
-    body: [h('p', null, '只是从名单里拿掉，已经记下的交接记录不受影响。')],
-    buttons: [
-      { label: '取消' },
-      {
-        label: '删除',
-        cls: 'danger solid',
-        run: async () => {
-          try {
-            await post('/api/workers/delete', { name: w.name });
-            toast('已删除。');
-          } catch (e) {
-            toast(e.message, true);
-          }
-          refresh();
-        },
-      },
-    ],
-  });
-}
-
-function field(label, input, hint) {
-  return h('div', { class: 'field' }, h('label', null, label), input, hint ? h('div', { class: 'hint' }, hint) : null);
-}
-
-function segCtl(keepId, options, onchange) {
-  const cur = S.keep[keepId];
-  return h(
-    'div',
-    { class: 'seg', role: 'group' },
-    options.map(([v, text]) =>
+  if (s.gate) box.append(h('h5', null, '检查'), h('p', { class: 'faint' }, `${s.gate.status === 'pass' ? '通过' : '没通过'}：${s.gate.command}`), s.gate.detail ? h('pre', { class: 'log' }, s.gate.detail) : null);
+  if (s.note && s.summary) box.append(h('h5', null, '接力台的说明'), h('p', { class: 'faint' }, s.note));
+  const acts = h('div', { class: 'row', style: 'margin-top:14px' });
+  if (s.facts && s.facts.files) acts.append(h('button', { class: 'btn small', onclick: () => showDiff(s) }, '看全部改动'));
+  if (s.log) acts.append(h('button', { class: 'btn small quiet', onclick: () => showLog(s) }, '看运行日志'));
+  if (!s.rolledBack && s.status !== 'working') {
+    acts.append(
       h(
         'button',
         {
-          type: 'button',
-          'aria-pressed': String(cur === v),
-          onclick: () => {
-            S.keep[keepId] = v;
-            if (onchange) onchange(v);
-            render();
+          class: 'btn small danger',
+          disabled: p.now.kind === 'relay',
+          onclick: async (e) => {
+            const btn = e.currentTarget;
+            const ok = await confirmDialog(
+              `退回到第 ${s.id} 棒之前？`,
+              `整个文件夹恢复成第 ${s.id} 棒开始前的样子，第 ${s.id} 棒和之后的改动作废（账上还留着）。退回前会先存一张快照，退错了可以撤销。`,
+              '退回',
+              true
+            );
+            if (ok) act(btn, () => api('/api/rollback', { stint: s.id }), (r) => `退回好了：${r.files} 个文件恢复了`);
           },
         },
-        text
+        '退回到这一棒之前'
       )
-    )
-  );
+    );
+  }
+  box.append(acts);
+  return box;
 }
 
-function workerFormEl(st) {
-  const f = S.workerForm;
-  const kind = S.keep['wf-kind'] || 'cli';
-  const presets = (st.presets || []);
-  const input = (k, props = {}) => keepInput(`wf-${k}`, h('input', { type: 'text', ...props }));
-  const presetSel =
-    f.mode === 'new' && presets.length
-      ? field(
-          '从现成的开始',
-          h(
-            'select',
-            {
-              onchange: (e) => {
-                const p = presets.find((x) => x.id === e.target.value);
-                f.preset = e.target.value;
-                if (p) fillWorkerForm(p.agent);
-                render();
-              },
-            },
-            h('option', { value: '' }, '（选一个，或者自己填）'),
-            presets.map((p) => h('option', { value: p.id, selected: f.preset === p.id }, p.title))
-          ),
-          f.preset ? (presets.find((x) => x.id === f.preset) || {}).hint : '常用的 AI 工具都有现成配置，选了再按需要改。'
-        )
-      : null;
-  return h(
-    'div',
-    { class: 'worker-form' },
-    h('h3', null, f.mode === 'new' ? '添加工人' : `修改「${f.original}」`),
-    f.error ? h('p', { class: 'form-error' }, f.error) : null,
-    presetSel,
-    field('类型', segCtl('wf-kind', [['cli', '终端工具'], ['app', '桌面 App'], ['api', '模型接口（API）']])),
-    h(
-      'div',
-      { class: 'two' },
-      field('名字（英文）', input('name', { class: 'mono-input', placeholder: '如 claude、cursor' }), '命令行里用它：relay run 名字'),
-      field('显示名', input('label', { placeholder: '如 Claude Code' }))
-    ),
-    kind !== 'api'
-      ? field(
-          '启动命令',
-          input('cmd', { class: 'mono-input', placeholder: kind === 'app' ? 'open -a Cursor {{worktree}}' : 'claude' }),
-          kind === 'app' ? '要含 {{worktree}}，接力台会换成隔离副本的路径。macOS 上一般写 open -a "App 的名字" {{worktree}}。' : '在隔离副本里执行的命令。'
-        )
-      : null,
-    kind === 'cli'
-      ? h(
-          'div',
-          { class: 'two' },
-          field(
-            '全自动时用哪个编程工具',
-            keepInput('wf-harness', h('select', null, HARNESS_OPTIONS.map(([v, t]) => h('option', { value: v }, t)))),
-            '绑定后，全自动就用这个工具的无人值守模式干活、审查。自动识别会替你选好。'
-          ),
-          field('思考强度（可不填）', input('effort', { class: 'mono-input', placeholder: '如 low / medium / high' }), '全自动时要求的思考强度，比如 Codex 的 low 最省时间。')
-        )
-      : null,
-    kind === 'cli'
-      ? field(
-          '手动上岗时，那句话怎么给它',
-          keepInput(
-            'wf-mode',
-            h(
-              'select',
-              null,
-              h('option', { value: 'arg' }, '当参数传给它（claude、codex 都支持）'),
-              h('option', { value: 'stdin' }, '从标准输入喂给它'),
-              h('option', { value: 'file' }, '不喂，在终端里提示我转告')
-            )
-          )
-        )
-      : null,
-    kind === 'api'
-      ? [
-          field('接口地址', input('apiBase', { class: 'mono-input', placeholder: 'https://api.deepseek.com' })),
-          h(
-            'div',
-            { class: 'two' },
-            field('模型', input('apiModel', { class: 'mono-input', placeholder: 'deepseek-v4-pro' })),
-            field('接口协议', keepInput('wf-apiFormat', h('select', null, h('option', { value: 'openai' }, 'OpenAI 兼容（/chat/completions）'), h('option', { value: 'anthropic' }, 'Anthropic 兼容（/v1/messages）'))))
-          ),
-          f.base && f.base.api && f.base.api.keyFrom
-            ? h('p', { class: 'hint' }, `密钥：用 ${f.base.api.keyFrom.split(':')[0] === 'mimocode' ? 'MiMo 桌面版' : f.base.api.keyFrom.split(':')[0]} 配置里保存的（你同意过），调用时才读，不存到接力台。`)
-            : [
-                field('密钥的环境变量名', input('apiKey', { class: 'mono-input', placeholder: 'DEEPSEEK_API_KEY' }), '本机服务（127.0.0.1）可以不填。'),
-                h('p', { class: 'hint', style: 'margin-top:-6px' }, '密钥不写在这里。在「终端」里执行 echo \'export 变量名=你的密钥\' >> ~/.zshrc，然后重新打开接力台。'),
-              ],
-          h('p', { class: 'hint' }, '接口模型能审查、讨论，也能在全自动里用接力台内置的小代理干活（排在编程工具后面兜底）。'),
-        ]
-      : null,
-    h(
-      'div',
-      { class: 'two' },
-      field('能力', segCtl('wf-tier', [['strong', '强'], ['weak', '弱']]), '前任是「弱」时，下一位上岗必须先审查它的改动。'),
-      kind === 'cli'
-        ? field('模型（可不填）', input('model', { class: 'mono-input', placeholder: '如 gpt-6-astra' }), '全自动时指定给工具；不填就用工具自己的默认模型。')
-        : kind === 'app'
-          ? field('正在用的模型（只做记录）', input('model', { placeholder: '如 GLM-5.3' }))
-          : h('span')
-    ),
-    kind !== 'api'
-      ? field(
-          '讨论命令（可不填）',
-          input('ask', { class: 'mono-input', placeholder: kind === 'cli' ? 'claude -p --tools Read,Grep,Glob' : '' }),
-          '绑定了编程工具的不用填（讨论时自动用它的只读模式）。填了就用这条命令：接力台把题目从标准输入喂给它，读它打印的回答；含 {{out}} 时改为从这个临时文件读回答。'
-        )
-      : null,
-    field('备注', input('note', { placeholder: '可不填' })),
-    h('div', { class: 'row' }, btn('保存', saveWorker, 'primary'), btn('取消', () => ((S.workerForm = null), render()), 'ghost'))
-  );
+async function showDiff(s, file) {
+  try {
+    const d = await api(q(`/api/diff?id=${s.id}${file ? `&path=${encodeURIComponent(file)}` : ''}`));
+    openDialog(file ? `第 ${s.id} 棒 · ${file}` : `第 ${s.id} 棒改了什么`, h('div', { class: 'diff', html: diffHtml(d.diff || '（没有改动）') }), [h('button', { class: 'btn', onclick: closeDialog }, '关上')]);
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
-function workersCard(st) {
-  const rows = st.workers.map((w) =>
-    h(
-      'div',
-      { class: 'worker-row', style: `--c:${colorOf(w.name)}` },
-      h('span', { class: 'bar-c' }),
+async function showLog(s) {
+  try {
+    const d = await api(q(`/api/log?path=${encodeURIComponent(s.log)}`));
+    openDialog(`第 ${s.id} 棒的运行日志`, h('pre', { class: 'log', style: 'max-height:62vh' }, d.text || '（空的）'), [h('button', { class: 'btn', onclick: closeDialog }, '关上')]);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function footBlock(p) {
+  const bits = [];
+  if (p.protocol !== 'ok') {
+    bits.push(
       h(
         'div',
-        null,
-        h('div', { class: 'n' }, w.label, h('span', { class: 'mono muted small' }, `  ${w.name}`)),
-        h('div', { class: 'd' }, [w.kind === 'api' ? '模型接口' : w.kind === 'app' ? '桌面 App（手动）' : '终端工具', w.tier === 'weak' ? '弱' : '强', w.model, w.effort ? `思考 ${w.effort}` : null, w.canTalk ? '能讨论' : null].filter(Boolean).join(' · ')),
-        h('div', { class: 'd mono' }, w.kind === 'api' ? (w.api ? w.api.baseUrl : '') : w.cmd),
-        w.auto
+        { class: 'result warn', style: 'margin-top:26px' },
+        h('span', { class: 'grow' }, p.protocol === 'old' ? 'AGENTS.md / CLAUDE.md 里的接力规矩是旧版的。' : 'AGENTS.md / CLAUDE.md 里的接力规矩不见了：AI 开工时就不会先读接力本。'),
+        h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '规矩更新好了') }, p.protocol === 'old' ? '更新' : '补上')
+      )
+    );
+  }
+  if (S.st.watchError) bits.push(h('p', { class: 'faint' }, `盯文件夹出了点问题（${S.st.watchError}），接力台每分钟会自己对一次账。`));
+  bits.push(
+    h(
+      'p',
+      { class: 'faint', style: 'margin-top:26px' },
+      h('button', { class: 'link', onclick: showBrief }, '看接力本'),
+      '（AI 开工先读的那份） · ',
+      h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/snap', {}), (r) => (r.changed ? '记好了' : '没有新变化')) }, '现在对一次账')
+    )
+  );
+  return h('div', null, bits);
+}
+
+async function showBrief() {
+  try {
+    const d = await api(q('/api/brief'));
+    openDialog('接力本（.relay/接力本.md）', h('div', { class: 'doc', html: md(d.text || '（还没有）') }), [h('button', { class: 'btn', onclick: closeDialog }, '关上')]);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// ---------- 群聊 ----------
+
+async function loadTalk() {
+  if (!S.dir) return;
+  try {
+    S.talk = await api(q('/api/talk'));
+    if (S.view === 'talk' && !busyTyping()) renderTalk();
+  } catch (e) {
+    if (!(e instanceof TypeError)) toast(e.message, true);
+  }
+}
+
+function talkers() {
+  return members().filter((m) => m.canTalk);
+}
+
+const MODE_HINT = {
+  turn: '一个接一个说，后面的看得到前面的。',
+  solo: '同时问，互相看不到别人的回答：弱模型不会跟着强模型的思路走。',
+  vote: '方案匿名、打乱顺序；一个 AI 一票，不分强弱，不能投自己。你也可以投一票；采纳的写进任务的约定。',
+};
+
+function renderTalk() {
+  const el = $('view-talk');
+  if (!S.st) return;
+  const people = talkers();
+  if (S.talkAsk === null) S.talkAsk = new Set(people.filter((m) => !m.cooling).map((m) => m.name));
+  const bar = h(
+    'div',
+    { class: 'talk-bar' },
+    h(
+      'div',
+      { class: 'people', role: 'group', 'aria-label': '谁参加' },
+      people.map((m) =>
+        h(
+          'button',
+          {
+            class: 'person',
+            'aria-pressed': S.talkAsk.has(m.name) ? 'true' : 'false',
+            title: m.cooling ? `额度用完，${m.coolingText}` : m.model || '',
+            onclick: () => {
+              if (S.talkAsk.has(m.name)) S.talkAsk.delete(m.name);
+              else S.talkAsk.add(m.name);
+              renderTalk();
+            },
+          },
+          tierEl(m.tier),
+          m.label
+        )
+      )
+    ),
+    h(
+      'div',
+      { class: 'seg', role: 'group', 'aria-label': '怎么说' },
+      [
+        ['turn', '轮流说'],
+        ['solo', '各自先想'],
+        ['vote', '投票'],
+      ].map(([k, label]) => h('button', { 'aria-pressed': S.talkMode === k ? 'true' : 'false', onclick: () => ((S.talkMode = k), renderTalk()) }, label))
+    )
+  );
+
+  const stream = h('div', { class: 'stream' });
+  for (const item of streamItems()) stream.append(item);
+  const st = S.talk.status;
+  if (st.speaking.length || st.queue.length) {
+    stream.append(
+      h('p', { class: 'speaking' }, h('span', { class: 'pulse' }), `${st.speaking.map((x) => x.label).join('、') || '有人'} 正在想…${st.queue.length ? `（排队：${st.queue.map((x) => x.label).join('、')}）` : ''}`)
+    );
+  }
+  if (!stream.children.length) {
+    stream.append(h('p', { class: 'empty' }, people.length ? '还没人说话。问一个问题，听听几个 AI 各自怎么想。' : '还没有能参加群聊的 AI。去「设置」里重新识别一下。'));
+  }
+  el.replaceChildren(bar, h('p', { class: 'faint', style: 'margin:10px 0 0' }, MODE_HINT[S.talkMode]), stream, composer());
+}
+
+/** 记录和投票按时间排好；「各自先想」的同一轮并排放（它们互相没看见）。 */
+function streamItems() {
+  const rows = S.talk.rows || [];
+  const votes = S.talk.votes || [];
+  const items = [];
+  const rounds = new Map();
+  for (const r of rows) {
+    if (r.round) {
+      let g = rounds.get(r.round);
+      if (!g) {
+        g = { ts: r.ts, kind: 'round', rows: [] };
+        rounds.set(r.round, g);
+        items.push(g);
+      }
+      g.rows.push(r);
+    } else items.push({ ts: r.ts, kind: 'row', row: r });
+  }
+  for (const v of votes) items.push({ ts: v.ts, kind: 'vote', vote: v });
+  items.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+  return items.slice(-60).map((it) => (it.kind === 'row' ? msg(it.row) : it.kind === 'round' ? roundBox(it.rows) : voteCard(it.vote)));
+}
+
+function msg(r) {
+  const cls = r.kind === 'human' ? 'msg me' : r.kind === 'system' ? 'msg sys' : 'msg';
+  const [name, model] = String(r.who).split(' · ');
+  return h(
+    'div',
+    { class: cls },
+    h('div', { class: 'from' }, h('b', null, name), model ? h('span', { class: 'faint' }, model) : null, h('span', { class: 'faint' }, fmtTime(r.ts))),
+    h('div', { class: 'text' }, r.text)
+  );
+}
+
+function roundBox(rows) {
+  return h('div', { class: 'round' }, h('div', { class: 'faint' }, `各自先想 · ${rows.length} 位，互相没看见`), h('div', { class: 'cols' }, rows.map(msg)));
+}
+
+function voteCard(v) {
+  const box = h('div', { class: 'vote' });
+  box.append(h('h4', null, `投票：${v.question}`));
+  if (v.status === 'proposing') {
+    box.append(h('p', { class: 'speaking' }, h('span', { class: 'pulse' }), `${v.voters.length} 位 AI 在各自出方案…`));
+    return box;
+  }
+  if (v.error) box.append(h('p', { class: 'result bad' }, v.error));
+  const done = v.status === 'done';
+  const leaders = new Set(v.leaders || []);
+  const counts = v.counts || {};
+  const mine = (v.ballots || []).find((b) => b.voter === 'human');
+  const opts = h('div', { class: 'options' });
+  for (const o of v.options) {
+    const n = counts[o.key] || 0;
+    opts.append(
+      h(
+        'div',
+        { class: `option${done && leaders.has(o.key) && n ? ' lead' : ''}` },
+        h('div', { class: 'key' }, o.key),
+        h('div', { class: 'body' }, o.text),
+        h('div', { class: 'tally', title: `${n} 票` }, done || n ? zheng(n) : '', h('small', null, done || n ? `${n} 票` : '')),
+        h('div', { class: 'by' }, done ? `${o.authorLabel} 出的` : '投完揭晓是谁出的'),
+        done
           ? h(
               'div',
-              { class: 'd' },
-              `全自动：${[w.auto.work ? '能干活' : null, w.auto.review ? '能审查' : null].filter(Boolean).join('、') || '不能用'}${w.auto.model ? ` · 模型 ${w.auto.model}` : ''}${w.effort ? ` · 思考 ${w.effort}` : ''}${w.auto.why ? `（${w.auto.why}）` : ''}`
+              { class: 'acts row' },
+              mine && mine.choice === o.key
+                ? h('span', { class: 'faint' }, '你投了它')
+                : h('button', { class: 'btn small', onclick: (e) => act(e.currentTarget, () => api('/api/vote/cast', { id: v.id, key: o.key }), `你投了方案 ${o.key}`).then(loadTalk) }, '我也投它'),
+              v.adopted ? null : h('button', { class: 'btn small seal-btn', onclick: (e) => act(e.currentTarget, () => api('/api/vote/adopt', { id: v.id, key: o.key }), '采纳了：写进了任务的约定').then(loadTalk) }, '采纳')
             )
-          : null,
-        w.check && !w.check.ok ? h('div', { class: 'prob' }, `⚠ ${w.check.problem}`) : null
-      ),
-      h('div', { class: 'row' }, btn('修改', () => editWorker(w), 'small'), btn('删除', () => deleteWorker(w), 'ghost small'))
-    )
-  );
-  return h(
-    'section',
-    { class: 'card' },
-    h('h2', null, '工人'),
-    h('p', { class: 'lead' }, '能轮流干活的 AI 工具。名单是全局的，所有项目共用。'),
-    rows.length ? rows : h('p', { class: 'hint' }, '还没有工人。'),
-    S.workerForm ? workerFormEl(st) : h('div', { style: 'margin-top:14px' }, btn('添加工人', newWorker, 'primary'))
-  );
-}
-
-function projectCard(st) {
-  const p = st.project;
-  if (!p.hasConfig || !p.config) {
-    return h('section', { class: 'card' }, h('h2', null, '这个项目'), h('p', { class: 'lead' }, p.configError || '当前文件夹还不是接力项目。到「任务」页设一下。'));
+          : null
+      )
+    );
   }
-  if (S.cfgRoot !== p.root) {
-    S.cfgRoot = p.root;
-    S.keep['cfg-gate'] = p.config.gate.command;
-    S.keep['cfg-protected'] = p.config.protectedPaths.join('\n');
-    S.keep['cfg-base'] = p.config.audit.baseUrl;
-    S.keep['cfg-model'] = p.config.audit.model;
-    S.keep['cfg-key'] = p.config.audit.apiKeyEnv;
-  }
-  const save = () =>
-    act('保存设置', async () => {
-      await post('/api/config/save', {
-        config: {
-          gate: { command: S.keep['cfg-gate'] || '' },
-          protectedPaths: String(S.keep['cfg-protected'] || '').split('\n').map((x) => x.trim()).filter(Boolean),
-          audit: { baseUrl: S.keep['cfg-base'] || '', model: S.keep['cfg-model'] || '', apiKeyEnv: S.keep['cfg-key'] || '' },
-        },
-      });
-      S.cfgRoot = null;
-      toast('项目设置已保存，马上生效（存在 .relay/config.json，会随下一次合回或开始任务一起提交）。');
-      loadDoctor();
-    });
-  return h(
-    'section',
-    { class: 'card' },
-    h('h2', null, `这个项目：${p.name}`),
-    h('p', { class: 'lead' }, '只对当前项目生效，存在项目的 .relay/config.json 里。'),
-    field('检查命令（可不填）', keepInput('cfg-gate', h('input', { type: 'text', class: 'mono-input', placeholder: '如 npm test' })), '每次交接都会在隔离副本里跑一遍；没通过就不让合回。不填就不检查。'),
-    field('不许改的文件（每行一个，可不填）', keepInput('cfg-protected', h('textarea', { rows: 3, class: 'mono-input', placeholder: '如 .env\nconfig/\n**/*.key' })), '工人改到这些文件会标红，合回时拒绝。支持 * 和 **。'),
-    h('p', { class: 'eyebrow', style: 'margin:22px 0 10px' }, '审计模型（可不填）'),
-    h('p', { class: 'hint', style: 'margin:-4px 0 12px' }, '交接时请一个便宜模型读一遍改动，写「改了什么、有什么风险、下一步」。它说的只是参考，事实以 git 为准。'),
-    field('接口地址', keepInput('cfg-base', h('input', { type: 'text', class: 'mono-input', placeholder: 'https://api.deepseek.com' }))),
-    h(
-      'div',
-      { class: 'two' },
-      field('模型', keepInput('cfg-model', h('input', { type: 'text', class: 'mono-input', placeholder: 'deepseek-chat' }))),
-      field('密钥的环境变量名', keepInput('cfg-key', h('input', { type: 'text', class: 'mono-input', placeholder: 'DEEPSEEK_API_KEY' })))
-    ),
-    h('p', { class: 'hint' }, p.config.keySet ? `✓ 环境变量 ${p.config.audit.apiKeyEnv} 已设置。` : `⚠ 环境变量 ${p.config.audit.apiKeyEnv || '（没填）'} 没有设置：交接照常，只是没有模型写的阅读面。`),
-    h('div', { class: 'row', style: 'margin-top:14px' }, btn('保存设置', save, 'primary', { disabled: !!S.acting }))
-  );
-}
-
-/** 状态灯：ok 绿、no 红、其余黄。 */
-function stateDot(state) {
-  const cls = state === 'ok' ? 'ok' : state === 'no' ? 'bad' : 'warn';
-  return h('span', { class: `sdot ${cls}`, 'aria-hidden': 'true' });
-}
-
-function loadDetect() {
-  S.detect = { loading: false, report: null, changes: [], loaded: false };
-  get('/api/detect')
-    .then((r) => {
-      S.detect = { ...S.detect, report: r.report, loaded: true };
-      render();
-    })
-    .catch(() => undefined);
-}
-
-async function runDetect() {
-  S.detect = { ...(S.detect || {}), loading: true };
-  render();
-  await act('识别', async () => {
-    try {
-      const r = await post('/api/detect');
-      S.detect = { loading: false, report: r.report, changes: r.changes, loaded: true };
-      toast(r.changes.length ? `识别完成。工人名单有 ${r.changes.length} 处变化。` : '识别完成，工人名单不用改。');
-    } finally {
-      if (S.detect) S.detect.loading = false;
-    }
-  });
-}
-
-function toolCard(x) {
-  const tested = x.tested === 'yes' ? ['ok', '实测过'] : x.tested === 'partial' ? ['warn', '部分实测'] : ['plain', '没实测'];
-  return h(
-    'div',
-    { class: `tool is-${x.login.state}` },
-    h('div', { class: 'tool-top' }, stateDot(x.login.state), h('strong', null, x.label), h('span', { class: `badge ${tested[0]}` }, tested[1])),
-    h('div', { class: 'tool-model' }, h('span', { class: 'mchip' }, x.model.label || x.model.model || '工具默认模型'), x.model.effort ? h('span', { class: 'muted small' }, `思考 ${x.model.effort}`) : null),
-    h('div', { class: 'tool-meta' }, x.login.detail, h('span', { class: 'muted' }, ` · 版本 ${x.version}`)),
-    x.model.via ? h('div', { class: 'tool-note' }, `经 ${x.model.via}`) : null,
-    x.login.state === 'no' ? h('div', { class: 'tool-note warn-text' }, x.loginHint) : null,
-    x.note ? h('div', { class: 'tool-note' }, x.note) : null,
-    !x.workLevels.includes('safe') ? h('div', { class: 'tool-note' }, '只能在「完全放开」档干活') : null
-  );
-}
-
-function providerCard(p, enabled) {
-  const on = p.needsConsent ? enabled : p.state === 'ok';
-  return h(
-    'div',
-    { class: `tool is-${on ? 'ok' : p.state}` },
-    h('div', { class: 'tool-top' }, stateDot(on ? 'ok' : p.state), h('strong', null, p.label)),
-    h('div', { class: 'tool-model' }, h('span', { class: 'mchip' }, p.model || '—')),
-    h('div', { class: 'tool-meta mono small' }, p.baseUrl),
-    h('div', { class: 'tool-note' }, p.needsConsent && enabled ? '已同意使用' : p.detail),
-    p.needsConsent && !enabled
-      ? h(
-          'div',
-          { style: 'margin-top:10px' },
-          btn(
-            '同意使用',
-            () =>
-              act('启用接口', async () => {
-                await post('/api/detect/use', { id: p.id });
-                toast(`已启用 ${p.label}。`);
-              }),
-            'primary small'
+  box.append(opts);
+  const aiBallots = (v.ballots || []).filter((b) => b.voter !== 'human');
+  if (!done) box.append(h('p', { class: 'speaking', style: 'margin-top:10px' }, h('span', { class: 'pulse' }), `在投票：${aiBallots.length} / ${v.voters.length}`));
+  if (done && v.leaders && v.leaders.length > 1) box.append(h('p', { class: 'result warn' }, `平票：方案 ${v.leaders.join('、')}。你来定，点「采纳」。`));
+  if (v.adopted) box.append(h('p', { class: 'adopted' }, `采纳了方案 ${v.adopted.key}，写进了任务的约定，之后接力的每一棒都会看到。`));
+  const ballots = (v.ballots || []).filter((b) => b.voter !== 'human' || b.choice);
+  if (done && ballots.length) {
+    const d = h('details', { class: 'ballots' }, h('summary', { class: 'link' }, '每一票和理由'));
+    d.append(
+      h(
+        'ul',
+        null,
+        ballots.map((b) =>
+          h(
+            'li',
+            null,
+            h('b', null, b.voterLabel),
+            b.tier ? [' ', tierEl(b.tier)] : null,
+            '：',
+            b.choice ? `投 ${b.choice}` : `弃权（${b.void || ''}）`,
+            b.reason ? h('span', { class: 'kai' }, ` —— ${b.reason}`) : null
           )
         )
-      : null
-  );
-}
-
-function detectCard(st) {
-  const d = S.detect || {};
-  const r = d.report;
-  const enabled = (p) => st.workers.some((w) => w.api && w.api.keyFrom && w.api.keyFrom === p.keyFrom);
-  const kids = [
-    h('div', { class: 'section-head' }, h('h2', null, '自动识别'), btn(d.loading ? '识别中……（十几秒）' : r ? '重新识别' : '开始识别', runDetect, 'primary small', { disabled: !!S.acting || d.loading })),
-    h('p', { class: 'lead' }, '找出这台电脑上的 AI 编程工具和配好的模型接口：登没登录、默认用什么模型，都自动看；能用的自动加进工人名单。'),
-  ];
-  if (!r) {
-    kids.push(h('p', { class: 'hint' }, d.loaded ? '还没识别过。点「开始识别」。' : '正在读取……'));
-    return h('section', { class: 'card' }, ...kids);
+      )
+    );
+    box.append(d);
   }
-  if (d.changes && d.changes.length) kids.push(h('ul', { class: 'checks changes' }, d.changes.map((c) => h('li', null, h('span', { class: 'ok' }, '✓'), h('span', null, c)))));
-  kids.push(h('h3', { class: 'sub-h' }, '编程工具', h('span', { class: 'muted small' }, ' · 能自己改文件，全自动的主力')));
-  kids.push(
-    r.harnesses.length
-      ? h('div', { class: 'tools' }, r.harnesses.map(toolCard))
-      : h('p', { class: 'hint' }, '一个都没找到。装好并登录 Claude Code / Codex / Cursor Agent 之一，再识别一次。')
-  );
-  kids.push(h('h3', { class: 'sub-h' }, '模型接口', h('span', { class: 'muted small' }, ' · 能审查、讨论，也能用内置小代理干活')));
-  kids.push(r.providers.length ? h('div', { class: 'tools' }, r.providers.map((p) => providerCard(p, enabled(p)))) : h('p', { class: 'hint' }, '没找到配置好的密钥。'));
-  if (r.unknownKeys.length) kids.push(h('p', { class: 'hint' }, `还有不认识的密钥：${r.unknownKeys.join('、')}（不知道接口地址，没用上；可以在下面「工人」里手动加成接口工人）。`));
-  if (r.apps.length) {
-    kids.push(h('h3', { class: 'sub-h' }, '桌面 App', h('span', { class: 'muted small' }, ' · 只能手动用')));
-    kids.push(h('div', { class: 'app-chips' }, r.apps.map((a) => h('span', { class: 'app-chip', title: a.hint }, a.name))));
-  }
-  kids.push(h('p', { class: 'hint', style: 'margin-top:14px' }, `上次识别：${fmtTime(r.at)}`));
-  return h('section', { class: 'card' }, ...kids);
+  return box;
 }
 
-function autoSettingsCard(st) {
-  const t = st.team;
-  const s = t.settings;
-  const sig = JSON.stringify(s);
-  if (S.autoCfg !== sig) {
-    S.autoCfg = sig;
-    S.keep['as-workers'] = s.workers.join(', ');
-    S.keep['as-reviewers'] = s.reviewers.join(', ');
-    S.keep['as-rounds'] = String(s.maxRounds);
-    S.keep['as-merge'] = s.autoMerge;
-    S.keep['as-level'] = s.level;
-    S.keep['as-wt'] = String(s.workTimeoutMin);
-    S.keep['as-rt'] = String(s.reviewTimeoutMin);
-  }
-  const merge = h('input', { type: 'checkbox', checked: !!S.keep['as-merge'] });
-  merge.addEventListener('change', () => (S.keep['as-merge'] = merge.checked));
-  const level = keepInput('as-level', h('select', null, h('option', { value: 'safe' }, '安全档：只改隔离副本，命令在工具自己的沙箱里跑'), h('option', { value: 'full' }, '完全放开：工具不再拦任何操作（风险自负）')));
-  const save = () =>
-    act('保存全自动设置', async () => {
-      await post('/api/auto/settings', {
-        settings: {
-          workers: S.keep['as-workers'] || '',
-          reviewers: S.keep['as-reviewers'] || '',
-          maxRounds: Number(S.keep['as-rounds'] || 3),
-          autoMerge: !!S.keep['as-merge'],
-          level: S.keep['as-level'] || 'safe',
-          workTimeoutMin: Number(S.keep['as-wt'] || 60),
-          reviewTimeoutMin: Number(S.keep['as-rt'] || 20),
-        },
-      });
-      S.autoCfg = null;
-      toast('全自动设置已保存。');
-    });
-  const names = t.members.map((m) =>
-    h(
-      'span',
-      { class: `lchip name-chip${m.work || m.review ? '' : ' off'}`, style: `--c:${colorOf(m.name)}`, title: m.why || '' },
-      h('i', { 'aria-hidden': 'true' }),
-      h('code', null, m.name),
-      h('small', null, [m.label, m.model].filter(Boolean).join(' · ')),
-      h('small', { class: 'roles' }, [m.work ? '干活' : null, m.review ? '审查' : null].filter(Boolean).join('/') || '不能用')
-    )
-  );
-  return h(
-    'section',
-    { class: 'card' },
-    h('h2', null, '全自动设置'),
-    h('p', { class: 'lead' }, '全机通用，所有项目都按这个安排。'),
-    h('div', { class: 'team-box' }, teamLine(t, false)),
-    field('干活的人（按优先级，逗号分隔；空 = 自动排）', keepInput('as-workers', h('input', { type: 'text', class: 'mono-input', placeholder: '例如 codex, claude' })), '第一位是主力；它做不出东西（出错、没登录、额度用完）才换下一位。'),
-    field('审查的人（按优先级；空 = 自动排）', keepInput('as-reviewers', h('input', { type: 'text', class: 'mono-input', placeholder: '例如 cursor-agent, deepseek' })), '每一轮会挑一个和干活的人不同的来审。'),
-    h('div', { class: 'field' }, h('span', { class: 'label' }, '可以填的名字'), names.length ? h('div', { class: 'name-chips' }, names) : h('p', { class: 'hint' }, '（还没有，先识别）')),
-    h(
-      'div',
-      { class: 'two' },
-      field('最多改几轮', keepInput('as-rounds', h('input', { type: 'number', min: 1, max: 10, class: 'mono-input' }))),
-      field('权限档位', level)
-    ),
-    h(
-      'div',
-      { class: 'two' },
-      field('干活一段最长（分钟）', keepInput('as-wt', h('input', { type: 'number', min: 1, max: 600, class: 'mono-input' }))),
-      field('审查一次最长（分钟）', keepInput('as-rt', h('input', { type: 'number', min: 1, max: 120, class: 'mono-input' })))
-    ),
-    h('label', { class: 'check-line' }, merge, ' 审查通过后自动合回正式文件夹'),
-    ...(t.problems || []).map((pr) => h('p', { class: 'hint warn-text' }, `⚠ ${pr}`)),
-    h('div', { class: 'row', style: 'margin-top:14px' }, btn('保存', save, 'primary', { disabled: !!S.acting }))
-  );
-}
-
-function doctorCard() {
-  const d = S.doctor;
-  const icon = { ok: '✓', warn: '⚠', bad: '✗' };
-  return h(
-    'section',
-    { class: 'card' },
-    h('div', { class: 'section-head' }, h('h2', null, '环境检查'), btn(d && d.loading ? '检查中……' : '重新检查', loadDoctor, 'ghost small', { disabled: !!(d && d.loading) })),
-    h('p', { class: 'lead' }, '这台电脑、工人的命令、当前项目能不能用。'),
-    d && d.lines.length ? h('ul', { class: 'checks' }, d.lines.map((l) => h('li', null, h('span', { class: l.level }, icon[l.level]), h('span', null, l.text)))) : h('p', { class: 'hint' }, '正在检查……')
-  );
-}
-
-function quitRelay() {
-  const running = autoRunning(S.st);
-  dialog({
-    title: '关闭接力台？',
-    body: [
-      h('p', null, '关闭后这个网页就连不上了。在桌面双击「接力台」就能重新打开。'),
-      running ? h('p', { class: 'form-error' }, '现在有全自动在跑：关闭会让它停下，重新打开后点「继续全自动」就能接着做。') : null,
-    ],
-    buttons: [
-      { label: '取消' },
+function composer() {
+  const people = [...(S.talkAsk || [])];
+  if (S.talkMode === 'vote') {
+    const qn = h('input', { type: 'text', placeholder: '要大家拿主意的问题，比如：导出用什么格式？', value: S.voteDraft.question, oninput: (e) => (S.voteDraft.question = e.target.value) });
+    const opts = h('textarea', { rows: 3, placeholder: '选项（每行一个）。不写就请每个 AI 先各自出一个方案。', value: S.voteDraft.options, oninput: (e) => (S.voteDraft.options = e.target.value) });
+    const start = h(
+      'button',
       {
-        label: '关闭',
-        cls: 'danger solid',
-        keepOpen: true,
-        run: async (d) => {
-          d.busy('正在关闭……');
-          try {
-            await post('/api/quit');
-            d.replace({ title: '接力台已关闭', body: [h('p', null, '在桌面双击「接力台」就能重新打开。这个网页可以关掉了。')], buttons: [{ label: '好', cls: 'primary' }] });
-          } catch (e) {
-            d.error(e.message);
+        class: 'btn seal-btn',
+        disabled: people.length < 2,
+        onclick: async (e) => {
+          const options = opts.value
+            .split('\n')
+            .map((x) => x.trim())
+            .filter(Boolean);
+          const r = await act(e.currentTarget, () => api('/api/vote/start', { question: qn.value, voters: people, options }), '开始投票了');
+          if (r) {
+            S.voteDraft = { question: '', options: '' };
+            await loadTalk();
           }
         },
       },
-    ],
+      '开始投票'
+    );
+    return h('div', { class: 'composer' }, qn, opts, h('div', { class: 'row' }, h('span', { class: 'faint' }, people.length < 2 ? '至少选两个 AI 来投票' : `${people.length} 位投票`), start));
+  }
+  const ta = h('textarea', {
+    placeholder: S.talkMode === 'solo' ? '问一个问题，大家各自独立回答（⌘Enter 发出）' : '说点什么（⌘Enter 发出）',
+    value: S.draft,
+    oninput: (e) => (S.draft = e.target.value),
   });
+  const send = h(
+    'button',
+    {
+      class: 'btn primary',
+      disabled: !people.length,
+      onclick: async (e) => {
+        const text = ta.value.trim();
+        if (!text) return;
+        const r = await act(e.currentTarget, () => api('/api/talk/say', { text, ask: people, mode: S.talkMode }));
+        if (r) {
+          S.draft = '';
+          ta.value = '';
+          await loadTalk();
+        }
+      },
+    },
+    S.talkMode === 'solo' ? '各自先想' : '说'
+  );
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send.click();
+  });
+  const clear = h(
+    'button',
+    {
+      class: 'btn small quiet',
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        if (!(await confirmDialog('清空群聊？', '旧记录会改名存档（talk-时间.jsonl），不会删掉。', '清空'))) return;
+        await act(btn, () => api('/api/talk/clear', {}), '清空了，旧记录存了档');
+        await loadTalk();
+      },
+    },
+    '清空'
+  );
+  return h('div', { class: 'composer' }, ta, h('div', { class: 'row' }, clear, h('span', { class: 'faint' }, people.length ? `${people.length} 位会回答` : '先在上面选谁参加'), send));
 }
 
+// ---------- 设置 ----------
+
 function renderSettings() {
+  const el = $('view-settings');
   const st = S.st;
-  if (!S.presets) {
-    S.presets = [];
-    get('/api/presets')
-      .then((r) => {
-        S.presets = r.presets;
-        render();
-      })
-      .catch(() => undefined);
-  }
-  if (!S.doctor) loadDoctor();
-  if (!S.detect) loadDetect();
-  const box = $('view-settings');
-  const view = { ...st, presets: S.presets };
-  mount(
-    box,
-    JSON.stringify(['settings', st.workers, st.project.root, st.project.config, st.project.configError, S.workerForm, S.workerForm ? S.keep['wf-kind'] : null, S.workerForm ? S.keep['wf-tier'] : null, S.doctor, S.acting, S.presets.length, S.colors, S.detect, st.team]),
-    () =>
+  const p = st.project;
+  const s = st.settings;
+  const blocks = [];
+
+  blocks.push(h('h2', { class: 'label', style: 'margin-top:0' }, '成员', h('span', { class: 'count' }, st.detectedAt ? `上次识别 ${fmtTime(st.detectedAt)}` : '')));
+  blocks.push(h('p', { class: 'faint', style: 'margin:-4px 0 10px' }, '强弱看的是模型，不是工具：Claude Code 接的是 DeepSeek，它就算弱。弱模型做的棒要等强模型复核。派活按这个顺序，额度用完的跳过。'));
+  const list = h('div', { class: 'members' });
+  const all = members();
+  const drivable = all.filter((m) => m.canWork).map((m) => m.name);
+  for (const m of all) {
+    const state = m.cooling ? `额度用完，${m.coolingText}` : m.canWork ? '接力台能调度' : m.why || '';
+    const idx = drivable.indexOf(m.name);
+    list.append(
       h(
         'div',
-        { class: 'settings' },
-        detectCard(st),
-        autoSettingsCard(st),
-        workersCard(view),
-        projectCard(st),
-        doctorCard(),
+        { class: 'member' },
         h(
           'div',
-          { class: 'quit-line' },
-          h('span', { class: 'hint' }, `接力台 ${st.version} 在后台运行：关掉浏览器它也不停，全自动会接着跑。命令行也能用：relay --help`),
-          btn('关闭接力台…', quitRelay, 'ghost small')
+          { class: 'who' },
+          h('b', null, m.label),
+          m.model ? h('span', { class: 'faint' }, m.model) : null,
+          m.kind === 'app' ? h('span', { class: 'kind-tag' }, '桌面程序') : m.kind === 'api' ? h('span', { class: 'kind-tag' }, '接口') : null
+        ),
+        h('div', { class: `state${m.cooling ? ' cooling' : ''}` }, state, m.tierSet ? ' · 强弱是你定的' : ''),
+        h(
+          'div',
+          { class: 'ctl' },
+          h(
+            'div',
+            { class: 'seg', role: 'group', 'aria-label': `${m.label} 强还是弱` },
+            ['strong', 'weak'].map((t) =>
+              h(
+                'button',
+                { 'aria-pressed': m.tier === t ? 'true' : 'false', onclick: (e) => act(e.currentTarget, () => api('/api/members/tier', { name: m.name, tier: t }), `${m.label} 定成${t === 'strong' ? '强' : '弱'}了`) },
+                t === 'strong' ? '强' : '弱'
+              )
+            )
+          ),
+          m.tierSet ? h('button', { class: 'order-btn', title: '改回按模型名自动判断', onclick: (e) => act(e.currentTarget, () => api('/api/members/tier', { name: m.name, tier: 'auto' }), '改回自动判断了') }, '自动') : null,
+          idx >= 0 ? h('button', { class: 'order-btn', title: '往前排', 'aria-label': `${m.label} 往前排`, disabled: idx === 0, onclick: () => move(m.name, -1) }, '↑') : null,
+          idx >= 0 ? h('button', { class: 'order-btn', title: '往后排', 'aria-label': `${m.label} 往后排`, disabled: idx === drivable.length - 1, onclick: () => move(m.name, 1) }, '↓') : null,
+          m.detected ? null : h('button', { class: 'order-btn', title: '从名单里去掉', onclick: (e) => removeMember(e.currentTarget, m) }, '去掉')
         )
       )
+    );
+  }
+  if (!all.length) list.append(h('p', { class: 'empty' }, '名单是空的。点「重新识别」，接力台会找出这台电脑上的 AI 工具和配好的接口。'));
+  blocks.push(list);
+  blocks.push(
+    h(
+      'div',
+      { class: 'row', style: 'margin-top:12px' },
+      h('button', { class: 'btn', disabled: st.detecting, onclick: (e) => act(e.currentTarget, () => api('/api/detect', {}), (r) => (r.changes.length ? r.changes.join(' ') : '识别好了，名单不用改')) }, st.detecting ? '正在识别…' : '重新识别'),
+      h('button', { class: 'btn quiet', onclick: addApiDialog }, '添加一个接口模型'),
+      h('button', { class: 'btn quiet', onclick: addAppDialog }, '添加一个桌面程序')
+    )
+  );
+  blocks.push(consentBlock());
+
+  if (p.init) {
+    blocks.push(h('h2', { class: 'label' }, '这个项目'));
+    const gate = h('input', { type: 'text', value: p.config.gate, placeholder: '比如 npm test（不填就不检查）', style: 'width:100%' });
+    const prot = h('textarea', { rows: 3, value: p.config.protectedPaths.join('\n'), placeholder: '每行一个，比如 .env、config/prod.json、secrets/', style: 'width:100%' });
+    blocks.push(
+      h('label', { class: 'field' }, h('span', null, '检查命令'), gate, h('small', null, '每一棒结束后跑一遍（测试、构建……）。没通过会写进记录，复核时会看。')),
+      h('label', { class: 'field' }, h('span', null, '不许改的文件'), prot, h('small', null, '改到了会在记录里标红。')),
+      h(
+        'div',
+        { class: 'row', style: 'margin-top:12px' },
+        h(
+          'button',
+          {
+            class: 'btn primary',
+            onclick: (e) =>
+              act(
+                e.currentTarget,
+                () =>
+                  api('/api/config/save', {
+                    config: {
+                      gate: { command: gate.value.trim() },
+                      protectedPaths: prot.value
+                        .split('\n')
+                        .map((x) => x.trim())
+                        .filter(Boolean),
+                    },
+                  }),
+                '存好了'
+              ),
+          },
+          '保存'
+        ),
+        h('span', { class: 'faint' }, tildify(p.root))
+      ),
+      h(
+        'p',
+        { class: 'faint', style: 'margin-top:12px' },
+        `接力规矩（AGENTS.md / CLAUDE.md）：${p.protocol === 'ok' ? '是最新的' : p.protocol === 'old' ? '是旧版的' : '不见了'}。`,
+        p.protocol === 'ok' ? null : h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '规矩更新好了') }, '更新')
+      )
+    );
+  }
+
+  blocks.push(h('h2', { class: 'label' }, '接力台调度'));
+  const level = h(
+    'select',
+    { style: 'width:100%' },
+    h('option', { value: 'safe', selected: s.level === 'safe' ? 'selected' : null }, '安全档：只能改项目文件夹，命令在工具自己的沙箱里跑'),
+    h('option', { value: 'full', selected: s.level === 'full' ? 'selected' : null }, '完全放开：工具不再拦任何操作（能装依赖、联网，风险自负）')
+  );
+  const stint = h('input', { type: 'number', min: 1, max: 600, value: s.stintTimeoutMin, style: 'width:84px' });
+  const review = h('input', { type: 'number', min: 1, max: 240, value: s.reviewTimeoutMin, style: 'width:84px' });
+  const max = h('input', { type: 'number', min: 1, max: 100, value: s.maxStints, style: 'width:84px' });
+  const wait = h('input', { type: 'checkbox', checked: s.waitForQuota });
+  const final = h('input', { type: 'checkbox', checked: s.finalReview });
+  blocks.push(
+    h('label', { class: 'field' }, h('span', null, '权限'), level),
+    h('div', { class: 'row', style: 'margin-top:14px;gap:10px 22px' }, h('label', { class: 'row', style: 'gap:8px' }, '一棒最长', stint, '分钟'), h('label', { class: 'row', style: 'gap:8px' }, '复核最长', review, '分钟'), h('label', { class: 'row', style: 'gap:8px' }, '全自动最多', max, '棒')),
+    h('label', { class: 'check' }, wait, h('span', null, '所有人都没额度时，等最早恢复的那一位（不等就停下交给你）')),
+    h('label', { class: 'check' }, final, h('span', null, '清单全部打勾后，请强模型把整件事从头到尾过一遍（终审）再算完成')),
+    h(
+      'div',
+      { style: 'margin-top:14px' },
+      h(
+        'button',
+        {
+          class: 'btn primary',
+          onclick: (e) =>
+            act(
+              e.currentTarget,
+              () =>
+                api('/api/settings', {
+                  settings: { ...s, level: level.value, stintTimeoutMin: Number(stint.value), reviewTimeoutMin: Number(review.value), maxStints: Number(max.value), waitForQuota: wait.checked, finalReview: final.checked },
+                }),
+              '存好了'
+            ),
+        },
+        '保存'
+      )
+    )
+  );
+
+  blocks.push(
+    h(
+      'div',
+      { class: 'danger-zone row' },
+      h('span', { class: 'faint', style: 'flex:1;min-width:220px' }, `接力台 ${st.version}。关掉之后就不记账了；桌面上双击「接力台」能重新打开。`),
+      h(
+        'button',
+        {
+          class: 'btn danger',
+          onclick: async (e) => {
+            const btn = e.currentTarget;
+            if (!(await confirmDialog('关闭接力台？', '正在调度的活会先停下。之后在桌面双击「接力台」就能重新打开。', '关闭', true))) return;
+            await act(btn, () => api('/api/quit', {}), '接力台关了');
+            setTimeout(() => setOffline(true), 600);
+          },
+        },
+        '关闭接力台'
+      )
+    )
+  );
+  el.replaceChildren(...blocks);
+}
+
+let consentCache = null;
+function consentBlock() {
+  const box = h('div');
+  const fill = (want) => {
+    if (!want.length) return;
+    box.append(
+      h('p', { class: 'faint', style: 'margin-top:14px' }, '这些接口的密钥存在别的工具里，要你同意才会用（只在调用时读进内存，不复制）：'),
+      ...want.map((p) =>
+        h('div', { class: 'row', style: 'margin-top:6px' }, h('span', null, `${p.label}${p.model ? ` · ${p.model}` : ''}`), h('button', { class: 'btn small', onclick: (e) => act(e.currentTarget, () => api('/api/detect/use', { id: p.id }), '同意了，加进了名单').then(() => (consentCache = null)) }, '同意使用'))
+      )
+    );
+  };
+  if (consentCache) fill(consentCache);
+  else
+    api('/api/detect')
+      .then((d) => {
+        const used = new Set(members().map((m) => m.agent && m.agent.api && m.agent.api.keyFrom).filter(Boolean));
+        consentCache = ((d.report && d.report.providers) || []).filter((p) => p.needsConsent && !used.has(p.keyFrom));
+        fill(consentCache);
+      })
+      .catch(() => null);
+  return box;
+}
+
+async function move(name, dir) {
+  const order = members()
+    .filter((m) => m.canWork)
+    .map((m) => m.name);
+  const i = order.indexOf(name);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= order.length) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  await act(null, () => api('/api/settings', { settings: { ...S.st.settings, order } }));
+}
+
+async function removeMember(btn, m) {
+  if (!(await confirmDialog(`从名单里去掉 ${m.label}？`, '只是不再派它、不再在群聊里请它；它自己的程序和配置不动。', '去掉'))) return;
+  act(btn, () => api('/api/workers/delete', { name: m.name }), `去掉了 ${m.label}`);
+}
+
+function addApiDialog() {
+  const name = h('input', { type: 'text', placeholder: '英文名，比如 kimi' });
+  const label = h('input', { type: 'text', placeholder: '显示的名字，比如 Kimi' });
+  const base = h('input', { type: 'text', placeholder: 'https://api.moonshot.cn/v1' });
+  const model = h('input', { type: 'text', placeholder: '模型名' });
+  const env = h('input', { type: 'text', placeholder: '放密钥的环境变量名，比如 MOONSHOT_API_KEY' });
+  const tier = h('select', null, h('option', { value: 'weak' }, '弱（它做的要复核）'), h('option', { value: 'strong' }, '强'));
+  const save = h(
+    'button',
+    {
+      class: 'btn primary',
+      onclick: (e) =>
+        act(
+          e.currentTarget,
+          () =>
+            api('/api/workers/save', {
+              agent: { name: name.value.trim(), label: label.value.trim() || undefined, kind: 'api', tier: tier.value, tierSet: true, api: { baseUrl: base.value.trim(), model: model.value.trim(), apiKeyEnv: env.value.trim() } },
+            }),
+          '加好了'
+        ).then((r) => r && closeDialog()),
+    },
+    '添加'
+  );
+  openDialog(
+    '添加一个接口模型',
+    h(
+      'div',
+      null,
+      h('p', { class: 'faint', style: 'margin:0' }, '任何 OpenAI 兼容的接口都行。密钥不要填在这里：放在环境变量里（比如写进 ~/.zshrc），这里只填变量名。'),
+      h('label', { class: 'field' }, h('span', null, '名字'), name),
+      h('label', { class: 'field' }, h('span', null, '显示名'), label),
+      h('label', { class: 'field' }, h('span', null, '接口地址'), base),
+      h('label', { class: 'field' }, h('span', null, '模型'), model),
+      h('label', { class: 'field' }, h('span', null, '密钥环境变量名'), env),
+      h('label', { class: 'field' }, h('span', null, '强还是弱'), tier)
+    ),
+    [h('button', { class: 'btn', onclick: closeDialog }, '算了'), save]
   );
 }
 
-// ---------- 启动 ----------
-
-for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => setView(b.dataset.view));
-
-$('project-btn').addEventListener('click', (e) => {
-  e.stopPropagation();
-  if ($('project-menu').hidden) openMenu();
-  else closeMenu();
-});
-
-document.addEventListener('click', (e) => {
-  if (!$('project-menu').hidden && !e.target.closest('.project-switch')) closeMenu();
-});
-
-document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape') return;
-  if (!$('project-menu').hidden) closeMenu();
-  else if (dlg) closeDialog();
-});
-
-$('scrim').addEventListener('click', () => closeDialog());
-$('toast').addEventListener('click', () => ($('toast').hidden = true));
-
-window.addEventListener('hashchange', () => {
-  const v = location.hash.slice(1);
-  if (['task', 'talk', 'settings'].includes(v) && v !== S.view) setView(v);
-});
-
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) {
-    refresh();
-    if (S.view === 'talk') loadTalk();
-  }
-});
-
-function loop() {
-  const running = S.st && (S.st.busy || (S.st.talk && S.st.talk.current) || autoRunning(S.st) || S.st.detecting);
-  const delay = document.hidden ? 20000 : running || S.acting ? 1500 : 4000;
-  setTimeout(async () => {
-    if (!document.hidden) {
-      await refresh();
-      if (S.view === 'talk') await loadTalk();
-    }
-    loop();
-  }, delay);
+function addAppDialog() {
+  const name = h('input', { type: 'text', placeholder: '英文名，比如 trae' });
+  const app = h('input', { type: 'text', placeholder: '「应用程序」里的名字，比如 Trae' });
+  const tier = h('select', null, h('option', { value: 'weak' }, '弱（它做的要复核）'), h('option', { value: 'strong' }, '强'));
+  const save = h(
+    'button',
+    {
+      class: 'btn primary',
+      onclick: (e) => {
+        const a = app.value.trim();
+        return act(e.currentTarget, () => api('/api/workers/save', { agent: { name: name.value.trim(), label: a, kind: 'app', tier: tier.value, tierSet: true, cmd: `open -a ${/\s/.test(a) ? `"${a}"` : a} {{dir}}` } }), '加好了').then(
+          (r) => r && closeDialog()
+        );
+      },
+    },
+    '添加'
+  );
+  openDialog(
+    '添加一个桌面程序',
+    h(
+      'div',
+      null,
+      h('p', { class: 'faint', style: 'margin:0' }, '桌面程序接力台调度不了；加进名单后，「换人」菜单里能一键用它打开这个项目，交接时也认得它是谁、强还是弱。'),
+      h('label', { class: 'field' }, h('span', null, '名字'), name),
+      h('label', { class: 'field' }, h('span', null, '程序'), app),
+      h('label', { class: 'field' }, h('span', null, '强还是弱'), tier)
+    ),
+    [h('button', { class: 'btn', onclick: closeDialog }, '算了'), save]
+  );
 }
 
-render();
-refresh().then(() => {
-  if (S.view === 'talk') loadTalk();
-});
-loop();
+// ---------- 开始 ----------
+
+(async function start() {
+  const hash = location.hash.replace('#', '');
+  if (['relay', 'talk', 'settings'].includes(hash)) S.view = hash;
+  await refresh();
+  if (S.view === 'talk') await loadTalk();
+  render();
+  schedule();
+})();

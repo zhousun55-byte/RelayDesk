@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadAutoSettings, normalizeAutoSettings, type AutoSettings } from '../core/auto-settings';
 import { errorMessage, RelayError } from '../core/errors';
-import { findHarness, locateCached, type Invocation } from '../core/harness';
+import { explainFailure, findHarness, locateCached, type Invocation } from '../core/harness';
 import { loadLedger, nextStintId, pendingReviews, requireInit, saveStint, stintTitle, tierWord, type Stint } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { pidAlive } from '../core/proc';
@@ -353,7 +353,8 @@ class GoRunner {
         quotaText = `${r.error ?? ''}\n${r.stderrTail}\n${logTail(logAbs, 6000)}\n${r.finalText.slice(-2000)}`;
         if (!r.stopped && (r.error || r.timedOut || r.code !== 0)) {
           const said = clip(r.stderrTail.split('\n').filter(Boolean).slice(-2).join(' '), 200);
-          error = r.error ?? (r.timedOut ? `超过 ${Math.round(timeoutMs / 60000)} 分钟，停掉了` : `退出码 ${r.code}${said ? `：${said}` : ''}`);
+          const hint = explainFailure(m.harness, `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}`);
+          error = r.error ?? (r.timedOut ? `超过 ${Math.round(timeoutMs / 60000)} 分钟，停掉了` : hint ?? `退出码 ${r.code}${said ? `：${said}` : ''}`);
         }
       } else if (m.kind === 'api' && m.agent.api) {
         log(`（接力台内置小代理：${m.agent.api.baseUrl} · ${m.agent.api.model}）`);

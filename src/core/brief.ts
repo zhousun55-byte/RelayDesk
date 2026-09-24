@@ -173,7 +173,14 @@ export function buildBrief(input: BriefInput): string {
   const strong = input.members.filter((m) => m.tier === 'strong');
   const weak = input.members.filter((m) => m.tier === 'weak');
   const name = (m: BriefMember) => `${m.label}${m.model ? `（${m.model}）` : ''}`;
-  s.push('## 谁是强模型', '', `- 强：${strong.map(name).join('、') || '（还没有）'}`, `- 弱：${weak.map(name).join('、') || '（还没有）'}`, '- 不在名单里的按弱算。看的是模型，不是工具。', '');
+  s.push(
+    '## 谁是强模型',
+    '',
+    `- 强：${strong.map(name).join('、') || '（还没有）'}`,
+    `- 弱：${weak.map(name).join('、') || '（还没有）'}`,
+    '- 看的是模型，不是工具（Claude Code 接的是 DeepSeek，就算弱）。名单里没有你：Claude Opus / Sonnet、GPT-5 及以上、Gemini Pro 算强，其他算弱。',
+    ''
+  );
 
   // 这一棒要做的
   const n = input.nextId;

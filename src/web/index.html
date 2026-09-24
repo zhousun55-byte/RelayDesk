@@ -7,42 +7,37 @@
     <title>接力台</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M9 3v26' stroke='%235B6572' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M9 8c0 5 12 3 12 8s-12 3-12 8' fill='none' stroke='%230E7C5A' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='21' cy='16' r='3.4' fill='%23fff' stroke='%230E7C5A' stroke-width='2.4'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='4' width='24' height='24' rx='4' fill='none' stroke='%23B4372A' stroke-width='3'/%3E%3Cpath d='M11 22 L21 10' stroke='%23B4372A' stroke-width='3.2' stroke-linecap='round'/%3E%3Ccircle cx='21' cy='10' r='2.6' fill='%23B4372A'/%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
-    <header class="bar">
+    <header class="top">
       <div class="brand" aria-label="接力台">
-        <svg viewBox="0 0 32 32" aria-hidden="true">
-          <path class="glyph-main" d="M9 3v26" />
-          <path class="glyph-branch" d="M9 8c0 5 12 3 12 8s-12 3-12 8" />
-          <circle class="glyph-stop" cx="21" cy="16" r="3.4" />
-        </svg>
-        <span>接力台</span>
+        <span class="brand-seal" aria-hidden="true">接力</span>
+        <span class="brand-name">接力台</span>
       </div>
-      <div class="project-switch">
+      <div class="project">
         <button type="button" id="project-btn" class="project-btn" aria-haspopup="true" aria-expanded="false">
-          <span class="project-name" id="project-name">…</span>
-          <span class="project-path" id="project-path"></span>
-          <span class="caret" aria-hidden="true">▾</span>
+          <span id="project-name">…</span>
+          <svg class="caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
         <div class="menu" id="project-menu" hidden></div>
       </div>
-      <nav class="tabs" role="tablist" aria-label="页面">
-        <button type="button" role="tab" data-view="task" id="tab-task">任务</button>
-        <button type="button" role="tab" data-view="talk" id="tab-talk">讨论<span class="count" id="talk-count"></span></button>
-        <button type="button" role="tab" data-view="settings" id="tab-settings">设置</button>
+      <nav class="tabs" aria-label="页面">
+        <a href="#relay" data-view="relay" id="tab-relay">接力</a>
+        <a href="#talk" data-view="talk" id="tab-talk">群聊<span class="dot" id="talk-dot" hidden></span></a>
+        <a href="#settings" data-view="settings" id="tab-settings">设置</a>
       </nav>
     </header>
 
     <div class="offline" id="offline" hidden>
-      连不上接力台了。它可能已经关掉：在桌面双击「接力台」就能重新打开（也可以在终端执行 <code>relay ui</code>）。
+      连不上接力台了。它可能已经关掉：在桌面双击「接力台」就能重新打开（或者在终端执行 <code>relay ui</code>）。
     </div>
 
-    <main id="view-task" class="view" data-view="task"></main>
-    <main id="view-talk" class="view" data-view="talk" hidden></main>
-    <main id="view-settings" class="view" data-view="settings" hidden></main>
+    <main class="sheet" id="view-relay" data-view="relay"></main>
+    <main class="sheet" id="view-talk" data-view="talk" hidden></main>
+    <main class="sheet" id="view-settings" data-view="settings" hidden></main>
 
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <div class="scrim" id="scrim" hidden></div>

@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { normalizeAutoSettings } from '../src/core/auto-settings';
-import { firstVersion, findHarness, harnessForCommand, tomlTop, type Located } from '../src/core/harness';
+import { explainFailure, firstVersion, findHarness, harnessForCommand, tomlTop, type Located } from '../src/core/harness';
 import { chat, readKeyFrom, stripJsonComments, ToolChat } from '../src/core/llm';
 import { pickModel } from '../src/core/providers';
 import { normalizeAgent } from '../src/core/registry';
@@ -251,3 +251,9 @@ test('认得网络抖动：连接被断开、服务器临时忙算；没登录�
   for (const t of ['Not logged in. Please run /login', 'You have hit your usage limit', 'SyntaxError: Unexpected token', '退出码 1']) assert.ok(!looksLikeNetworkBlip(t), t);
 });
 
+
+test('认得的报错翻成能照做的话：ZCode 没选默认模型、没登录', () => {
+  assert.match(explainFailure('zcode', 'Error: Model creation failed (traceId: x)') ?? '', /\/model/);
+  assert.match(explainFailure('codex', 'Error: not logged in') ?? '', /登录/);
+  assert.equal(explainFailure('codex', 'TypeError: x is undefined'), null);
+});

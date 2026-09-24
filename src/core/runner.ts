@@ -383,7 +383,7 @@ export function startRun(req: RunRequest): RunHandle {
 
   const child = spawn(inv.argv[0], inv.argv.slice(1), {
     cwd: req.cwd,
-    env: agentEnv(),
+    env: agentEnv(inv.env ?? {}),
     detached: true,
     stdio: [inv.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
