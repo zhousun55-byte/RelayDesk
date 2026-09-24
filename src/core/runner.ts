@@ -282,6 +282,35 @@ export interface RunRequest {
   onLine?: (line: string) => void;
 }
 
+/** 工具出错的样子像不像网络抖了一下（连接被断开、服务器临时忙）：像的话值得隔几秒原地再试一次。 */
+export function looksLikeNetworkBlip(text: string): boolean {
+  return /socket disconnected|socket hang up|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|fetch failed|TLS connection|network error|stream disconnected|connection (?:reset|closed|error)|\b50[234]\b|\b429\b|rate.?limit|overloaded|temporarily unavailable|service unavailable|bad gateway/i.test(
+    text
+  );
+}
+
+/** 这一步日志的最后一段（不含开头的命令行，免得把任务原文当成出错原因）。 */
+export function logTail(logPath: string, bytes = 4000): string {
+  try {
+    const fd = fs.openSync(logPath, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const len = Math.min(size, bytes);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      return buf
+        .toString('utf8')
+        .split('\n')
+        .filter((l) => !l.startsWith('$ ') && !l.startsWith('# '))
+        .join('\n');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return '';
+  }
+}
+
 export interface RunResult {
   /** 退出码；被叫停 / 超时 / 起不来时为负数或信号码。 */
   code: number;

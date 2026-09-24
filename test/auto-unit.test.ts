@@ -8,12 +8,12 @@ import path from 'node:path';
 import { normalizeAutoSettings } from '../src/core/auto-settings';
 import { resolveTeam, type Member } from '../src/core/detect';
 import { firstVersion, findHarness, harnessForCommand, tomlTop, type Located } from '../src/core/harness';
-import { readKeyFrom, stripJsonComments, ToolChat } from '../src/core/llm';
+import { chat, readKeyFrom, stripJsonComments, ToolChat } from '../src/core/llm';
 import { buildOnboard } from '../src/core/prompts';
 import { pickModel } from '../src/core/providers';
 import { normalizeAgent } from '../src/core/registry';
 import { buildReviewRequest, jsonObjects, parseVerdict } from '../src/core/review';
-import { describeArgv, makeParser } from '../src/core/runner';
+import { describeArgv, looksLikeNetworkBlip, makeParser } from '../src/core/runner';
 import type { AgentConfig } from '../src/core/types';
 
 test('审查结论：代码块、前后废话、落单的括号都能取出 JSON；认得各种写法', () => {
@@ -273,3 +273,60 @@ test('内置小代理：思考模型回的思考内容原样传回；接口不�
     }
   }
 });
+
+test('接口偶尔断线、服务器临时忙：自动重试成功；密钥错误不重试', async () => {
+  process.env.RELAY_RETRY_MS = '10';
+  let hits = 0;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      hits++;
+      if (req.headers.authorization === 'Bearer bad') {
+        res.statusCode = 401;
+        res.end('{"error":"bad key"}');
+        return;
+      }
+      if (hits === 1) {
+        req.socket.destroy();
+        return;
+      }
+      if (hits === 2) {
+        res.statusCode = 503;
+        res.end('{"error":"busy"}');
+        return;
+      }
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '好的' } }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+  try {
+    const text = await chat({ baseUrl: url, model: 'm', apiKeyEnv: '' }, [{ role: 'user', content: '你好' }], { timeoutMs: 5000 });
+    assert.equal(text, '好的');
+    assert.equal(hits, 3, '断线一次、503 一次，第三次成功');
+    process.env.RELAY_TEST_BAD_KEY = 'bad';
+    hits = 0;
+    await assert.rejects(chat({ baseUrl: url, model: 'm', apiKeyEnv: 'RELAY_TEST_BAD_KEY' }, [{ role: 'user', content: '你好' }], { timeoutMs: 5000 }), /401/);
+    assert.equal(hits, 1, '密钥错误不重试');
+  } finally {
+    delete process.env.RELAY_RETRY_MS;
+    delete process.env.RELAY_TEST_BAD_KEY;
+    server.close();
+  }
+});
+
+test('认得网络抖动：连接被断开、服务器临时忙算；没登录、额度用完、改错了不算', () => {
+  for (const t of [
+    'Error: [aborted] Client network socket disconnected before secure TLS connection was established',
+    'API Error: Connection error (ECONNRESET)',
+    'stream disconnected before completion: error sending request',
+    'HTTP 503 Service Unavailable',
+    '429 Too Many Requests',
+    'fetch failed',
+  ])
+    assert.ok(looksLikeNetworkBlip(t), t);
+  for (const t of ['Not logged in. Please run /login', 'You have hit your usage limit', 'SyntaxError: Unexpected token', '退出码 1']) assert.ok(!looksLikeNetworkBlip(t), t);
+});
+

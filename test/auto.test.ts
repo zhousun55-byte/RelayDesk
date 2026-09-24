@@ -33,6 +33,12 @@ fi
 case "\${FAKE_CLAUDE_MODE:-work}" in
   noop) printf '%s\n' '{"type":"result","subtype":"error","is_error":true,"result":"额度用完了"}'; exit 1 ;;
   slow) sleep 30 ;;
+  blip-once)
+    if [ ! -f "$FAKE_DIR/claude-blipped" ]; then
+      touch "$FAKE_DIR/claude-blipped"
+      echo "API Error: Connection error (ECONNRESET)" >&2
+      exit 1
+    fi ;;
 esac
 if grep -q "hello 而不是 hi" .relay/ONBOARD.md 2>/dev/null; then echo hello > hello.txt; else echo hi > hello.txt; fi
 printf '做到哪了：写了 hello.txt\n下一步：无\n没验证的假设：无\n' > .relay/NOTE.md
@@ -60,6 +66,10 @@ if [ "$mode" = "read-only" ]; then
   n=$((n+1)); echo $n > "$FAKE_DIR/reviews"
   v=$(echo "\${FAKE_REVIEW_SEQ:-pass}" | cut -d, -f$n)
   [ -z "$v" ] && v=pass
+  if [ "$v" = blip ]; then
+    echo "Error: [aborted] Client network socket disconnected before secure TLS connection was established" >&2
+    exit 1
+  fi
   if [ "$v" = fix ]; then
     printf '%s' '好的，结论如下：{"verdict":"fix","summary":"内容不对","issues":["hello.txt 里要写 hello 而不是 hi"]}' > "$out"
   else
@@ -361,3 +371,20 @@ test('上次接力台被关掉时还在跑的工具：再开始全自动前先�
   await until(5000, () => !alive(orphan.pid!), '残留的工具进程被结束');
   assert.equal(s.read('hello.txt'), 'hi\n');
 });
+
+test('网络抖一下不用人管：审查员第一次连不上、干活的第一次连不上，都原地再试一次接着做完', () => {
+  const s = sandbox('auto-blip');
+  withFakes(s, { FAKE_REVIEW_SEQ: 'blip,pass', FAKE_CLAUDE_MODE: 'blip-once', RELAY_RETRY_MS: '10' });
+  s.relay(['init']);
+  s.relay(['detect', '--offline']);
+  const out = s.relay(['auto', '做一个', 'hello.txt', '--work', 'claude', '--review', 'codex']);
+  assert.match(out, /完成：已合回正式文件夹/);
+  assert.equal(s.read('hello.txt'), 'hi\n');
+  const calls = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').split('\n').filter(Boolean);
+  assert.equal(calls.filter((c) => c.startsWith('claude') && !c.includes('--tools')).length, 2, '干活的原地再试了一次');
+  assert.equal(fs.readFileSync(path.join(s.base, 'reviews'), 'utf8').trim(), '2', '审查员原地再试了一次');
+  const st = autoState(s);
+  assert.equal(st.status, 'done');
+  assert.ok(!st.steps.some((x) => x.label.includes('换人')), '没有因为网络抖一下就换人');
+});
+

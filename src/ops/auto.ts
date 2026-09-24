@@ -8,7 +8,7 @@ import { listMembers, loadDetected, resolveTeam, type Member } from '../core/det
 import { errorMessage, RelayError } from '../core/errors';
 import { git, mergeBase, mergeInProgress, shortSha } from '../core/git';
 import { gateConfigured } from '../core/gate';
-import { findHarness, locateCached } from '../core/harness';
+import { findHarness, locateCached, type Invocation } from '../core/harness';
 import { appendEvent, lastFixReview, lastGate, lastHandoff, lastReview, pendingSyncConflicts, reviewsSinceAuto } from '../core/journal';
 import { chat } from '../core/llm';
 import { runLlmAgent } from '../core/llm-agent';
@@ -18,7 +18,7 @@ import { inspectProject } from '../core/project';
 import { matchProtected } from '../core/protected';
 import { agentLabel } from '../core/registry';
 import { buildReviewRequest, parseVerdict, REVIEW_PROMPT, WORK_PROMPT, type Verdict } from '../core/review';
-import { clip, startRun, type RunHandle } from '../core/runner';
+import { clip, logTail, looksLikeNetworkBlip, startRun, type RunHandle, type RunResult } from '../core/runner';
 import { loadSession } from '../core/session';
 import { diffFiles, hasConflictMarkers } from '../core/status';
 import { openTask, pendingChanges, type TaskContext } from './context';
@@ -322,6 +322,25 @@ class AutoRunner {
     this.save();
   }
 
+  /**
+   * 跑一次工具。出错的样子像网络抖了一下（连接被断开、服务器临时忙），就隔几秒原地再试一次；
+   * mayRetry 说不行（比如工具已经改了东西）就不试。只试一次，还不行就交给调用方换人。
+   */
+  private async runTool(st: AutoStep, cwd: string, invoke: () => Invocation, timeoutMs: number, failed: (r: RunResult) => boolean, mayRetry: () => boolean = () => true): Promise<RunResult> {
+    for (let attempt = 0; ; attempt++) {
+      const h = startRun({ invocation: invoke(), cwd, timeoutMs, logPath: st.log!, title: st.label, onLine: this.hooks.onLine });
+      this.track(st, h);
+      const r = await h.done;
+      this.current = null;
+      if (attempt > 0 || r.stopped || r.timedOut || !failed(r) || this.stopRequested || !mayRetry()) return r;
+      if (!looksLikeNetworkBlip(`${r.error ?? ''}\n${r.stderrTail}\n${logTail(st.log!)}`)) return r;
+      const waitMs = Number(process.env.RELAY_RETRY_MS ?? 5000);
+      this.logTo(st)(`看起来是网络抖了一下，${Math.max(1, Math.round(waitMs / 1000))} 秒后原地再试一次。`);
+      for (let t = 0; t < waitMs && !this.stopRequested; t += 250) await new Promise((res) => setTimeout(res, Math.min(250, waitMs - t)));
+      if (this.stopRequested) return r;
+    }
+  }
+
   private logTo(st: AutoStep): (line: string) => void {
     return (line: string) => {
       const d = new Date();
@@ -498,19 +517,26 @@ class AutoRunner {
         if (!spec || !loc) {
           out = { code: -1, finalText: '', error: '找不到这个工具了' };
         } else {
-          const inv = spec.invoke(loc, {
-            cwd: wt,
-            prompt: WORK_PROMPT,
-            level: this.settings.level,
-            readOnly: false,
-            model: w.agent.model?.trim() || undefined,
-            effort: w.agent.effort,
-            outFile: tmpOut(),
-          });
-          const h = startRun({ invocation: inv, cwd: wt, timeoutMs, logPath: st.log!, title: st.label, onLine: this.hooks.onLine });
-          this.track(st, h);
-          const r = await h.done;
-          this.current = null;
+          const r = await this.runTool(
+            st,
+            wt,
+            () =>
+              spec.invoke(loc, {
+                cwd: wt,
+                prompt: WORK_PROMPT,
+                level: this.settings.level,
+                readOnly: false,
+                model: w.agent.model?.trim() || undefined,
+                effort: w.agent.effort,
+                outFile: tmpOut(),
+              }),
+            timeoutMs,
+            (x) => x.code !== 0,
+            () => {
+              const c = openTask(this.root);
+              return !pendingChanges(c.wt, c.events, c.session.baseCommit).files.length;
+            }
+          );
           const err = r.error ?? (r.stopped ? '被叫停' : r.timedOut ? `超过 ${this.settings.workTimeoutMin} 分钟` : r.code !== 0 ? `退出码 ${r.code}${r.stderrTail ? `：${clip(r.stderrTail.split('\n').slice(-3).join(' '), 200)}` : ''}` : undefined);
           out = { code: r.code, finalText: r.finalText, ...(err ? { error: err } : {}) };
         }
@@ -596,25 +622,31 @@ class AutoRunner {
           const spec = findHarness(rv.harness);
           const loc = spec ? locateCached(spec) : null;
           if (!spec || !loc) throw new Error('找不到这个工具了');
-          const inv = spec.invoke(loc, {
-            cwd: wt,
-            prompt: REVIEW_PROMPT,
-            level: this.settings.level,
-            readOnly: true,
-            model: rv.agent.model?.trim() || undefined,
-            effort: rv.agent.effort,
-            outFile: tmpOut(),
-          });
-          const h = startRun({ invocation: inv, cwd: wt, timeoutMs, logPath: st.log!, title: st.label, onLine: this.hooks.onLine });
-          this.track(st, h);
-          const r = await h.done;
-          this.current = null;
+          const r = await this.runTool(
+            st,
+            wt,
+            () =>
+              spec.invoke(loc, {
+                cwd: wt,
+                prompt: REVIEW_PROMPT,
+                level: this.settings.level,
+                readOnly: true,
+                model: rv.agent.model?.trim() || undefined,
+                effort: rv.agent.effort,
+                outFile: tmpOut(),
+              }),
+            timeoutMs,
+            (x) => !x.finalText
+          );
           if (r.stopped) {
             this.end(st, 'fail', '被叫停');
             return false;
           }
           text = r.finalText;
-          if (!text) throw new Error(r.error ?? (r.timedOut ? '超时' : `没有给出结论（退出码 ${r.code}）`));
+          if (!text) {
+            const said = clip(r.stderrTail.split('\n').filter(Boolean).slice(-2).join(' '), 200);
+            throw new Error(r.error ?? (r.timedOut ? '超时' : `没有给出结论（退出码 ${r.code}${said ? `：${said}` : ''}）`));
+          }
         } else {
           const log = this.logTo(st);
           log(`# ${st.label}（${rv.agent.api?.baseUrl} · ${rv.agent.api?.model}）`);

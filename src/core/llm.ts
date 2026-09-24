@@ -124,7 +124,27 @@ function headers(spec: ApiSpec, key: string): Record<string, string> {
   return h;
 }
 
+/** 网络抖一下、服务器临时忙（429 / 5xx）：隔几秒再试，最多再试两次。密钥错、请求错、超时都不重试。 */
+const RETRY_DELAYS_MS = [2000, 6000];
+
+function retryable(e: unknown): boolean {
+  if (!(e instanceof RelayError)) return false;
+  if (e.code === 'llm-net') return !/（超时）/.test(e.message);
+  return e.code === 'llm-busy';
+}
+
 async function request(spec: ApiSpec, what: 'chat' | 'models', body: unknown, timeoutMs: number): Promise<unknown> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await requestOnce(spec, what, body, timeoutMs);
+    } catch (e) {
+      if (attempt >= RETRY_DELAYS_MS.length || !retryable(e)) throw e;
+      await new Promise((r) => setTimeout(r, Number(process.env.RELAY_RETRY_MS ?? RETRY_DELAYS_MS[attempt])));
+    }
+  }
+}
+
+async function requestOnce(spec: ApiSpec, what: 'chat' | 'models', body: unknown, timeoutMs: number): Promise<unknown> {
   const key = apiKeyOf(spec);
   if (!key && !isLocalUrl(spec.baseUrl)) throw new RelayError(`没有密钥（${keyWhere(spec)}）。`, 'no-key');
   const ctrl = new AbortController();
@@ -144,7 +164,8 @@ async function request(spec: ApiSpec, what: 'chat' | 'models', body: unknown, ti
     }
     if (!res.ok) {
       const text = (await res.text()).slice(0, 300);
-      throw new RelayError(`${spec.baseUrl} 返回 HTTP ${res.status}：${text}`, res.status === 401 || res.status === 403 ? 'llm-auth' : 'llm-http');
+      const code = res.status === 401 || res.status === 403 ? 'llm-auth' : res.status === 429 || res.status >= 500 ? 'llm-busy' : 'llm-http';
+      throw new RelayError(`${spec.baseUrl} 返回 HTTP ${res.status}：${text}`, code);
     }
     return (await res.json()) as unknown;
   } finally {
