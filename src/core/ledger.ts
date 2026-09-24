@@ -55,6 +55,10 @@ export interface ReviewMark {
   file: string;
   verdict: Verdict;
   at: string;
+  /** 写复核的是弱模型（或者是它自己复核自己）：不算数，还要强模型再核。 */
+  weak?: boolean;
+  /** 是谁写的由 Claude Code 的会话记录认定（以后不用再核）。 */
+  byLog?: boolean;
 }
 
 export interface Stint {

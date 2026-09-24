@@ -14,7 +14,7 @@ import { finalPrompt, reviewPrompt, workPrompt } from '../core/prompts';
 import { clearQuota, detectQuota, markQuota, untilText } from '../core/quota';
 import { clip, logTail, looksLikeNetworkBlip, startRun, type RunHandle, type RunResult } from '../core/runner';
 import { takeSnapshot } from '../core/snap';
-import { whoOfMember } from '../core/tier';
+import { memberTier, sameModel, whoOfMember } from '../core/tier';
 import { applyReviews, closeStint, gateStint, projectConfig, refreshBrief, track } from './track';
 
 /**
@@ -336,6 +336,8 @@ class GoRunner {
     let error: string | undefined;
     let stopped = false;
     let quotaText = '';
+    /** 工具自己报出来的实际模型（比如 --model opus 实际是 claude-opus-5-5）。 */
+    let actualModel: string | undefined;
     try {
       if (m.kind === 'harness') {
         const spec = findHarness(m.harness);
@@ -350,6 +352,7 @@ class GoRunner {
         );
         finalText = r.finalText;
         stopped = r.stopped;
+        actualModel = r.model;
         quotaText = `${r.error ?? ''}\n${r.stderrTail}\n${logTail(logAbs, 6000)}\n${r.finalText.slice(-2000)}`;
         if (!r.stopped && (r.error || r.timedOut || r.code !== 0)) {
           const said = clip(r.stderrTail.split('\n').filter(Boolean).slice(-2).join(' '), 200);
@@ -416,7 +419,8 @@ class GoRunner {
     } else {
       clearQuota(m.name);
     }
-    const closed = closeStint(root, { ...stint, pid: process.pid }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
+    const ran = actualModel && !(who.model && who.model === actualModel) ? { ...who, model: actualModel, label: `${m.label} · ${actualModel}`, tier: who.model && sameModel(who.model, actualModel) ? who.tier : memberTier(m.agent, actualModel) } : who;
+    const closed = closeStint(root, { ...stint, who: ran, pid: process.pid }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
     if (kind !== 'work' || closed.facts?.files) await gateStint(root, id, cfg).catch(() => undefined);
     // 强模型干活时也会先复核（接力本里这么要求的）：它写的复核结论一样算数。
     applyReviews(root, closed);
@@ -474,6 +478,7 @@ class GoRunner {
         if (!m) throw new RelayError(kind === 'review' ? '现在没有能复核的强模型（都没额度了，或者没登录）。' : '现在没有能调度的 AI（都没额度了，或者没登录）。', 'nobody');
       }
       if (kind === 'review') {
+        if (m.tier !== 'strong') throw new RelayError(`复核要强模型来做：${m.label}${m.model ? `（${m.model}）` : ''}算弱，它写的复核不算数。换一位强模型；你觉得它其实够强，就在「设置」里把它改成强。`, 'weak-reviewer');
         const targets = pendingReviews(v);
         if (!targets.length) return this.finish('done', '没有待复核的棒。');
         const o = await this.runStint(m, 'review', targets);

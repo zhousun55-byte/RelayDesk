@@ -137,7 +137,7 @@ export function detectAll(opts: { network?: boolean } = {}): Promise<DetectRepor
 // ---- 把识别结果并进工人名单 ----
 
 /** 工具 → 名单里的默认名字（和桌面 App 的名字错开）。 */
-const DEFAULT_NAMES: Record<string, string> = { claude: 'claude', codex: 'codex', 'cursor-agent': 'cursor-agent', zcode: 'zcode-cli', agy: 'agy', gemini: 'gemini', qwen: 'qwen', opencode: 'opencode', droid: 'droid', copilot: 'copilot', grok: 'grok' };
+const DEFAULT_NAMES: Record<string, string> = { claude: 'claude', 'claude-official': 'claude-official', codex: 'codex', 'cursor-agent': 'cursor-agent', zcode: 'zcode-cli', agy: 'agy', gemini: 'gemini', qwen: 'qwen', opencode: 'opencode', droid: 'droid', copilot: 'copilot', grok: 'grok' };
 
 const LABELS: Record<string, string> = { zcode: 'ZCode 命令行' };
 
@@ -177,8 +177,9 @@ export function syncRegistry(report: DetectReport): string[] {
 
   for (const h of report.harnesses) {
     if (h.login.state === 'no') continue;
-    const loc = locateCached(findHarness(h.id)!);
-    const cmd = loc ? loc.exec.map((x) => (/[\s"']/.test(x) ? `'${x.replace(/'/g, `'\\''`)}'` : x)).join(' ') : h.id;
+    const spec = findHarness(h.id)!;
+    const loc = locateCached(spec);
+    const cmd = loc ? [...loc.exec, ...(spec.manualArgs ?? [])].map((x) => (/[\s"']/.test(x) ? `'${x.replace(/'/g, `'\\''`)}'` : x)).join(' ') : h.id;
     const bound = reg.agents.find((a) => harnessOf(a)?.id === h.id && agentKind(a) === 'cli');
     if (bound) {
       if (!bound.harness) {

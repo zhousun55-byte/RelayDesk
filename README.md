@@ -75,6 +75,13 @@ zsh scripts/make-desktop-app.sh
 
 看的是**模型**，不是工具：Claude Code 接的是 DeepSeek，它就算弱。默认按模型名猜——Claude（Opus / Sonnet）、GPT-5 及以上、o3 / o4、Gemini Pro、Grok 4 及以上算强，其他算弱；桌面程序看不出模型，就借同一家命令行或接口的模型来判断。在「设置」里可以逐个改，改过的以你为准。
 
+**同一个 Claude Code 可能是两位。** 很多人在 `~/.claude/settings.json` 里把 Claude Code 接到了 DeepSeek、Kimi、智谱这类便宜的模型，同时手上还有 Claude 官方账号。接力台会把它们当成两位成员：
+
+- 「Claude Code」：接的别家模型（比如 DeepSeek），多半算弱；
+- 「Claude Code 官方账号」：claude.ai 登录的，默认用最新的 Opus，算强。接力台派它时会跳过你的用户设置（`--setting-sources project,local`）、去掉 `ANTHROPIC_*` 这些变量，让它走官方账号。Claude 桌面版用的也是官方账号。
+
+**到底是哪个 Claude 干的，以记录为准。** Claude Code 自己的会话记录（`~/.claude/projects/`）里记着每条回复实际用的是哪个模型。接力台拿它核对三件事：交接是哪个模型写的、复核结论是哪个模型写的、这段时间谁改了项目文件。所以接了 DeepSeek 的 Claude Code 在交接里自称 Opus，照样按弱的算；它写的复核（包括给自己写的）不算数，还要强模型再核。
+
 ### 快照和退回
 
 快照存在项目里的 `.relay/snapshots`，是接力台自己的一个 git 仓库，**不碰你自己的 git**：不提交、不改暂存区、不切分支，你的 `.gitignore` 照样生效，`node_modules` 这类大目录和超过 20 MB 的文件不收。项目不是 git 仓库也没关系。
@@ -158,6 +165,7 @@ zsh scripts/make-desktop-app.sh
 - **本机网页**只接受 `127.0.0.1` / `localhost` 本端口的请求，别的网站调不动它。
 - 接力台从某个 AI 工具的会话里启动时，那个工具注入的会话凭据（`CLAUDE_*`、`ANTHROPIC_*` 之类）不会传给它调用的其他工具。
 - 接力台只写 `.relay/` 下它自己的文件和 `AGENTS.md` / `CLAUDE.md` 里带标记的那一段。
+- 核对是哪个 Claude 干的活时，会读本机 Claude Code 的会话记录，但只读模型名、时间和改了哪个文件；对话内容不读、不存、不外发。
 
 ## 常见问题
 
@@ -167,7 +175,9 @@ zsh scripts/make-desktop-app.sh
 
 **我自己改了几个文件，也被记成一棒「不知道是谁」？** 在「待复核」里点「不用复核」就行。
 
-**Claude Code 里用的其实是 DeepSeek，接力台怎么知道？** 它会读 Claude Code 的配置看接的是哪个模型；AI 写交接时也要写上模型名。自称和实际对不上的，以模型为准；认不出来的按弱处理。
+**Claude Code 里用的其实是 DeepSeek，接力台怎么知道？** 它会读 Claude Code 的配置看接的是哪个模型；AI 写交接时也要写上模型名。你自己在 Claude Code 里做的棒，还会对照 Claude Code 的会话记录——交接是哪个模型写的，就算谁的。认不出来的按弱处理。
+
+**我有 Claude 官方账号，也把 Claude Code 接到了 DeepSeek，能两个都用吗？** 能。识别时会多出一位「Claude Code 官方账号」（要先在终端运行一次 `claude auth login` 登录官方账号）。它算强，全自动时会被派去复核；接了 DeepSeek 的那位照常干活。两位的额度分开算。
 
 **ZCode 调度时报「Select a model before continuing」？** ZCode 桌面版里选的模型，它自带的命令行内核读不到。在终端里运行一次 ZCode 的命令行，输入 `/model` 选好模型就行。桌面版 ZCode 本身不受影响（它读 `AGENTS.md`，照样能接力）。
 

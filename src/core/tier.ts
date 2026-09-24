@@ -46,10 +46,25 @@ const TOOL_WORDS: { id: string; re: RegExp; label: string }[] = [
   { id: 'chatgpt', re: /chatgpt/i, label: 'ChatGPT' },
 ];
 
-/** 从「Codex · gpt-6」这种写法里拆出模型名（「·」「/」「(」后面那段）。 */
+/** 从「Codex · gpt-6」「Claude Code · Opus 5.5」这种写法里拆出模型名（「·」「/」「(」后面那段，带上跟着的版本号）。 */
 export function modelFromLabel(text: string): string | undefined {
-  const m = text.match(/[·•|/（(]\s*([A-Za-z][\w.\-:[\]]*)/);
+  const m = text.match(/[·•|/（(]\s*([A-Za-z][\w.\-:[\]]*(?:\s+\d[\w.\-]*)?)/);
   return m?.[1];
+}
+
+/** 同一个工具的不同用法（Claude Code 官方账号也是 Claude Code）。 */
+const TOOL_FAMILY: Record<string, string> = { 'claude-official': 'claude' };
+
+/** 模型的简称：Claude Code 里 --model opus 就是最新的 Opus。 */
+const ALIASES = ['opus', 'sonnet', 'haiku', 'fable'];
+
+/** 两个模型名说的是不是同一个：写法不同（Opus 5.5 / claude-opus-5-5），或者一个是简称（opus）。 */
+export function sameModel(a: string, b: string): boolean {
+  const x = norm(a);
+  const y = norm(b);
+  const bare = (t: string) => t.replace(/^claude-/, '').replace(/\./g, '-');
+  if (x === y || bare(x) === bare(y)) return true;
+  return ALIASES.some((al) => (x === al && y.includes(al)) || (y === al && x.includes(al)));
 }
 
 export interface MemberLike {
@@ -64,7 +79,8 @@ export interface MemberLike {
 
 /**
  * 从交接里它自己写的身份认出是谁：先对上工具，再看模型。
- * 写了模型就按模型定强弱（同一个工具可能换了模型）；没写模型就用名单里这个工具的模型。
+ * 写了模型就按模型定强弱（同一个工具可能换了模型）；没写模型就用名单里这个工具的模型——
+ * 同一个工具名单里有好几位（接了 DeepSeek 的 Claude Code 和官方账号的 Claude Code），又没写模型，就按弱的那位算。
  */
 export function resolveWho(claim: { who?: string; tool?: string; model?: string }, members: MemberLike[]): Who {
   const text = [claim.who, claim.tool, claim.model].filter(Boolean).join(' ');
@@ -75,15 +91,17 @@ export function resolveWho(claim: { who?: string; tool?: string; model?: string 
   if (!text.trim()) return { label: '不知道是谁', tier: 'unknown' };
   const model = claim.model?.trim() || modelFromLabel(claim.who ?? '');
   const tool = TOOL_WORDS.find((t) => t.re.test(claim.tool ?? '') || t.re.test(claim.who ?? ''));
-  const byTool = tool ? members.filter((m) => m.harness === tool.id || m.name === tool.id || new RegExp(tool.re.source, 'i').test(m.label)) : [];
-  const byModel = model ? members.filter((m) => m.model && norm(m.model) === norm(model)) : [];
-  const hit = byTool.find((m) => byModel.includes(m)) ?? (model ? byModel[0] ?? (byTool.length === 1 && !byTool[0].model ? byTool[0] : undefined) : byTool[0]);
-  // 你在设置里给这个工具定过强弱：以你为准（不管它这次用的什么模型）。
-  const decided = [hit, ...byTool].find((m) => m?.tierSet);
+  const toolOf = (m: MemberLike) => (m.harness ? TOOL_FAMILY[m.harness] ?? m.harness : undefined);
+  const byTool = tool ? members.filter((m) => toolOf(m) === tool.id || m.name === tool.id || new RegExp(tool.re.source, 'i').test(m.label)) : [];
+  const byModel = model ? members.filter((m) => m.model && sameModel(m.model, model)) : [];
+  const weakFirst = [...byTool].sort((a, b) => Number(a.tier === 'strong') - Number(b.tier === 'strong'));
+  const hit = byTool.find((m) => byModel.includes(m)) ?? (model ? byModel[0] ?? (byTool.length === 1 && !byTool[0].model ? byTool[0] : undefined) : weakFirst[0]);
+  // 你在设置里定过这一位的强弱：以你为准（不管它这次用的什么模型）。
+  const decided = hit?.tierSet ? hit : !hit && byTool.length === 1 && byTool[0].tierSet ? byTool[0] : undefined;
   const tier: Tier3 = decided
     ? decided.tier
     : model
-      ? hit && hit.model && norm(hit.model) === norm(model)
+      ? hit && hit.model && sameModel(hit.model, model)
         ? hit.tier
         : tierForModel(model)
       : hit

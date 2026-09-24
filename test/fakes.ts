@@ -12,6 +12,8 @@ import type { Sandbox } from './helpers';
  * - 终审：写终审结论，交接状态写「全部完成」；
  * - 只读（群聊 / 投票）：按提示词回答（投票时不投自己）。
  * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail，FAKE_<名字>_WHO = 交接里写的身份。
+ * claude 带 --setting-sources（跳过用户设置）时扮演「官方账号」：FAKE_CLAUDE_OFFICIAL=pro 算登录了，
+ * 身份和行为看 FAKE_CLAUDE_OFFICIAL_WHO / FAKE_CLAUDE_OFFICIAL_MODE；这时环境里还带着 ANTHROPIC_* 就报错（说明接力台没去掉）。
  */
 function fakeScript(name: 'claude' | 'codex'): string {
   const NAME = name.toUpperCase();
@@ -19,9 +21,23 @@ function fakeScript(name: 'claude' | 'codex'): string {
   return [
     '#!/bin/sh',
     `NAME=${name}`,
+    'OFFICIAL=0; AUTH=0',
+    'for a in "$@"; do',
+    '  [ "$a" = "--setting-sources" ] && OFFICIAL=1',
+    '  [ "$a" = auth ] && AUTH=1',
+    'done',
+    'if [ $AUTH -eq 1 ]; then',
+    '  if [ $OFFICIAL -eq 0 ]; then',
+    `    echo '{"loggedIn":true,"authMethod":"fake"}'`,
+    '  elif [ "$FAKE_CLAUDE_OFFICIAL" = pro ]; then',
+    `    echo '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"pro","apiProvider":"firstParty"}'`,
+    '  else',
+    `    echo '{"loggedIn":false}'`,
+    '  fi',
+    '  exit 0',
+    'fi',
     'case "$1" in',
     '  --version) [ "$NAME" = claude ] && echo "9.9.9 (Claude Code)" || echo "codex-cli 9.9.9"; exit 0 ;;',
-    `  auth) echo '{"loggedIn":true,"authMethod":"fake"}'; exit 0 ;;`,
     '  login) echo "Logged in using ChatGPT"; exit 0 ;;',
     'esac',
     'ro=0; out=""; prev=""',
@@ -38,6 +54,14 @@ function fakeScript(name: 'claude' | 'codex'): string {
     `WHO="$FAKE_${NAME}_WHO"`,
     '[ -z "$MODE" ] && MODE=work',
     '[ -z "$WHO" ] && WHO="$NAME"',
+    'MODEL="${FAKE_CLAUDE_MODEL:-deepseek-v4-flash}"',
+    'if [ $OFFICIAL -eq 1 ]; then',
+    '  if [ -n "$ANTHROPIC_BASE_URL$ANTHROPIC_AUTH_TOKEN$ANTHROPIC_MODEL" ]; then echo "官方账号还带着 ANTHROPIC_* 变量，会被接到别家模型" >&2; exit 3; fi',
+    '  MODE="${FAKE_CLAUDE_OFFICIAL_MODE:-work}"',
+    '  WHO="${FAKE_CLAUDE_OFFICIAL_WHO:-Claude Code · claude-opus-5-5}"',
+    '  MODEL=claude-opus-5-5',
+    'fi',
+    `[ "$NAME" = claude ] && printf '{"type":"system","subtype":"init","model":"%s"}\\n' "$MODEL"`,
     'say() {',
     '  if [ "$NAME" = claude ]; then',
     `    printf '{"type":"result","subtype":"success","result":"%s"}\\n' "$1"`,

@@ -29,7 +29,7 @@ export interface StintView {
   review: Stint['review'];
   /** 给人看的复核情况：「待复核」「复核：没问题（Codex）」「不用复核」。 */
   reviewText: string;
-  reviews: { by: number; byLabel: string; file: string; verdict: string; verdictWord: string }[];
+  reviews: { by: number; byLabel: string; file: string; verdict: string; verdictWord: string; weak?: boolean }[];
   handoff?: string;
   ghost?: boolean;
   note?: string;
@@ -56,14 +56,17 @@ export interface ProjectView {
 
 function toView(s: Stint): StintView {
   const last = s.reviews?.at(-1);
+  const counted = [...(s.reviews ?? [])].reverse().find((m) => !m.weak);
   const reviewText = s.rolledBack
     ? '已退回（作废）'
     : s.review === 'needed'
       ? s.status === 'working'
         ? '进行中'
-        : '待复核'
-      : s.review === 'done' && last
-        ? `复核：${verdictWord(last.verdict)}（${last.byLabel}）`
+        : last?.weak
+          ? `待复核（${last.byLabel} 复核过，但弱模型的复核不算数）`
+          : '待复核'
+      : s.review === 'done' && counted
+        ? `复核：${verdictWord(counted.verdict)}（${counted.byLabel}）`
         : s.kind === 'work'
           ? s.facts?.files
             ? '强模型交接，不用复核'
@@ -131,12 +134,12 @@ export function projectView(root: string): ProjectView {
 }
 
 /** 一棒的详情：交接全文、复核全文。 */
-export function stintDetail(root: string, id: number): { stint: StintView; handoff: string | null; reviews: { file: string; text: string }[] } | null {
+export function stintDetail(root: string, id: number): { stint: StintView; handoff: string | null; reviews: { file: string; text: string; by: string; weak?: boolean }[] } | null {
   const v = loadLedger(root);
   const s = v.stints.find((x) => x.id === id);
   if (!s) return null;
   const h = s.handoff ? readHandoff(root, s.handoff) : null;
-  const reviews = (s.reviews ?? []).map((r) => ({ file: r.file, text: readReview(root, r.file)?.raw ?? '' }));
+  const reviews = (s.reviews ?? []).map((r) => ({ file: r.file, text: readReview(root, r.file)?.raw ?? '', by: r.byLabel, ...(r.weak ? { weak: true } : {}) }));
   return { stint: toView(s), handoff: h?.raw ?? null, reviews };
 }
 

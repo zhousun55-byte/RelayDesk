@@ -70,6 +70,7 @@ function reviewBlock(s: Stint, h: HandoffDoc | undefined, gate: string): string[
       `- 某个文件在它改之前的样子：\`${snapGit()} show ${short(s.from)}:文件路径\``
     );
   }
+  for (const m of (s.reviews ?? []).filter((x) => x.weak)) out.push(`- ${m.byLabel} 复核过（\`${m.file}\`），但它是弱模型、或者是自己复核自己，不算数；可以参考，要你再核一遍。`);
   out.push(`- 结论写到：\`${reviewFileFor(s.id)}\``);
   if (gate) out.push(`- 检查命令：\`${gate}\``);
   return out;

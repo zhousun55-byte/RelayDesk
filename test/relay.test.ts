@@ -267,6 +267,79 @@ for (const git of [true, false]) {
   });
 }
 
+test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官方账号时跳过你的设置、不带 ANTHROPIC_*，由它来复核', () => {
+  const s = prepared('two-claude', { FAKE_CLAUDE_OFFICIAL: 'pro', ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: 'shell-token' });
+  const reg = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'agents.json'), 'utf8')) as { agents: { name: string; cmd?: string }[] };
+  assert.deepEqual(
+    reg.agents.map((a) => a.name),
+    ['claude', 'claude-official', 'codex']
+  );
+  assert.match(reg.agents[1].cmd ?? '', /claude --setting-sources project,local$/, '你自己在终端里开官方账号的命令');
+  s.relay(['workers', 'add', 'claude-app', '--kind', 'app', '--cmd', 'open -a Claude {{dir}}', '--label', 'Claude']);
+  s.relay(['init']);
+  s.relay(['task', '做两步', '--step', '第一步', '第二步']);
+  const brief = s.read('.relay/接力本.md');
+  assert.match(brief, /- 强：.*Claude Code 官方账号（opus）/);
+  assert.match(brief, /- 强：.*Claude（opus）/, '桌面版借官方账号的模型');
+  assert.match(brief, /- 弱：.*Claude Code（deepseek-v4-flash）/);
+
+  s.relay(['go', 'claude']);
+  assert.equal(s.stints()[0].who.member, 'claude');
+  assert.equal(s.stints()[0].review, 'needed');
+  assert.match(s.relay(['review', 'claude'], true), /复核要强模型来做/);
+  s.relay(['review', 'claude-official']);
+  const [first, second] = s.stints();
+  assert.equal(second.who.member, 'claude-official');
+  assert.equal(second.who.model, 'claude-opus-5-5', '记下工具报出来的实际模型');
+  assert.equal(second.who.tier, 'strong');
+  assert.equal(second.status, 'handed', '官方账号那一次没带 ANTHROPIC_* 变量，没被接到 DeepSeek');
+  assert.equal(first.review, 'done');
+  const calls = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n');
+  assert.ok(calls.some((l) => l.startsWith('claude --setting-sources project,local -p ') && l.includes('--model opus')), calls.join('\n'));
+  assert.ok(calls.some((l) => l.startsWith('claude -p ')), '接 DeepSeek 的那位照常调用');
+});
+
+test('你自己在各家工具里做的棒：拿 Claude Code 自己的记录核对——自称 Opus 的 DeepSeek 认得出来，它给自己写的复核不算数', () => {
+  const s = prepared('claude-log', { FAKE_CLAUDE_OFFICIAL: 'pro' });
+  s.relay(['init']);
+  const logs = path.join(s.home, '.claude', 'projects', '-repo-');
+  fs.mkdirSync(logs, { recursive: true });
+  /** 假装 Claude Code 用某个模型改了一个文件：写文件，并在它的会话记录里记一笔。 */
+  const edit = (model: string, entry: string, rel: string, text: string) => {
+    s.write(rel, text);
+    const row = { type: 'assistant', entrypoint: entry, message: { model, content: [{ type: 'tool_use', name: 'Write', input: { file_path: path.join(s.repo, rel), content: text } }] }, timestamp: new Date().toISOString() };
+    fs.appendFileSync(path.join(logs, `${entry}.jsonl`), JSON.stringify(row) + '\n');
+  };
+  const handoffText = (who: string, did: string) => `# 交接：${who}\n\n- 状态：已交接\n\n## 做了什么\n\n- ${did}\n`;
+
+  // 终端里接了 DeepSeek 的 Claude Code 干了一棒，交接里却说自己是 Opus，还给自己写了复核「没问题」。
+  edit('deepseek-v4-flash', 'cli', 'app.js', 'console.log(1)\n');
+  edit('deepseek-v4-flash', 'cli', '.relay/交接/第1棒-0924-2100-claude.md', handoffText('Claude Code · Opus 5.5', '写了 app.js'));
+  s.relay(['snap']);
+  edit('deepseek-v4-flash', 'cli', '.relay/复核/第1棒.md', '# 复核：第 1 棒\n\n- 复核人：Claude Code · Opus 5.5\n- 结论：没问题\n');
+  s.relay(['snap']);
+  const one = s.stints()[0];
+  assert.equal(one.who.member, 'claude', '以记录为准');
+  assert.equal(one.who.tier, 'weak');
+  assert.match(one.who.claimed, /Opus 5\.5/);
+  assert.match(one.note, /Claude Code 的记录/);
+  assert.equal(one.review, 'needed', '它给自己写的复核不算数');
+  assert.equal(one.reviews[0].weak, true);
+  assert.match(s.read('.relay/接力本.md'), /不算数/);
+
+  // 桌面版的 Opus 接着做：复核第 1 棒、修好，再往下做。
+  edit('claude-opus-5-5', 'claude-desktop', '.relay/复核/第1棒.md', '# 复核：第 1 棒\n\n- 复核人：Claude Code · Opus 5.5\n- 结论：有问题，已修好\n');
+  edit('claude-opus-5-5', 'claude-desktop', 'app.js', 'console.log(2)\n');
+  edit('claude-opus-5-5', 'claude-desktop', '.relay/交接/第2棒-0924-2200-claude.md', handoffText('Claude Code · Opus 5.5', '复核了第 1 棒，修了 app.js'));
+  s.relay(['snap']);
+  const [first, second] = s.stints();
+  assert.equal(first.review, 'done');
+  assert.equal(first.reviews.at(-1).verdict, 'fixed');
+  assert.equal(second.who.member, 'claude-official');
+  assert.equal(second.who.model, 'claude-opus-5-5', '模型名换成记录里的准确写法');
+  assert.equal(second.review, 'skip', '强模型自己交接的，不用复核');
+});
+
 test('群聊：轮流说、各自先想；投票不投自己，一个 AI 一票', async () => {
   const s = prepared('talk');
   s.relay(['init', '做滤镜']);

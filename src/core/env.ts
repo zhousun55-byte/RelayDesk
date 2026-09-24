@@ -111,8 +111,9 @@ export function augmentPath(): void {
 
 /**
  * 给 AI 工具子进程用的环境：去掉宿主注入的会话变量，补上用户在登录 shell 里配的变量，PATH 补全。
+ * drop：再去掉这些变量（比如用 Claude Code 的官方账号时，去掉把它接到别家模型的 ANTHROPIC_*）。
  */
-export function agentEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+export function agentEnv(extra: Record<string, string> = {}, drop?: RegExp): NodeJS.ProcessEnv {
   const login = loginEnv();
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (insideAgentHost()) {
@@ -122,6 +123,9 @@ export function agentEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv 
   }
   for (const [k, v] of Object.entries(login)) {
     if (env[k] === undefined) env[k] = v;
+  }
+  if (drop) {
+    for (const k of Object.keys(env)) if (drop.test(k)) delete env[k];
   }
   env.PATH = mergedPath();
   return { ...env, NO_COLOR: '1', FORCE_COLOR: '0', ...extra };

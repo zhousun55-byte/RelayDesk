@@ -904,7 +904,7 @@ function detailBox(s, p) {
   if (d.handoff) box.append(h('h5', null, s.ghost ? '接力台代写的交接' : '它自己写的交接'), h('div', { class: `doc${s.ghost ? '' : ' handwritten'}`, html: md(d.handoff) }));
   else box.append(h('h5', null, '交接'), h('p', { class: 'faint' }, s.status === 'working' ? '还没写交接。' : '没有交接。'));
   if (s.who.claimed) box.append(h('p', { class: 'faint' }, `它自己写的身份：${s.who.claimed}`));
-  for (const r of d.reviews) box.append(h('h5', null, '复核'), h('div', { class: 'doc handwritten', html: md(r.text) }));
+  for (const r of d.reviews) box.append(h('h5', null, r.weak ? `复核（${r.by}，弱模型，不算数）` : '复核'), h('div', { class: 'doc handwritten', html: md(r.text) }));
   if (s.facts && s.facts.paths.length) {
     box.append(
       h('h5', null, `改了哪些文件（${s.facts.files}）`),

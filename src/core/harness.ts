@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { recentOfficialModel } from './claude-log';
 import { agentEnv, envValue, scanApps, which } from './env';
 
 /**
@@ -62,6 +63,8 @@ export interface Invocation {
   outFile?: string;
   /** 额外的环境变量（比如告诉 ZCode 命令行内核它的配置在哪）。 */
   env?: Record<string, string>;
+  /** 要去掉的环境变量（比如用 Claude Code 官方账号时，去掉把它接到别家模型的那些）。 */
+  dropEnv?: RegExp;
 }
 
 export interface HarnessSpec {
@@ -76,6 +79,8 @@ export interface HarnessSpec {
   /** 实测程度：yes = 实测过改文件和跑命令；partial = 实测过一部分；no = 按官方参数写的，没实测。 */
   tested: 'yes' | 'partial' | 'no';
   loginHint: string;
+  /** 你自己在终端里用它时要加的参数（比如 Claude Code 官方账号要跳过你的用户设置）。 */
+  manualArgs?: string[];
   locate(): Located | null;
   login(loc: Located): LoginInfo;
   model(loc: Located): ModelInfo;
@@ -88,8 +93,8 @@ function home(): string {
   return os.homedir();
 }
 
-function run(argv: string[], timeoutMs = 15_000): { code: number; out: string; err: string } {
-  const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: timeoutMs, env: agentEnv(), cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] });
+function run(argv: string[], timeoutMs = 15_000, dropEnv?: RegExp): { code: number; out: string; err: string } {
+  const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: timeoutMs, env: agentEnv({}, dropEnv), cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] });
   return { code: r.status ?? -1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() };
 }
 
@@ -154,6 +159,18 @@ export function claudeSettings(): { model?: string; baseHost?: string; hasToken:
     baseHost: hostOf(strOf(env.ANTHROPIC_BASE_URL)),
     hasToken: !!(strOf(env.ANTHROPIC_AUTH_TOKEN) || strOf(env.ANTHROPIC_API_KEY)),
   };
+}
+
+/** 把 Claude Code 接到别家模型、或者改掉它用的模型的环境变量：用官方账号时一律去掉。 */
+export const CLAUDE_PROVIDER_ENV = /^(ANTHROPIC_|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY)$|CLAUDE_CODE_SUBAGENT_MODEL$)/;
+
+/** 跳过 ~/.claude/settings.json（别家模型的接口和密钥一般配在这里），只读项目里的设置。 */
+const OFFICIAL_ARGS = ['--setting-sources', 'project,local'];
+
+/** Claude Code 默认是不是被接到了别家模型（DeepSeek、Kimi、智谱……）：返回那家的地址，没有返回 null。 */
+export function claudeThirdParty(): string | null {
+  const host = claudeSettings().baseHost ?? hostOf(envValue('ANTHROPIC_BASE_URL'));
+  return host && !/(^|\.)anthropic\.com$/i.test(host) ? host : null;
 }
 
 /** Codex 的 ~/.codex/config.toml 顶层：模型、思考强度、接口；models_cache.json 里这个模型支持的思考强度。 */
@@ -238,15 +255,50 @@ const claude: HarnessSpec = {
     const s = claudeSettings();
     return { model: s.model, label: s.model?.replace(/\[[^\]]*\]$/, ''), via: s.baseHost };
   },
+  invoke: (loc, i) => claudeInvoke(loc, i),
+};
+
+function claudeInvoke(loc: Located, i: InvokeInput, extra: string[] = []): Invocation {
+  const a = [...loc.exec, ...extra, '-p', '--output-format', 'stream-json', '--verbose'];
+  if (i.readOnly) a.push('--tools', 'Read,Grep,Glob');
+  else if (i.level === 'full') a.push('--dangerously-skip-permissions');
+  // 安全档：自动接受改文件；命令放进 Claude Code 自己的沙箱（只能写当前文件夹），沙箱里的命令自动放行。
+  else a.push('--permission-mode', 'acceptEdits', '--settings', JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true } }));
+  if (i.model) a.push('--model', i.model);
+  if (i.effort) a.push('--effort', i.effort);
+  return { argv: a, stdin: i.prompt, format: 'claude' };
+}
+
+/**
+ * Claude Code 用你的官方账号（claude.ai 登录）。你把 Claude Code 默认接到了别家模型（比如 DeepSeek）时，
+ * 同一个 claude 命令其实是两位：默认的（别家模型，多半算弱）和官方账号（Opus，算强）。
+ * 官方账号：跳过你的用户设置、去掉 ANTHROPIC_* 这些变量，就走 claude.ai 登录；默认用最新的 Opus。
+ * 没接别家模型时它和「Claude Code」是同一位，不单列。
+ */
+const claudeOfficial: HarnessSpec = {
+  id: 'claude-official',
+  label: 'Claude Code 官方账号',
+  vendor: 'Anthropic',
+  rank: 9,
+  workLevels: ['safe', 'full'],
+  canReview: true,
+  tested: 'partial',
+  loginHint: '在终端运行 claude auth login，用 claude.ai 账号登录。',
+  manualArgs: OFFICIAL_ARGS,
+  locate: () => (claudeThirdParty() ? locateBin('claude') : null),
+  login(loc) {
+    const r = run([...loc.exec, ...OFFICIAL_ARGS, 'auth', 'status'], 20_000, CLAUDE_PROVIDER_ENV);
+    try {
+      const j = JSON.parse(r.out) as { loggedIn?: boolean; authMethod?: string; subscriptionType?: string };
+      if (j.loggedIn) return { state: 'ok', detail: `已登录（${j.authMethod ?? 'claude.ai'}${j.subscriptionType ? ` · ${j.subscriptionType}` : ''}）` };
+      return { state: 'no', detail: '官方账号没登录' };
+    } catch {
+      return { state: 'unknown', detail: '看不出官方账号的登录状态' };
+    }
+  },
+  model: () => ({ model: 'opus', label: recentOfficialModel() ?? 'opus' }),
   invoke(loc, i) {
-    const a = [...loc.exec, '-p', '--output-format', 'stream-json', '--verbose'];
-    if (i.readOnly) a.push('--tools', 'Read,Grep,Glob');
-    else if (i.level === 'full') a.push('--dangerously-skip-permissions');
-    // 安全档：自动接受改文件；命令放进 Claude Code 自己的沙箱（只能写当前文件夹），沙箱里的命令自动放行。
-    else a.push('--permission-mode', 'acceptEdits', '--settings', JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true } }));
-    if (i.model) a.push('--model', i.model);
-    if (i.effort) a.push('--effort', i.effort);
-    return { argv: a, stdin: i.prompt, format: 'claude' };
+    return { ...claudeInvoke(loc, { ...i, model: i.model || 'opus' }, OFFICIAL_ARGS), dropEnv: CLAUDE_PROVIDER_ENV };
   },
 };
 
@@ -571,12 +623,15 @@ const grok: HarnessSpec = {
   },
 };
 
-export const HARNESSES: HarnessSpec[] = [claude, codex, cursorAgent, zcode, antigravity, gemini, qwen, opencode, droid, copilot, grok];
+export const HARNESSES: HarnessSpec[] = [claude, claudeOfficial, codex, cursorAgent, zcode, antigravity, gemini, qwen, opencode, droid, copilot, grok];
 
 /** 认得的工具报错：翻成能照着做的一句话（认不出返回 null）。 */
 export function explainFailure(harnessId: string | undefined, text: string): string | null {
   if (harnessId === 'zcode' && /Select a model before continuing|Model creation failed/i.test(text)) {
     return 'ZCode 命令行还没选默认模型（桌面版里选的它不认）。在终端里运行一次 ZCode 的命令行，输入 /model 选好模型，之后接力台就能调度它。';
+  }
+  if (harnessId === 'claude-official' && /not logged in|log ?in|unauthorized|401|invalid api key/i.test(text)) {
+    return 'Claude Code 的官方账号没登录（或者登录过期了）：在终端运行 claude auth login，用 claude.ai 账号登录。';
   }
   if (/not logged in|please log ?in|unauthorized|401/i.test(text)) return '看起来没登录（或者登录过期了）：在终端里打开这个工具重新登录一下。';
   return null;

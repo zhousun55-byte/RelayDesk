@@ -25,19 +25,27 @@ export interface MemberInfo extends MemberLike {
   tierSet: boolean;
 }
 
-/** 桌面程序和它的命令行 / 接口是一家：桌面版看不出用的哪个模型，就借同一家的来定强弱。 */
-const FAMILIES: { app: RegExp; siblings: string[] }[] = [
+/**
+ * 桌面程序和它的命令行 / 接口是一家：桌面版看不出用的哪个模型，就借同一家的来定强弱（按 siblings 的顺序找）。
+ * accept：只借这样的模型（Claude 桌面版用的是官方账号，不会是 Claude Code 被接上的 DeepSeek）。
+ */
+const FAMILIES: { app: RegExp; siblings: string[]; accept?: RegExp }[] = [
   { app: /^cursor$|cursor/i, siblings: ['cursor-agent'] },
   { app: /zcode/i, siblings: ['zcode-cli', 'zcode'] },
   { app: /mimo/i, siblings: ['mimo-api'] },
   { app: /chatgpt|^gpt$|codex/i, siblings: ['codex'] },
   { app: /antigravity/i, siblings: ['agy'] },
+  { app: /^claude(-app)?$/i, siblings: ['claude-official', 'claude'], accept: /claude|opus|sonnet|fable|haiku/i },
 ];
 
 function siblingModel(a: AgentConfig, all: MemberInfo[]): string | undefined {
   const f = FAMILIES.find((x) => x.app.test(a.name) || x.app.test(a.label ?? ''));
   if (!f) return undefined;
-  return all.find((m) => m.kind !== 'app' && f.siblings.includes(m.name) && m.model)?.model;
+  for (const name of f.siblings) {
+    const m = all.find((x) => x.kind !== 'app' && x.name === name && x.model);
+    if (m?.model && (!f.accept || f.accept.test(m.model))) return m.model;
+  }
+  return undefined;
 }
 
 export function allMembers(level: Level = 'safe', report: DetectReport | null = loadDetected(), now = new Date()): MemberInfo[] {

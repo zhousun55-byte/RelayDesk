@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildBrief } from '../src/core/brief';
+import { claudeWorkIn } from '../src/core/claude-log';
 import { normalizeConfig } from '../src/core/config';
 import { fillTemplate, shellWords, shq } from '../src/core/launch';
 import { viewLedger, type LedgerEvent, type Stint } from '../src/core/ledger';
@@ -17,7 +18,7 @@ import { normalizeAgent } from '../src/core/registry';
 import { restoreFile, restoreSnapshot, snapChanges, snapFile, takeSnapshot } from '../src/core/snap';
 import { parseNameStatusZ, parseNumstatZ } from '../src/core/status';
 import { buildTalkPrompt, readTalk, type TalkRow } from '../src/core/talk';
-import { memberTier, resolveWho, tierForModel, type MemberLike } from '../src/core/tier';
+import { memberTier, modelFromLabel, resolveWho, sameModel, tierForModel, type MemberLike } from '../src/core/tier';
 import { appendRule, parseBallot, tally } from '../src/core/vote';
 import { ignoredPath } from '../src/ops/watch';
 
@@ -123,6 +124,89 @@ test('认出交接里写的身份：对上工具和模型；自称和实际对�
   const d = resolveWho({ who: 'Claude · claude-opus-5-5' }, members);
   assert.equal(d.tier, 'strong', '桌面版 Claude 用的是 Opus');
   assert.equal(resolveWho({}, members).tier, 'unknown');
+});
+
+test('两个 Claude：接了 DeepSeek 的和官方账号的按模型分开；没写模型按弱的算；你给一位定的强弱不影响另一位', () => {
+  assert.ok(sameModel('opus', 'claude-opus-5-5'));
+  assert.ok(sameModel('Opus 5.5', 'claude-opus-5-5'));
+  assert.ok(sameModel('DeepSeek V4 Flash', 'deepseek-v4-flash'));
+  assert.ok(!sameModel('opus', 'deepseek-flash'));
+  assert.ok(!sameModel('gpt-6', 'gpt-6-astra'));
+  assert.equal(modelFromLabel('Claude Code · Opus 5.5'), 'Opus 5.5');
+  assert.equal(modelFromLabel('Codex · gpt-6'), 'gpt-6');
+  const members: MemberLike[] = [
+    { name: 'claude', label: 'Claude Code', model: 'deepseek-flash', tier: 'weak', harness: 'claude' },
+    { name: 'claude-official', label: 'Claude Code 官方账号', model: 'claude-opus-5-5', tier: 'strong', harness: 'claude-official' },
+    { name: 'claude-app', label: 'Claude', model: 'claude-opus-5-5', tier: 'strong' },
+    { name: 'codex', label: 'Codex', model: 'gpt-6', tier: 'strong', harness: 'codex' },
+  ];
+  const opus = resolveWho({ who: 'Claude Code · Opus 5.5' }, members);
+  assert.equal(opus.member, 'claude-official');
+  assert.equal(opus.tier, 'strong');
+  assert.equal(resolveWho({ tool: 'Claude Code', model: 'claude-opus-5-5' }, members).member, 'claude-official');
+  const ds = resolveWho({ who: 'Claude Code · deepseek-flash' }, members);
+  assert.equal(ds.member, 'claude');
+  assert.equal(ds.tier, 'weak');
+  const bare = resolveWho({ who: 'Claude Code' }, members);
+  assert.equal(bare.member, 'claude', '只写了 Claude Code：两位里按弱的算');
+  assert.equal(bare.tier, 'weak');
+  const set = members.map((m) => (m.name === 'claude' ? { ...m, tierSet: true } : m));
+  assert.equal(resolveWho({ who: 'Claude Code · Opus 5.5' }, set).tier, 'strong', '你给 DeepSeek 那位定的强弱不影响官方账号');
+});
+
+test('Claude Code 的会话记录：只认这段时间里改项目文件的回复（.relay/、只读、子代理、别的文件夹都不算）；中文路径跨读块也认得', () => {
+  const home = tmp('cclog');
+  const root = path.join(home, '滤镜项目');
+  fs.mkdirSync(root);
+  const dir = path.join(home, '.claude', 'projects', '-x-');
+  fs.mkdirSync(dir, { recursive: true });
+  const from = new Date(Date.now() - 10 * 60_000).toISOString();
+  const at = (minAgo: number) => new Date(Date.now() - minAgo * 60_000).toISOString();
+  const row = (o: { model: string; ts: string; tool?: string; file?: string; side?: boolean; entry?: string }) =>
+    JSON.stringify({
+      type: 'assistant',
+      isSidechain: !!o.side,
+      entrypoint: o.entry ?? 'cli',
+      message: { model: o.model, content: [{ type: 'tool_use', name: o.tool ?? 'Write', input: { file_path: o.file ?? path.join(root, 'app.js'), content: 'x' } }] },
+      timestamp: o.ts,
+    });
+  const lines = [
+    row({ model: 'deepseek-flash', ts: at(60) }), // 太早
+    row({ model: 'deepseek-flash', ts: at(5) }), // 算
+    row({ model: 'claude-opus-5-5', ts: at(4), file: path.join(root, '.relay', '交接', '第1棒.md') }), // 写交接不算
+    row({ model: 'claude-opus-5-5', ts: at(4), tool: 'Read' }), // 只读不算
+    row({ model: 'claude-haiku-4-5', ts: at(4), side: true }), // 子代理不算
+    row({ model: 'kimi-k3', ts: at(4), file: path.join(home, '别的项目', 'a.js') }), // 别的文件夹不算
+    JSON.stringify({ type: 'user', message: { content: '改一下' }, timestamp: at(3) }),
+  ];
+  // 最后一条要找的记录正好在项目路径的中文字中间被 1MB 的读块切开：往回读时要按字节拼上，不然认不出是这个项目。
+  const target = row({ model: 'claude-opus-5-5', ts: at(2), entry: 'claude-desktop', file: path.join(root, '界面.js') });
+  const head = Buffer.from(lines.join('\n') + '\n');
+  const t = Buffer.from(target + '\n');
+  const cut = head.length + t.indexOf(Buffer.from('滤镜项目')) + 1;
+  const fillerSize = cut + 1024 * 1024 - head.length - t.length;
+  const stamp = at(1);
+  const empty = JSON.stringify({ type: 'user', timestamp: stamp, pad: '' }).length + 1;
+  const n = Math.ceil(fillerSize / 50_000);
+  const sizes = Array.from({ length: n }, (_, i) => Math.floor(fillerSize / n) + (i === n - 1 ? fillerSize % n : 0));
+  const fill = sizes.map((size) => JSON.stringify({ type: 'user', timestamp: stamp, pad: 'x'.repeat(size - empty) }) + '\n').join('');
+  assert.equal(Buffer.byteLength(fill), fillerSize);
+  fs.writeFileSync(path.join(dir, 's.jsonl'), Buffer.concat([head, t, Buffer.from(fill)]));
+  const oldHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const got = claudeWorkIn(root, from, new Date().toISOString());
+    assert.deepEqual(
+      got.map((w) => [w.model, w.count, w.entry]).sort(),
+      [
+        ['claude-opus-5-5', 1, 'claude-desktop'],
+        ['deepseek-flash', 1, 'cli'],
+      ]
+    );
+    assert.deepEqual(claudeWorkIn(root, at(1), new Date().toISOString()), [], '这段时间没人改');
+  } finally {
+    process.env.HOME = oldHome;
+  }
 });
 
 test('任务清单：读出标题、进度、约定；模板里的占位不算步骤', () => {

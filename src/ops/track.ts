@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildBrief } from '../core/brief';
+import { claudeWorkIn, claudeWriterOf } from '../core/claude-log';
 import { defaultRelayConfig, loadRelayConfig } from '../core/config';
 import { runGate } from '../core/gate';
-import { appendLedger, loadLedger, nextStintId, saveStint, type Facts, type LedgerView, type Stint, type Who } from '../core/ledger';
+import { appendLedger, loadLedger, nextStintId, saveStint, type Facts, type LedgerView, type ReviewMark, type Stint, type Who } from '../core/ledger';
 import { pidAlive } from '../core/proc';
 import { allMembers, type MemberInfo } from '../core/members';
 import {
@@ -23,7 +24,7 @@ import {
 import { matchProtected } from '../core/protected';
 import { changeLine, headSnap, snapChanges, snapDiff, takeSnapshot } from '../core/snap';
 import { stampLocal } from '../core/time';
-import { needsReview, resolveWho, UNKNOWN_WHO } from '../core/tier';
+import { needsReview, resolveWho, sameModel, UNKNOWN_WHO } from '../core/tier';
 import type { RelayConfig } from '../core/types';
 
 /**
@@ -70,6 +71,82 @@ function nowIso(d = new Date()): string {
 export function whoFromHandoff(h: HandoffDoc | null, members: MemberInfo[]): Who {
   if (!h) return UNKNOWN_WHO;
   return resolveWho({ who: h.who, tool: h.tool, model: h.model }, members);
+}
+
+/** 同一个 claude 命令可能是官方账号，也可能被接到了别家模型：自称是这些工具的，要拿记录核对。 */
+const CLAUDE_TOOLS = new Set(['claude', 'claude-official', 'claude-app']);
+const ENTRY_WORDS: Record<string, string> = { 'claude-desktop': '桌面版', cli: '终端', 'sdk-cli': '程序调用' };
+
+function entryWord(entry: string | undefined): string {
+  return entry ? ENTRY_WORDS[entry] ?? entry : '';
+}
+
+export interface CrossCheck {
+  who?: Who;
+  note?: string;
+  /** 身份不改，但要复核（改动里混进了弱模型的）。 */
+  review?: boolean;
+}
+
+/** 一棒的改动是哪段时间攒下的：上一棒结束（没有就是接入时）到 until。 */
+function windowStart(v: LedgerView, s: Stint, until: string): string {
+  const prev = v.stints
+    .filter((x) => x.id !== s.id && x.endedAt && x.endedAt < until)
+    .map((x) => x.endedAt!)
+    .sort()
+    .at(-1);
+  return prev ?? v.init?.ts ?? s.startedAt;
+}
+
+/**
+ * 用 Claude Code 自己的会话记录核对一棒是谁做的（只核对你在各家工具里自己做的棒）：
+ * 1. 交接文件是 Claude Code 写的：以记录里的模型为准（接了 DeepSeek 的 Claude Code 自称 Opus 也认得出来）；
+ * 2. 认不出是谁（没交接、只写了 Claude Code）：看这段时间谁在项目里改文件，按其中最弱的算；
+ * 3. 算下来是强模型，但这段时间有弱模型也在改项目文件：改动混在一起了，要复核。
+ */
+export function crossCheckClaude(root: string, s: Stint, members: MemberInfo[], until: string): CrossCheck | null {
+  const since = windowStart(loadLedger(root), s, until);
+  const claimed = s.who.claimed ?? (s.who.tier === 'unknown' ? undefined : s.who.label);
+  const keepClaim = (w: Who): Who => ({ ...w, ...(claimed && claimed !== w.label ? { claimed } : {}) });
+  const asClaude = (model: string) => resolveWho({ tool: 'Claude Code', model }, members);
+  const notes: string[] = [];
+  let who = s.who;
+  let byLog = false;
+
+  const writer = s.handoff && !s.ghost ? claudeWriterOf(path.join(root, s.handoff), since, until) : null;
+  if (writer) {
+    byLog = true;
+    const actual = asClaude(writer.model);
+    const where = entryWord(writer.entry);
+    if (actual.member !== who.member || actual.tier !== who.tier) {
+      who = keepClaim(actual);
+      notes.push(claimed ? `交接里写的是「${claimed}」，但 Claude Code 的记录显示交接是 ${writer.model}${where ? `（${where}）` : ''}写的，以记录为准。` : `从 Claude Code 的记录认出来：交接是 ${writer.model}${where ? `（${where}）` : ''}写的。`);
+    } else if (who.model !== writer.model) {
+      who = { ...who, model: writer.model, label: actual.label };
+    }
+  }
+
+  const work = claudeWorkIn(root, since, until);
+  if (work.length) {
+    const found = work.map((w) => ({ w, who: asClaude(w.model) }));
+    const weak = found.find((f) => f.who.tier !== 'strong');
+    const list = work.map((w) => `${w.model}（${[entryWord(w.entry), `改了 ${w.count} 次`].filter(Boolean).join('，')}）`).join('、');
+    const aboutClaude = who.tier === 'unknown' || !who.tool || CLAUDE_TOOLS.has(who.tool);
+    if (!byLog && (who.tier === 'unknown' || (aboutClaude && !who.model))) {
+      who = keepClaim((weak ?? found[0]).who);
+      notes.push(`从 Claude Code 的记录认出来的：这段时间在这个文件夹里改文件的是 ${list}。`);
+    } else if (!byLog && aboutClaude && weak && who.tier === 'strong') {
+      who = keepClaim(weak.who);
+      notes.push(`交接里写的是「${claimed}」，但 Claude Code 的记录显示这段时间在这个文件夹里改文件的有 ${list}，按弱的算。`);
+    } else if (weak && who.tier === 'strong') {
+      return { who, note: [...notes, `这段时间 ${weak.w.model}（弱）也在这个文件夹里改过文件：${list}。改动可能混在一起，要复核。`].join(' '), review: true };
+    } else if (!byLog && who.model && found.length === 1 && found[0].who.member === who.member && who.model !== work[0].model && sameModel(who.model, work[0].model)) {
+      // 对得上：把模型名换成记录里的准确写法（Opus 5.5 → claude-opus-5-5）。
+      who = { ...who, model: work[0].model, label: found[0].who.label };
+    }
+  }
+  if (who === s.who && !notes.length) return null;
+  return { who, ...(notes.length ? { note: notes.join(' ') } : {}) };
 }
 
 /** 给复核准备的改动文件（.relay/复核/第N棒.diff）。太大就截断，并写上看完整的命令。 */
@@ -126,6 +203,8 @@ export interface CloseInput {
   note?: string;
   quotaUntil?: string;
   now?: Date;
+  /** 成员名单（核对身份用；不给就现读）。 */
+  members?: MemberInfo[];
 }
 
 /** 结束一棒：算事实、没交接就代写、定要不要复核、准备复核材料。返回结束后的样子（已记账）。 */
@@ -133,6 +212,13 @@ export function closeStint(root: string, s: Stint, input: CloseInput, cfg = proj
   const now = input.now ?? new Date();
   const out: Stint = { ...s, to: input.to, endedAt: nowIso(now), status: input.status };
   delete out.pid;
+  let forceReview = false;
+  if (out.via === 'native' && out.kind === 'work') {
+    const cc = crossCheckClaude(root, out, input.members ?? allMembers(), out.endedAt!);
+    if (cc?.who) out.who = cc.who;
+    if (cc?.note) out.note = [out.note, cc.note].filter(Boolean).join(' ');
+    forceReview = !!cc?.review;
+  }
   out.facts = factsOf(root, s.from, input.to);
   const hits = matchProtected(out.facts.paths, cfg.protectedPaths);
   if (hits.length) out.protectedHits = hits;
@@ -152,7 +238,7 @@ export function closeStint(root: string, s: Stint, input: CloseInput, cfg = proj
   }
   if (out.kind !== 'work') out.review = 'skip';
   else if (out.facts.files === 0) out.review = 'skip';
-  else out.review = needsReview(out.who, real) ? 'needed' : 'skip';
+  else out.review = forceReview || needsReview(out.who, real) ? 'needed' : 'skip';
   if (out.review === 'needed') writeReviewDiff(root, out);
   saveStint(root, out);
   return out;
@@ -169,7 +255,7 @@ export async function gateStint(root: string, id: number, cfg = projectConfig(ro
 }
 
 /** 看复核文件：写好了的，把它复核的那几棒标成「复核过了」。by = 做复核的那一棒。 */
-export function applyReviews(root: string, by: Stint | null): number[] {
+export function applyReviews(root: string, by: Stint | null, members: MemberInfo[] = allMembers()): number[] {
   const v = loadLedger(root);
   const marked: number[] = [];
   for (const f of listReviewFiles(root)) {
@@ -179,15 +265,44 @@ export function applyReviews(root: string, by: Stint | null): number[] {
       const s = v.stints.find((x) => x.id === id);
       if (!s || s.status === 'working') continue;
       const prev = (s.reviews ?? []).find((m) => m.file === r.file);
-      if (prev && prev.verdict === r.verdict) continue;
-      const reviewer = by ?? v.stints.at(-1) ?? null;
-      const mark = { by: reviewer?.id ?? 0, byLabel: r.by || reviewer?.who.label || '不知道是谁', file: r.file, verdict: r.verdict, at: nowIso() };
+      const fresh = !prev || prev.verdict !== r.verdict || r.mtimeMs > Date.parse(prev.at);
+      if (!fresh && prev?.byLog) continue;
+      // 复核文件改过了就是新写的：看现在是谁在做；没改过就还是原来那一棒。
+      const reviewer = (!fresh && prev ? v.stints.find((x) => x.id === prev.by) : null) ?? by ?? v.stints.at(-1) ?? null;
+      const judged = judgeReviewer(root, r.file, r.mtimeMs, r.by, reviewer, s, members, fresh);
+      if (!fresh && prev && !!prev.weak === judged.weak) continue;
+      const mark: ReviewMark = {
+        by: reviewer?.id ?? 0,
+        byLabel: judged.byLog ? judged.label : r.by || judged.label || '不知道是谁',
+        file: r.file,
+        verdict: r.verdict,
+        at: nowIso(),
+        ...(judged.weak ? { weak: true } : {}),
+        ...(judged.byLog ? { byLog: true } : {}),
+      };
       const reviews = [...(s.reviews ?? []).filter((m) => m.file !== r.file), mark];
-      saveStint(root, { ...s, review: 'done', reviews });
+      saveStint(root, { ...s, review: reviews.some((m) => !m.weak) ? 'done' : 'needed', reviews });
       marked.push(id);
     }
   }
   return marked;
+}
+
+/**
+ * 这份复核算不算数：写它的得是强模型，而且不能是它自己复核自己。
+ * 复核文件是 Claude Code 写的：以记录里的模型为准；否则看做复核的那一棒是谁，再不行看复核里写的「复核人」。
+ */
+function judgeReviewer(root: string, file: string, mtimeMs: number, claimed: string, reviewer: Stint | null, target: Stint, members: MemberInfo[], look: boolean): { weak: boolean; label: string; byLog: boolean } {
+  if (look) {
+    const w = claudeWriterOf(path.join(root, file), new Date(mtimeMs - 10 * 60_000).toISOString(), new Date(mtimeMs).toISOString());
+    if (w) {
+      const who = resolveWho({ tool: 'Claude Code', model: w.model }, members);
+      return { weak: who.tier !== 'strong', label: who.label, byLog: true };
+    }
+  }
+  if (reviewer && reviewer.id === target.id) return { weak: true, label: reviewer.who.label, byLog: false };
+  const who = reviewer && reviewer.who.tier !== 'unknown' ? reviewer.who : resolveWho({ who: claimed }, members);
+  return { weak: who.tier !== 'strong', label: who.label, byLog: false };
 }
 
 // ---- 接力本 ----
@@ -308,7 +423,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
     } else if (cur.handoff && unlinked.length) {
       // 另一个 AI 开始写它的交接了：前一棒到此为止。
       const h = readHandoff(root, cur.handoff);
-      closeStint(root, cur, { status: h ? 'handed' : 'unfinished', to: snap, handoff: h, now }, cfg);
+      closeStint(root, cur, { status: h ? 'handed' : 'unfinished', to: snap, handoff: h, now, members }, cfg);
       res.closed.push(cur.id);
       res.changed = true;
       open = null;
@@ -327,7 +442,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
       }
       const end = shouldClose(cur, h);
       if (end) {
-        closeStint(root, cur, { status: end, to: snap, handoff: h, now }, cfg);
+        closeStint(root, cur, { status: end, to: snap, handoff: h, now, members }, cfg);
         res.closed.push(cur.id);
         res.changed = true;
         open = null;
@@ -367,7 +482,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
         };
         saveStint(root, s);
         res.opened.push(s.id);
-        closeStint(root, s, { status: h && h.state !== 'working' ? 'handed' : last ? 'unfinished' : 'handed', to: s.to!, handoff: h, now }, cfg);
+        closeStint(root, s, { status: h && h.state !== 'working' ? 'handed' : last ? 'unfinished' : 'handed', to: s.to!, handoff: h, now, members }, cfg);
         res.closed.push(s.id);
       });
       unlinked.length = 0;
@@ -395,14 +510,14 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
       res.changed = true;
       // 接力台没开着的时候就写好的交接：已经写完了就直接结束。
       if (h && (h.state === 'handed' || h.state === 'finished' || h.state === 'stuck')) {
-        closeStint(root, s, { status: 'handed', to: snap, handoff: h, now }, cfg);
+        closeStint(root, s, { status: 'handed', to: snap, handoff: h, now, members }, cfg);
         res.closed.push(s.id);
       }
     }
   }
 
   const reviewer = loadLedger(root).open;
-  const marked = applyReviews(root, reviewer);
+  const marked = applyReviews(root, reviewer, members);
   if (marked.length) {
     res.reviewed.push(...marked);
     res.changed = true;
