@@ -168,6 +168,14 @@ test('网页接口：强弱可以改；投票出结果后采纳，写进任务�
   s.relay(['init', '做滤镜']);
   const ui = await startUi(s);
   try {
+    // 重新识别在子进程里跑（接力台自己不卡）：结果照样带回来，名单照样更新，做完「正在识别」要复位。
+    const d = await ui.call('/api/detect', { dir: s.repo, offline: true });
+    assert.equal(d.status, 200, JSON.stringify(d.json));
+    assert.ok(d.json.report.harnesses.some((x: { id: string }) => x.id === 'claude'));
+    assert.ok(Array.isArray(d.json.changes));
+    assert.deepEqual(d.json.members.map((m: { name: string }) => m.name).sort(), ['claude', 'codex']);
+    assert.equal((await ui.call(`/api/state${q(s)}`)).json.detecting, false);
+
     const t = await ui.call('/api/members/tier', { name: 'claude', tier: 'strong' });
     assert.equal(t.status, 200);
     const claude = t.json.members.find((m: { name: string }) => m.name === 'claude');

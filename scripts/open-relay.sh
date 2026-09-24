@@ -38,8 +38,14 @@ open_page() {
 
 case "${1:-}" in
   --check)
-    running_port >/dev/null
-    exit $?
+    # 接力台忙的时候可能一两秒顾不上回答：多问几次；进程还在就算在运行。
+    # 不然小程序会以为它停了，自己退出、顺手把接力台也关掉，网页就打不开了。
+    for i in 1 2 3; do
+      running_port >/dev/null && exit 0
+      sleep 1
+    done
+    pgrep -f 'cli\.js ui --no-open$' >/dev/null 2>&1 && exit 0
+    exit 1
     ;;
   --quit)
     if port=$(running_port); then

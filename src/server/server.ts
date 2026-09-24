@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -6,7 +7,7 @@ import { doctor } from '../commands/doctor';
 import { talkContext } from '../commands/talk';
 import { loadAutoSettings, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
-import { detectAll, enableProvider, loadDetected, syncRegistry } from '../core/detect';
+import { enableProvider, loadDetected, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { projectFiles, projectPath, readProjectFile } from '../core/files';
 import { copyToClipboard, fillTemplate, openTerminal, reveal, runOpener, shq, chooseFolder } from '../core/launch';
@@ -44,12 +45,37 @@ export const HINT = '接着做这个项目：先读 .relay/接力本.md，再按
 
 let detecting: Promise<unknown> | null = null;
 
+/**
+ * 识别要十几秒，而且一路同步地问各家工具（版本、登录状态）：放在子进程里跑（relay detect --json），
+ * 接力台自己不卡——卡住的时候桌面小程序会以为接力台停了，网页也会没反应。
+ */
+function detectInChild(offline: boolean): Promise<{ report: DetectReport | null; changes: string[] }> {
+  return new Promise((resolve, reject) => {
+    const cli = path.join(__dirname, '..', 'cli.js');
+    const child = spawn(process.execPath, [cli, 'detect', '--json', ...(offline ? ['--offline'] : [])], { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (c: Buffer) => (out += c.toString('utf8')));
+    child.stderr.on('data', (c: Buffer) => (err += c.toString('utf8')));
+    child.on('error', (e) => reject(new RelayError(`识别没能开始：${e.message}`, 'detect-failed')));
+    child.on('close', (code) => {
+      const tail = (err || out).trim().split('\n').slice(-3).join(' ');
+      if (code !== 0) return reject(new RelayError(`识别失败：${tail || `退出码 ${code}`}`, 'detect-failed'));
+      try {
+        const j = JSON.parse(out.slice(out.indexOf('{'))) as { report?: DetectReport; changes?: string[] };
+        resolve({ report: j.report ?? loadDetected(), changes: j.changes ?? [] });
+      } catch {
+        reject(new RelayError('识别的结果看不懂。', 'detect-failed'));
+      }
+    });
+  });
+}
+
 function ensureDetected(force = false): void {
   if (detecting || process.env.RELAY_AUTODETECT === 'off') return;
   const last = loadDetected();
   if (!force && last && Date.now() - new Date(last.at).getTime() < 12 * 3600_000) return;
-  detecting = detectAll({ network: true })
-    .then((r) => syncRegistry(r))
+  detecting = detectInChild(false)
     .catch(() => undefined)
     .finally(() => {
       detecting = null;
@@ -381,9 +407,15 @@ export function createServer(opts: ServerOptions): http.Server {
     },
     '/api/detect': async (_q, b) => {
       if (detecting) await detecting;
-      const report = await detectAll({ network: b.offline !== true });
-      const changes = syncRegistry(report);
-      return { report, changes, members: memberViews() };
+      const run = detectInChild(b.offline === true);
+      const tracked: Promise<unknown> = run
+        .catch(() => undefined)
+        .finally(() => {
+          if (detecting === tracked) detecting = null;
+        });
+      detecting = tracked;
+      const r = await run;
+      return { report: r.report, changes: r.changes, members: memberViews() };
     },
     '/api/detect/use': (_q, b) => {
       const report = loadDetected();

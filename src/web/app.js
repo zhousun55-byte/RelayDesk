@@ -1144,7 +1144,7 @@ let streamThread = null;
 let stick = true;
 
 function buildCenter() {
-  CE.offline = h('div', { class: 'offline', hidden: true }, icon('warn'), '连接已断开', h('button', { class: 'btn small', onclick: () => refresh() }, '重试'));
+  CE.offline = h('div', { class: 'offline', hidden: true }, icon('warn'), '接力台已停止运行，在桌面双击「接力台」重新打开', h('button', { class: 'btn small', onclick: () => refresh() }, '重试'));
   CE.bar = h('header', { class: 'bar' });
   CE.tabs = h('div', { class: 'tabs', role: 'tablist', hidden: true });
   CE.stream = h('div', { class: 'stream' });
