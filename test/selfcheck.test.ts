@@ -132,6 +132,55 @@ test('复核算谁的：按复核文件改动的时间对是哪一棒写的。�
   assert.match(stint(1).reviews?.at(-1)?.byLabel ?? '', /复核人是「DeepSeek Harness/);
 });
 
+test('先写复核、过一会儿才建交接（照旧版规矩的顺序）：交接建在复核之后 30 秒内，复核算这一棒的；隔得更久还是认不出是谁', () => {
+  registry([CODEX, DSH]);
+  const setup = (name: string, reviewAgoMs: number) => {
+    const { root, write } = project(name);
+    const now = Date.now();
+    // 第 1 棒：弱模型一分钟前做完
+    write('.relay/交接/第1棒-0925-1000-dsh.md', handoff('DeepSeek Harness · deepseek-flash', 'DeepSeek Harness', 'deepseek-flash'));
+    write('a.txt', 'weak\n');
+    track.track(root, { now: new Date(now - 60_000) });
+    // Codex 在自己的工具里先写了复核（那时还没建交接，没有哪一棒在做）
+    write('.relay/复核/第1棒.md', review(1, 'Codex · gpt-6-astra', '没问题'));
+    touchAt(path.join(root, '.relay/复核/第1棒.md'), now - reviewAgoMs);
+    track.track(root);
+    const s1 = () => ledger.loadLedger(root).stints.find((x) => x.id === 1)!;
+    assert.equal(s1().reviews?.at(-1)?.anon, true, '写复核那一刻认不出是谁');
+    // 然后才建交接
+    write('.relay/交接/第2棒-0925-1002-codex.md', handoff('Codex · gpt-6-astra', 'Codex', 'gpt-6-astra', '进行中'));
+    track.track(root);
+    return s1();
+  };
+  const soon = setup('review-then-handoff', 20_000);
+  assert.equal(soon.review, 'done', '以前一直是「认不出是谁写的」，要再复核一遍');
+  assert.equal(soon.reviews?.at(-1)?.by, 2);
+  assert.ok(!soon.reviews?.at(-1)?.anon);
+
+  const late = setup('review-long-before-handoff', 45_000);
+  assert.equal(late.review, 'needed', '隔了 30 秒以上：不知道这中间是谁写的');
+  assert.equal(late.reviews?.at(-1)?.anon, true);
+});
+
+test('检查命令往哪写：只认写的位置（> 文件、tee、-o、--junitxml= 这类），命令里读的文件不算', () => {
+  const yes: [string, string][] = [
+    ['python3 -m unittest -q test_wc && mkdir -p reports && date > reports/last-test-run.txt', 'reports/last-test-run.txt'],
+    ['npm test 2>&1 | tee -a logs/test.log', 'logs/test.log'],
+    ['pytest --junitxml=junit-report.xml', 'junit-report.xml'],
+    ['gcc -o build/app main.c', 'build/app'],
+    ['echo ok >> ./out/r.txt', 'out/r.txt'],
+  ];
+  const no: [string, string][] = [
+    ['pytest tests/test_api.py', 'tests/test_api.py'],
+    ['python3 wc.py < in.txt', 'in.txt'],
+    ['python3 -O wc.py', 'wc.py'],
+    ['cat a.txt > b.txt', 'a.txt'],
+    ['date > reports/last-test-run.txt.bak', 'reports/last-test-run.txt'],
+  ];
+  for (const [c, f] of yes) assert.equal(track.gateWrites(c, f), true, `${c} 写了 ${f}`);
+  for (const [c, f] of no) assert.equal(track.gateWrites(c, f), false, `${c} 没写 ${f}`);
+});
+
 test('只在清单里打勾、一个文件都没改的弱模型，也要复核（关了终审也不会「验收通过」）；强模型只打勾照旧不用复核', () => {
   registry([CODEX, DSH]);
   const { root, write } = project('tick-only', '给 README 加用法说明', ['写用法', '写示例']);
@@ -177,7 +226,7 @@ test('账本坏了一行：不悄悄跳过，验收说「没法验收」、写�
   assert.equal(full.events.at(-1)?.type, 'base');
 });
 
-test('检查命令自己写的文件（缓存、报告）：盯文件夹时全是生成的就记成接力台的改动，不开一棒「不知道是谁」；改到了代码就照常记账', async () => {
+test('检查命令自己写的文件（缓存、报告、命令里写明的文件）：盯文件夹时记成接力台的改动，不开一棒「不知道是谁」；改到了别的代码就照常记账', async () => {
   registry([CODEX]);
   const { root, write } = project('gate-writes');
   config.saveRelayConfig(root, { gate: { command: 'mkdir -p reports && date +%s%N > coverage.xml' }, protectedPaths: [] });
@@ -194,15 +243,26 @@ test('检查命令自己写的文件（缓存、报告）：盯文件夹时全�
   assert.equal(v.stints.length, 1, '以前这里会开出第 2 棒「不知道是谁」');
   assert.equal(v.open, null);
 
-  // 检查命令改到了代码（不是生成的文件）：不替它记，照常算到下一棒（盯文件夹时可能是别的 AI 已经开工了）
-  config.saveRelayConfig(root, { gate: { command: 'echo x >> src.txt' }, protectedPaths: [] });
-  write('.relay/交接/第2棒-0925-1010-codex.md', handoff('Codex · gpt-6-astra', 'Codex', 'gpt-6-astra'));
+  // 检查命令里写明的文件（2026-09-25 真实冒烟测试：`date > reports/last-test-run.txt`）：一样记成接力台的改动
+  config.saveRelayConfig(root, { gate: { command: 'mkdir -p reports && date > reports/last-test-run.txt' }, protectedPaths: [] });
+  write('.relay/交接/第2棒-0925-1005-codex.md', handoff('Codex · gpt-6-astra', 'Codex', 'gpt-6-astra'));
+  write('c.txt', '3\n');
+  await track.trackAndGate(root);
+  track.track(root);
+  v = ledger.loadLedger(root);
+  assert.equal(v.stints.length, 2, '以前这里会开出一棒「不知道是谁」（2026-09-25 真实冒烟测试里就出现过）');
+  assert.match(v.stints[1].note ?? '', /reports\/last-test-run\.txt/);
+
+  // 检查命令改到了命令里没写的代码：不替它记，照常算到下一棒（盯文件夹时可能是别的 AI 已经开工了）
+  write('touch.sh', 'echo x >> src.txt\n');
+  config.saveRelayConfig(root, { gate: { command: 'sh touch.sh' }, protectedPaths: [] });
+  write('.relay/交接/第3棒-0925-1010-codex.md', handoff('Codex · gpt-6-astra', 'Codex', 'gpt-6-astra'));
   write('b.txt', '2\n');
   await track.trackAndGate(root);
   track.track(root);
   v = ledger.loadLedger(root);
-  assert.equal(v.stints.length, 3);
-  assert.deepEqual(v.stints[2].facts?.paths, ['src.txt']);
+  assert.equal(v.stints.length, 4);
+  assert.deepEqual(v.stints[3].facts?.paths, ['src.txt']);
 });
 
 test('投票：AI 还在投的时候你投的那一票不会被后面的结果盖掉；记下的强弱按实际模型算', async () => {

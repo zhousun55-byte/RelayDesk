@@ -314,7 +314,7 @@ export interface GateOptions {
    * 检查命令自己在项目里写了文件（pytest 的 .pytest_cache、覆盖率报告……）怎么记。不记的话，下一次对账会把它们当成
    * 「有人在改文件」，开出一棒「不知道是谁」——全自动会以为有别的 AI 在干活而停下。
    * - all：都算接力台自己的改动，从检查跑完那张快照重新算（调度时用：调度拿着锁，这段时间只有检查命令在改）；
-   * - generated：只有改的全是缓存、报告这类生成出来的文件才这样记（盯文件夹时用：这时可能已经有别的 AI 开工了）。
+   * - generated：只有改的全是缓存、报告这类生成出来的文件、或者检查命令里写明往里写的文件才这样记（盯文件夹时用：这时可能已经有别的 AI 开工了）。
    */
   absorb?: 'all' | 'generated';
 }
@@ -344,16 +344,34 @@ export async function gateStint(root: string, id: number, cfg?: RelayConfig, opt
     record({ status: 'error', command: conf.gate.command, detail: `检查没跑起来：${errorMessage(e)}` });
   }
   if (before && opts.absorb) {
-    const note = absorbGateWrites(root, before, opts.absorb);
+    const note = absorbGateWrites(root, before, opts.absorb, conf.gate.command);
     if (note) record(undefined, note);
   }
 }
 
 /**
- * 检查命令跑完、它自己改了项目里的文件：从跑完的那张快照重新算，记一笔「检查命令写的」，不算到哪一棒头上。
- * 只在跑检查之前和账上的起点一样、现在也没人在做的时候这样记（不然会把别人的改动一起吞掉）。返回给那一棒的说明。
+ * 检查命令里明写着往这个文件写（`date > reports/last-run.txt`、`| tee out.log`、`--junitxml=r.xml`、`-o out.txt`）：
+ * 一定是检查命令自己写的。只认写的位置、按完整路径认：`pytest tests/test_a.py`、`python3 wc.py < in.txt` 里的文件
+ * 是读的，这时别的 AI 可能正好在改它们，不能替它记掉。
  */
-function absorbGateWrites(root: string, before: string, mode: 'all' | 'generated'): string | undefined {
+export function gateWrites(command: string, file: string): boolean {
+  const esc = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lead = [
+    '(?:^|[^<>-])[0-9&]?>>?\\|?\\s*', // > f、>> f、2> f、&> f
+    '\\btee(?:\\s+-[a-z]+)*\\s+', // | tee f、tee -a f
+    '(?:^|\\s)-o\\s*', // -o f
+    '(?:^|\\s)--[\\w-]*(?:[Oo]ut|[Rr]eport|[Jj]unit|[Ll]og|[Rr]esult)[\\w-]*(?:=|\\s+)', // --outFile=f、--junitxml=f、--output f
+  ];
+  // 分大小写：`python3 -O wc.py`、`curl -O` 里的 -O 不是往文件里写。
+  return new RegExp(`(?:${lead.join('|')})['"]?(?:\\./)?${esc}(?=$|['"\\s;&|)<>])`).test(command);
+}
+
+/**
+ * 检查命令跑完、它自己改了项目里的文件：从跑完的那张快照重新算，记一笔「检查命令写的」，不算到哪一棒头上。
+ * 只在跑检查之前和账上的起点一样、现在也没人在做的时候这样记（不然会把别人的改动一起吞掉）。
+ * generated（盯文件夹时）：改的全是生成的文件、或者检查命令里写明往里写的文件才记。返回给那一棒的说明。
+ */
+function absorbGateWrites(root: string, before: string, mode: 'all' | 'generated', command: string): string | undefined {
   const v = loadLedger(root);
   if (v.open || v.base !== before) return undefined;
   const after = takeSnapshot(root, '检查命令跑完').sha;
@@ -364,14 +382,15 @@ function absorbGateWrites(root: string, before: string, mode: 'all' | 'generated
   } catch {
     return undefined;
   }
-  if (!paths.length || (mode === 'generated' && !paths.every(generatedPath))) return undefined;
+  if (!paths.length || (mode === 'generated' && !paths.every((p) => generatedPath(p) || gateWrites(command, p)))) return undefined;
   const list = `${paths.slice(0, 8).join('、')}${paths.length > 8 ? ` 等 ${paths.length} 个` : ''}`;
   appendLedger(root, { type: 'base', ts: nowIso(), snap: after, why: `检查命令写的文件：${list}` });
   return `检查命令跑完改了 ${paths.length} 个文件（${list}），算接力台自己的改动，不算到哪一棒头上。`;
 }
 
 /**
- * 复核文件改动的时间和一棒的时间对得上的余量：开工前留 30 秒（先写复核、紧跟着才建交接，同一次对账里也算这一棒的）。
+ * 复核文件改动的时间和一棒的时间对得上的余量：开工前留 30 秒（先写复核、紧跟着才建交接，也算这一棒的；
+ * 写复核那一刻还没人开工、记成了「认不出是谁」的，这一棒开工后会再认一次）。
  * 收工后不留：接力台调度的棒在工具退出之后才记收工，自己在工具里做的棒在对账那一刻记收工，它写的复核都在这之前；
  * 收工以后才改的，可能是别人改的，不能算到这一棒头上。
  */
@@ -408,9 +427,10 @@ export function applyReviews(root: string, by: Stint | null, members: MemberInfo
       if (!s || s.status === 'working' || s.kind !== 'work') continue;
       const prev = [...(s.reviews ?? [])].reverse().find((m) => m.file === r.file);
       const fresh = !prev || prev.verdict !== r.verdict || r.mtimeMs > Date.parse(prev.at);
-      if (!fresh && (prev?.byLog || prev?.anon)) continue;
+      if (!fresh && prev?.byLog) continue;
       // 复核文件改过了就是新写的：按改动时间找是哪一棒写的。没改过就还是原来那一棒——它的身份后来可能认得更清楚了（交接写好了、对过了记录），再判一次。
-      const reviewer = fresh ? writerOf(v, by, r.mtimeMs, now.getTime()) : (v.stints.find((x) => x.id === prev!.by) ?? null);
+      // 当时认不出是谁的，也再找一次：先写复核、过一会儿才建交接，这一棒开工前 30 秒内写的也算它的。
+      const reviewer = fresh || prev?.anon ? writerOf(v, by, r.mtimeMs, now.getTime()) : (v.stints.find((x) => x.id === prev!.by) ?? null);
       if (!fresh && !reviewer) continue;
       const judged = judgeReviewer(root, r, reviewer, s, members, fresh);
       if (!fresh && prev && !!prev.weak === judged.weak) continue;

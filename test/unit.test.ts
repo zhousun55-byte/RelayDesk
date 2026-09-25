@@ -341,6 +341,11 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
   // DeepSeek Harness 真实的写法（2026-09-25 冒烟测试）：读了接力本、建了交接文件，「wc.py：」下面那条才是活。
   const dsh = parseHandoff('# 交接：DeepSeek Harness · deepseek-flash\n\n## 做了什么\n\n- 读了 `.relay/接力本.md`、`AGENTS.md`：本棒是第 1 棒。\n- 建了本交接文件（边做边记）。\n- `wc.py`：\n  - `count(text)` 返回 `(行数, 词数, 字符数)`。\n- `.relay/任务.md` 三项全部打勾。\n');
   assert.equal(dsh.summary, '`wc.py`：`count(text)` 返回 `(行数, 词数, 字符数)`。');
+  // Codex 在自己的工具里复核的真实写法（2026-09-25 原生冒烟测试）：以前挑成「没有修改 wc.py 或 test_wc.py。」
+  const reviewing = parseHandoff('# 交接：Codex · gpt-6-sol\n\n## 做了什么\n\n- 已读接力本、第 7 棒交接和快照差异，核对了实际改动的三个文件。\n- 复核结论写入 `.relay/复核/第7棒.md`：没问题。\n- 在 `.relay/任务.md` 勾选第 7 棒复核进度。\n- 没有修改 `wc.py` 或 `test_wc.py`。\n');
+  assert.equal(reviewing.summary, '复核结论写入 `.relay/复核/第7棒.md`：没问题。');
+  assert.equal(parseHandoff('# 交接：x\n\n## 做了什么\n\n- 没有修改 `wc.py`。\n- README.md 补了从标准输入读的用法。\n').summary, 'README.md 补了从标准输入读的用法。');
+  assert.equal(parseHandoff('# 交接：x\n\n## 做了什么\n\n- 读了接力本。\n- 没有修改代码，只跑了检查。\n').summary, '没有修改代码，只跑了检查。', '别的都是准备时还是用它');
 });
 
 test('复核结论：认出复核的是第几棒、结论是哪一种', () => {

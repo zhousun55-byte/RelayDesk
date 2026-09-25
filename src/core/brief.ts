@@ -132,7 +132,7 @@ export function buildBrief(input: BriefInput): string {
     s.push(`## 先复核（${pending.length} 棒待复核）`, '');
     s.push(
       strong.length
-        ? `**强模型开工先做这件事**；弱模型跳过这一节，直接接着干活（你的活之后也会被复核）。`
+        ? `**强模型建好交接文件就先做这件事**；弱模型跳过这一节，直接接着干活（你的活之后也会被复核）。`
         : '现在名单里没有强模型；能复核的请先复核，不能的跳过。',
       ''
     );
