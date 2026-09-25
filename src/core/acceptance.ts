@@ -105,8 +105,10 @@ export function acceptance(input: AcceptInput): Acceptance {
           ? `终审没做成（${f.who.label} ${statusWord(f.status)}${f.note ? `：${f.note.slice(0, 80)}` : ''}）`
           : f.who.tier !== 'strong'
             ? `终审实际是弱模型做的（${f.who.label}），不算数`
-            : !f.verdict || !FINAL_PASS.has(f.verdict)
-              ? `终审结论是「${verdictWord(f.verdict ?? 'unknown')}」（${f.who.label}）`
+            : !f.verdict
+              ? `终审没留下结论（${f.who.label}）`
+              : !FINAL_PASS.has(f.verdict)
+                ? `终审结论是「${verdictWord(f.verdict)}」（${f.who.label}）`
               : '终审之后又有人改了文件，要重新终审';
       final = { required: true, ok: false, ...(f ? { stint: f.id } : {}), text };
       items.push({ kind: 'final', text, ...(f ? { stint: f.id } : {}) });

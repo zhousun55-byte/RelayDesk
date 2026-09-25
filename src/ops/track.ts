@@ -484,6 +484,19 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
     saveStint(root, fixed);
     res.changed = true;
   }
+  // 旧版本没把终审结论记进账本：按时间找它写的结论文件（.relay/复核/终审-*.md，
+  // 改动时间在这一棒开始到结束后一分钟内、只有一份）补上。找不到就不补，验收照样算「终审没留下结论」。
+  const reviewFiles = listReviewFiles(root);
+  for (const s of v.stints.filter((x) => x.kind === 'final' && x.status !== 'working' && !x.verdict && !x.reviewFile)) {
+    const from = Date.parse(s.startedAt);
+    const to = Date.parse(s.endedAt ?? s.startedAt) + 60_000;
+    const hits = reviewFiles.filter((f) => /\/终审[^/]*\.md$/.test(f.rel) && f.mtimeMs >= from && f.mtimeMs <= to);
+    if (hits.length !== 1) continue;
+    const r = readReview(root, hits[0].rel);
+    if (!r) continue;
+    saveStint(root, { ...s, reviewFile: r.file, verdict: r.verdict, ...(r.verdictText ? { verdictText: r.verdictText } : {}) });
+    res.changed = true;
+  }
   if (res.changed) v = loadLedger(root);
 
   // 接力台调度到一半被关了。

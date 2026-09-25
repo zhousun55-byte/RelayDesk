@@ -171,9 +171,10 @@ test('验收：清单打勾不等于做完——开着终审却没终审、终�
   a = acceptance({ ...base, ledger: view([work, { ...good, verdict: 'problem' }]) });
   assert.equal(a.state, 'blocked');
   assert.match(a.final.text, /有问题，还没修/);
-  // 终审没写结论
+  // 终审没留下结论
   a = acceptance({ ...base, ledger: view([work, { ...good, verdict: undefined }]) });
   assert.equal(a.state, 'blocked');
+  assert.match(a.final.text, /终审没留下结论/);
   // 终审出错
   a = acceptance({ ...base, ledger: view([work, { ...good, status: 'failed', verdict: undefined }]) });
   assert.match(a.final.text, /终审没做成/);
@@ -206,6 +207,30 @@ test('验收：清单打勾不等于做完——开着终审却没终审、终�
   assert.equal(a.state, 'unknown');
   // 清单没打完：还在做
   assert.equal(acceptance({ ...base, task: notes.parseTask('# 任务\n\n做\n\n## 进度\n\n- [x] 一\n- [ ] 二\n'), ledger: view([work]) }).state, 'working');
+});
+
+test('旧版本没把终审结论记进账本：按时间找回它写的结论文件补上；时间对不上、找到好几份都不乱补', () => {
+  const root = tmpDir('legacy-final');
+  fs.writeFileSync(path.join(root, 'a.txt'), '1\n');
+  const sha = snap.takeSnapshot(root, 't').sha;
+  const t0 = Date.now() - 3600_000;
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const facts0 = { files: 0, added: 0, removed: 0, paths: [] };
+  const work = stint(1, { who: STRONG, review: 'skip', from: sha, to: sha, startedAt: iso(t0), endedAt: iso(t0 + 60_000) });
+  const fin = stint(2, { kind: 'final', who: STRONG, review: 'skip', from: sha, to: sha, startedAt: iso(t0 + 120_000), endedAt: iso(t0 + 300_000), facts: facts0 });
+  const old = stint(3, { kind: 'final', who: STRONG, review: 'skip', from: sha, to: sha, startedAt: iso(t0 + 900_000), endedAt: iso(t0 + 960_000), facts: facts0 });
+  const ev: LedgerEvent[] = [{ type: 'init', ts: iso(t0 - 1000), snap: sha }, ...[work, fin, old].map((x): LedgerEvent => ({ type: 'stint', ts: x.endedAt!, stint: x }))];
+  fs.writeFileSync(path.join(root, '.relay', 'journal.jsonl'), ev.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  fs.mkdirSync(path.join(root, '.relay', '复核'), { recursive: true });
+  const file = path.join(root, '.relay', '复核', '终审-0925-0842.md');
+  fs.writeFileSync(file, '# 复核：终审\n\n- 复核人：Codex · gpt-6\n- 结论：通过，全部完成\n');
+  fs.utimesSync(file, new Date(t0 + 200_000), new Date(t0 + 200_000));
+  track.track(root, { snapshot: false });
+  const v = ledger.loadLedger(root);
+  const f2 = v.stints.find((x) => x.id === 2)!;
+  assert.equal(f2.verdict, 'ok');
+  assert.equal(f2.reviewFile, '.relay/复核/终审-0925-0842.md');
+  assert.equal(v.stints.find((x) => x.id === 3)!.verdict, undefined, '第 3 棒那段时间没有结论文件：不乱补');
 });
 
 test('快照读不出来（快照找不到、仓库坏了）就报错，不能当成没改动；弱模型的这一棒按要复核算', () => {

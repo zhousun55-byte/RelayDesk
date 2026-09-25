@@ -665,7 +665,7 @@ const dsh: HarnessSpec = {
   rank: 35,
   workLevels: ['safe', 'full'],
   canReview: true,
-  tested: 'no',
+  tested: 'partial',
   loginHint: '打开 DeepSeek Harness 桌面版，登录 DeepSeek 账号（接力台用的是同一个登录）。',
   locate: locateDsh,
   login() {
