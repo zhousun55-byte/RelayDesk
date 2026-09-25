@@ -296,9 +296,13 @@ const claudeOfficial: HarnessSpec = {
       return { state: 'unknown', detail: '看不出官方账号的登录状态' };
     }
   },
-  model: () => ({ model: 'opus', label: recentOfficialModel() ?? 'opus' }),
+  model: () => {
+    const m = recentOfficialModel();
+    return { model: m ?? 'opus', label: m ?? 'opus' };
+  },
   invoke(loc, i) {
-    return { ...claudeInvoke(loc, { ...i, model: i.model || 'opus' }, OFFICIAL_ARGS), dropEnv: CLAUDE_PROVIDER_ENV };
+    // 没在名单里指定模型：用这台电脑上最近用过的最新 Opus（和桌面版一样），看不出来再用简称 opus。
+    return { ...claudeInvoke(loc, { ...i, model: i.model || recentOfficialModel() || 'opus' }, OFFICIAL_ARGS), dropEnv: CLAUDE_PROVIDER_ENV };
   },
 };
 

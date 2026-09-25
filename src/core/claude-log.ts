@@ -209,22 +209,43 @@ export function claudeWriterOf(file: string, fromIso: string, toIso: string): Cl
   return b ? { model: b.model, ...(b.entry ? { entry: b.entry } : {}), at: new Date(b.at).toISOString() } : null;
 }
 
-/** 最近用官方账号的 Claude Code 回复用的是哪个模型（给名单显示用，比如 claude-opus-5-5）；看不出来返回 undefined。 */
+/** 「claude-opus-5-5」→ [5, 5]，「claude-opus-4-1-20250805」→ [4, 1]（日期不算版本）。 */
+function versionOf(model: string): number[] {
+  return model
+    .replace(/^claude-[a-z]+-/, '')
+    .split('-')
+    .filter((x) => /^\d{1,3}$/.test(x))
+    .map(Number);
+}
+
+function newer(a: string, b: string): number {
+  const x = versionOf(a);
+  const y = versionOf(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+/**
+ * 这台电脑上最近用过的最新的 Opus（比如桌面版正在用的 claude-opus-5-5）：官方账号就派它。
+ * 命令行里的简称 opus 不一定指最新版（2.1.263 版指的是 claude-opus-5），所以按版本号挑最新的；看不出来返回 undefined。
+ */
 export function recentOfficialModel(family = /^claude-opus-/): string | undefined {
   const since = Date.now() - 30 * 86_400_000;
+  let best: string | undefined;
   for (const file of recentLogs(since).slice(0, 8)) {
-    let found: string | undefined;
     let seen = 0;
     eachLineFromEnd(file, (line) => {
       if (++seen > 4000) return false;
       const m = line.match(/"model":"(claude-[^"]+)"/)?.[1];
       if (m && family.test(m) && line.includes('"assistant"')) {
-        found = m;
-        return false;
+        if (!best || newer(m, best) > 0) best = m;
+        return false; // 这个会话最近用的已经找到了
       }
       return true;
     });
-    if (found) return found;
   }
-  return undefined;
+  return best;
 }

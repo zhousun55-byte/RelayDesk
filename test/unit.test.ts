@@ -14,6 +14,7 @@ import { globToRegExp, matchProtected } from '../src/core/protected';
 import { installProtocol, protocolBlock, protocolState, removeProtocol } from '../src/core/protocol';
 import { detectQuota } from '../src/core/quota';
 import { redactSecrets } from '../src/core/redact';
+import { makeParser } from '../src/core/runner';
 import { normalizeAgent } from '../src/core/registry';
 import { restoreFile, restoreSnapshot, snapChanges, snapFile, takeSnapshot } from '../src/core/snap';
 import { parseNameStatusZ, parseNumstatZ } from '../src/core/status';
@@ -154,6 +155,14 @@ test('两个 Claude：接了 DeepSeek 的和官方账号的按模型分开；没
   assert.equal(bare.tier, 'weak');
   const set = members.map((m) => (m.name === 'claude' ? { ...m, tierSet: true } : m));
   assert.equal(resolveWho({ who: 'Claude Code · Opus 5.5' }, set).tier, 'strong', '你给 DeepSeek 那位定的强弱不影响官方账号');
+  // 版本对不上、但同一家（2026-09-24 真实跑出来的：名单记 claude-opus-5-5，命令行 --model opus 实际是 claude-opus-5）。
+  const older = resolveWho({ tool: 'Claude Code', model: 'claude-opus-5' }, members);
+  assert.equal(older.member, 'claude-official');
+  assert.equal(older.label, 'Claude Code 官方账号 · claude-opus-5', '记实际的模型');
+  assert.equal(older.tier, 'strong');
+  const pro = resolveWho({ tool: 'Claude Code', model: 'deepseek-v4-pro' }, members);
+  assert.equal(pro.member, 'claude', 'DeepSeek 换了个型号也还是那一位');
+  assert.equal(pro.tier, 'weak');
 });
 
 test('Claude Code 的会话记录：只认这段时间里改项目文件的回复（.relay/、只读、子代理、别的文件夹都不算）；中文路径跨读块也认得', () => {
@@ -316,6 +325,10 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
   const blank = parseHandoff('# 交接：x\n\n- 状态：进行中\n\n## 做了什么\n\n- \n\n## 没做完 / 下一步\n\n- \n');
   assert.equal(blank.state, 'working');
   assert.equal(handoffFilled(blank), false);
+  // 真实跑出来的交接：第一条是「读了接力本……」，一句话摘要要挑真干了活的那条。
+  const real = parseHandoff('# 交接：Claude Code · deepseek-flash\n\n## 做了什么\n\n- 读了 `.relay/接力本.md`、`.relay/任务.md`：这是第 1 棒\n- 新建 `wc.py`：输出行数、字数、字符数\n');
+  assert.equal(real.summary, '新建 `wc.py`：输出行数、字数、字符数');
+  assert.equal(parseHandoff('# 交接：x\n\n## 做了什么\n\n- 读了代码，没发现要改的\n').summary, '读了代码，没发现要改的', '只有这一条时还是用它');
 });
 
 test('复核结论：认出复核的是第几棒、结论是哪一种', () => {
@@ -345,6 +358,38 @@ test('额度用完：认得各家的提示，算出恢复时间；普通报错�
   assert.equal(detectQuota('错误：余额不足或无可用资源包', now).hit, true);
   assert.equal(detectQuota('TypeError: undefined is not a function', now).hit, false);
   assert.equal(detectQuota('我给页面加了一个显示额度的小组件。', now).hit, false);
+
+  // 新版 Claude Code 的原话（2026-09-24 真实跑出来的）：按后面写的时区算，跟这台电脑在哪个时区无关。
+  const at = new Date('2026-09-24T15:53:58Z'); // 上海 23:53
+  const s1 = detectQuota("23:53:58 说：You've hit your session limit · resets 3:50am (Asia/Shanghai)", at);
+  assert.equal(s1.hit, true, '认得 session limit');
+  assert.equal(s1.until, '2026-09-24T19:50:00.000Z', '上海第二天 3:50');
+  assert.equal(detectQuota("You've hit your session limit · resets 3:50am (America/New_York)", at).until, '2026-09-25T07:50:00.000Z', '纽约 3:50（夏令时）');
+  const w = detectQuota('Weekly limit reached ∙ resets Oct 9, 10am (Asia/Shanghai)', at);
+  assert.equal(w.hit, true);
+  assert.equal(w.until, '2026-10-09T02:00:00.000Z', '带日期的恢复时间');
+  assert.equal(detectQuota("You've hit your Opus limit · resets Sep 26 at 9:30pm (Asia/Shanghai)", at).until, '2026-09-26T13:30:00.000Z');
+  assert.equal(detectQuota("You've hit your weekly limit · resets Jan 2 (UTC)", at).until, '2027-01-02T00:00:00.000Z', '过了今年的就是明年');
+});
+
+test('Claude Code 输出里的模型：以回复里记的为准，去掉 [1m] 这种上下文档位；<synthetic>（工具自己拼的话）不算', () => {
+  const run = (lines: unknown[]) => {
+    const p = makeParser('claude');
+    const shown = lines.flatMap((l) => p.line(JSON.stringify(l)));
+    return { model: p.model(), shown };
+  };
+  const init = (model: string) => ({ type: 'system', subtype: 'init', model });
+  const reply = (model: string) => ({ type: 'assistant', message: { model, content: [{ type: 'text', text: '好' }] } });
+  let r = run([init('claude-opus-5'), reply('claude-opus-5-5'), reply('claude-opus-5-5')]);
+  assert.equal(r.model, 'claude-opus-5-5');
+  assert.deepEqual(
+    r.shown.filter((x) => x.startsWith('模型：')),
+    ['模型：claude-opus-5', '模型：claude-opus-5-5'],
+    '日志里看得到实际用的是哪个'
+  );
+  r = run([init('deepseek-flash[1m]'), reply('<synthetic>')]);
+  assert.equal(r.model, 'deepseek-flash', '只有 init：去掉方括号');
+  assert.equal(run([init('deepseek-flash[1m]'), reply('deepseek-flash')]).shown.filter((x) => x.startsWith('模型：')).length, 1, '去掉方括号后一样，不重复显示');
 });
 
 test('接力规矩：写进 AGENTS.md / CLAUDE.md 不碰你自己写的；重复执行不重复；CLAUDE.md 引用了 AGENTS.md 就不写', () => {

@@ -65,10 +65,18 @@ function textOf(content: unknown): string {
   return '';
 }
 
+/** 「deepseek-flash[1m]」：方括号里是上下文长度的档位，不是另一个模型。 */
+function modelName(m: string): string {
+  return m.trim().replace(/\[[^\]]*\]$/, '');
+}
+
 function claudeParser(): StreamParser {
   let final = '';
   let last = '';
-  let model: string | undefined;
+  /** 开头 init 报的模型（可能是「claude-opus-5」这种简写）。 */
+  let initModel: string | undefined;
+  /** 回复里记的实际模型（更准）；<synthetic> 是工具自己拼的话（比如额度提示），不算。 */
+  let replyModel: string | undefined;
   return {
     line(raw) {
       const j = tryJson(raw);
@@ -76,13 +84,18 @@ function claudeParser(): StreamParser {
       const type = s(j.type);
       if (type === 'system') {
         if (j.subtype === 'init') {
-          model = s(j.model) || model;
-          return [`模型：${model ?? '?'}`];
+          initModel = modelName(s(j.model)) || initModel;
+          return [`模型：${initModel ?? '?'}`];
         }
         return [];
       }
       if (type === 'assistant') {
         const out: string[] = [];
+        const m = modelName(s(o(j.message).model));
+        if (m && !m.startsWith('<') && m !== replyModel) {
+          if (!replyModel && m !== initModel) out.push(`模型：${m}`);
+          replyModel = m;
+        }
         for (const b of (o(j.message).content as unknown[]) ?? []) {
           const blk = o(b);
           if (blk.type === 'text' && s(blk.text).trim()) {
@@ -116,7 +129,7 @@ function claudeParser(): StreamParser {
       return [];
     },
     final: () => final || last,
-    model: () => model,
+    model: () => replyModel ?? initModel,
   };
 }
 

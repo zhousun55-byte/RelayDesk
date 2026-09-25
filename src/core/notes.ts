@@ -286,12 +286,24 @@ function stateOf(text: string | undefined): HandoffDoc['state'] {
   return 'unknown';
 }
 
+function bullets(text: string): string[] {
+  return text
+    .split('\n')
+    .map((l) => l.replace(/^\s*[-*+]\s*|^\s*\d+[.、)]\s*/, '').trim())
+    .filter((t) => t && !/^[（(].*[）)]$/.test(t));
+}
+
+const clip80 = (t: string) => (t.length > 80 ? `${t.slice(0, 80)}…` : t);
+
 function firstBullet(text: string): string {
-  for (const l of text.split('\n')) {
-    const t = l.replace(/^\s*[-*+]\s*|^\s*\d+[.、)]\s*/, '').trim();
-    if (t && !/^[（(].*[）)]$/.test(t)) return t.length > 80 ? `${t.slice(0, 80)}…` : t;
-  }
-  return '';
+  return clip80(bullets(text)[0] ?? '');
+}
+
+/** 「做了什么」里挑一条当一句话摘要：跳过开头「读了接力本、看了任务」这种准备工作，找第一条真干了活的。 */
+function workBullet(text: string): string {
+  const all = bullets(text);
+  const reading = /^(先)?(读|看|查看|阅读|浏览|了解|熟悉)(了|过|完)?|^read\b/i;
+  return clip80(all.find((t) => !reading.test(t)) ?? all[0] ?? '');
 }
 
 export function parseHandoff(raw: string, file = '', mtimeMs = 0): HandoffDoc {
@@ -307,7 +319,7 @@ export function parseHandoff(raw: string, file = '', mtimeMs = 0): HandoffDoc {
     next: section(raw, /没做完|下一步/),
     unsure: section(raw, /不确定|可能有错|风险|假设/),
     verify: section(raw, /怎么验证|验证/),
-    summary: firstBullet(did),
+    summary: workBullet(did),
     raw,
     mtimeMs,
   };

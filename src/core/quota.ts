@@ -10,9 +10,10 @@ import { relayHome } from './paths';
 const HIT = new RegExp(
   [
     'usage[ _-]?limit',
-    'hit your (?:usage )?limit',
+    // Claude Code：「You've hit your session limit」「hit your weekly / Opus limit」「Weekly limit reached」
+    'hit your (?:[\\w-]+ )?limit',
     'limit (?:reached|exceeded)',
-    'reached (?:your|the) (?:usage |rate |daily |weekly )?limit',
+    'reached (?:your|the) (?:[\\w-]+ )?limit',
     'quota',
     'insufficient[ _](?:balance|quota|credits?)',
     'credit balance is too low',
@@ -61,22 +62,84 @@ function relative(text: string, now: Date): Date | null {
   return ms > 0 ? new Date(now.getTime() + ms) : null;
 }
 
-/** 「resets 3pm」「resets at 15:30」「于 15:00 恢复」这种当天钟点（过了就算明天）。 */
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/** 提示里写的时区：「resets 3:50am (Asia/Shanghai)」。没写或认不出就用这台电脑的时区。 */
+function zoneOf(text: string): string | undefined {
+  const m = text.match(/\(\s*((?:[A-Za-z]+\/)+[A-Za-z0-9_+-]+|UTC|GMT)\s*\)/);
+  if (!m) return undefined;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: m[1] });
+    return m[1];
+  } catch {
+    return undefined;
+  }
+}
+
+/** ms 这一刻在某个时区（不给就是本机）是几年几月几日几点几分。 */
+function wallOf(ms: number, tz?: string): { y: number; mo: number; d: number; h: number; mi: number } {
+  if (!tz) {
+    const x = new Date(ms);
+    return { y: x.getFullYear(), mo: x.getMonth(), d: x.getDate(), h: x.getHours(), mi: x.getMinutes() };
+  }
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' }).formatToParts(new Date(ms));
+  const g = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  return { y: g('year'), mo: g('month') - 1, d: g('day'), h: g('hour') % 24, mi: g('minute') };
+}
+
+/** 某个时区里的「y 年 mo 月 d 日 h:mi」是哪一刻（日子超出当月会自动进位）。 */
+function zoned(y: number, mo: number, d: number, h: number, mi: number, tz?: string): Date {
+  if (!tz) return new Date(y, mo, d, h, mi, 0, 0);
+  const want = Date.UTC(y, mo, d, h, mi);
+  let t = want;
+  for (let i = 0; i < 3; i++) {
+    const w = wallOf(t, tz);
+    const diff = want - Date.UTC(w.y, w.mo, w.d, w.h, w.mi);
+    if (!diff) break;
+    t += diff;
+  }
+  return new Date(t);
+}
+
+function hour24(h: string, ap?: string): number {
+  let n = Number(h);
+  const a = (ap ?? '').toLowerCase();
+  if (a === 'pm' && n < 12) n += 12;
+  if (a === 'am' && n === 12) n = 0;
+  return n;
+}
+
+/**
+ * 「resets 3pm」「resets at 15:30」「于 15:00 恢复」这种钟点（过了就算明天），
+ * 和「resets Oct 9, 10am」「resets Sep 30 at 9:30pm」这种带日期的；后面写了时区就按那个时区算。
+ */
 function clock(text: string, now: Date): Date | null {
+  const tz = zoneOf(text);
+  const dm = text.match(/resets?\s+(?:on\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(.*)/i);
+  if (dm) {
+    const rest = dm[3];
+    const tm = rest.match(/^\s*,?\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i) ?? rest.match(/^\s*,?\s*(?:at\s+)?(\d{1,2}):(\d{2})\b/);
+    const h = tm ? hour24(tm[1], tm[3]) : 0;
+    const mi = tm?.[2] ? Number(tm[2]) : 0;
+    const day = Number(dm[2]);
+    if (h > 23 || mi > 59 || day < 1 || day > 31) return null;
+    const mo = MONTHS.indexOf(dm[1].toLowerCase());
+    const y = wallOf(now.getTime(), tz).y;
+    let d = zoned(y, mo, day, h, mi, tz);
+    if (d.getTime() <= now.getTime()) d = zoned(y + 1, mo, day, h, mi, tz);
+    return d;
+  }
   const m =
     text.match(/resets?\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i) ??
     text.match(/(?:于|在)\s*(\d{1,2})[:：](\d{2})\s*(?:后|之后)?\s*(?:恢复|重置|重试)/) ??
     text.match(/(\d{1,2})[:：](\d{2})\s*(?:后|之后)?\s*(?:恢复|重置)/);
   if (!m) return null;
-  let h = Number(m[1]);
-  const min = m[2] ? Number(m[2]) : 0;
-  const ap = (m[3] ?? '').toLowerCase();
-  if (ap === 'pm' && h < 12) h += 12;
-  if (ap === 'am' && h === 12) h = 0;
-  if (h > 23 || min > 59) return null;
-  const d = new Date(now);
-  d.setHours(h, min, 0, 0);
-  if (d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1);
+  const h = hour24(m[1], m[3]);
+  const mi = m[2] ? Number(m[2]) : 0;
+  if (h > 23 || mi > 59) return null;
+  const t = wallOf(now.getTime(), tz);
+  let d = zoned(t.y, t.mo, t.d, h, mi, tz);
+  if (d.getTime() <= now.getTime()) d = zoned(t.y, t.mo, t.d + 1, h, mi, tz);
   return d;
 }
 

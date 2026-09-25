@@ -94,8 +94,12 @@ export function resolveWho(claim: { who?: string; tool?: string; model?: string 
   const toolOf = (m: MemberLike) => (m.harness ? TOOL_FAMILY[m.harness] ?? m.harness : undefined);
   const byTool = tool ? members.filter((m) => toolOf(m) === tool.id || m.name === tool.id || new RegExp(tool.re.source, 'i').test(m.label)) : [];
   const byModel = model ? members.filter((m) => m.model && sameModel(m.model, model)) : [];
+  // 版本对不上、但同一家的（名单记的 claude-opus-5-5，这次是 claude-opus-5）：这个工具里只有一位是这家的，就是它。
+  const byVendor = model ? byTool.filter((m) => m.model && vendorOf(m.model) === vendorOf(model)) : [];
   const weakFirst = [...byTool].sort((a, b) => Number(a.tier === 'strong') - Number(b.tier === 'strong'));
-  const hit = byTool.find((m) => byModel.includes(m)) ?? (model ? byModel[0] ?? (byTool.length === 1 && !byTool[0].model ? byTool[0] : undefined) : weakFirst[0]);
+  const hit =
+    byTool.find((m) => byModel.includes(m)) ??
+    (model ? byModel[0] ?? (byVendor.length === 1 ? byVendor[0] : undefined) ?? (byTool.length === 1 && !byTool[0].model ? byTool[0] : undefined) : weakFirst[0]);
   // 你在设置里定过这一位的强弱：以你为准（不管它这次用的什么模型）。
   const decided = hit?.tierSet ? hit : !hit && byTool.length === 1 && byTool[0].tierSet ? byTool[0] : undefined;
   const tier: Tier3 = decided
@@ -116,6 +120,13 @@ export function resolveWho(claim: { who?: string; tool?: string; model?: string 
     tier,
     ...(claimed && claimed !== label ? { claimed } : {}),
   };
+}
+
+/** 哪一家的模型：claude-… 和 opus / sonnet 这些简称都算 Anthropic；其他看开头的字母（deepseek、gpt、glm……）。 */
+function vendorOf(model: string): string {
+  const m = norm(model);
+  if (m.startsWith('claude-') || ALIASES.some((a) => m === a || m.startsWith(`${a}-`))) return 'anthropic';
+  return m.match(/^[a-z]+/)?.[0] ?? m;
 }
 
 function norm(s: string): string {

@@ -285,8 +285,17 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
 
   s.relay(['go', 'claude']);
   assert.equal(s.stints()[0].who.member, 'claude');
+  assert.equal(s.stints()[0].who.model, 'deepseek-v4-flash', '用回复里的模型名，不带 init 里的 [1m]');
   assert.equal(s.stints()[0].review, 'needed');
   assert.match(s.relay(['review', 'claude'], true), /复核要强模型来做/);
+  // 这台电脑上用过的 Opus：旧会话里是 claude-opus-5-5，最近一个会话是 claude-opus-5。派官方账号时按版本挑最新的。
+  const logs = path.join(s.home, '.claude', 'projects', '-desk-');
+  fs.mkdirSync(logs, { recursive: true });
+  const said = (model: string) => `${JSON.stringify({ type: 'assistant', message: { model, content: [] }, timestamp: new Date().toISOString() })}\n`;
+  fs.writeFileSync(path.join(logs, 'a.jsonl'), said('claude-opus-5-5'));
+  fs.writeFileSync(path.join(logs, 'b.jsonl'), said('claude-opus-5'));
+  const past = new Date(Date.now() - 3600_000);
+  fs.utimesSync(path.join(logs, 'a.jsonl'), past, past);
   s.relay(['review', 'claude-official']);
   const [first, second] = s.stints();
   assert.equal(second.who.member, 'claude-official');
@@ -296,8 +305,19 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   assert.equal(first.review, 'done');
   assert.match(first.reviews[0].byLabel, /^Claude Code 官方账号/, '复核人写认出来的身份，不写它自称的「Claude Code」');
   const calls = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n');
-  assert.ok(calls.some((l) => l.startsWith('claude --setting-sources project,local -p ') && l.includes('--model opus')), calls.join('\n'));
+  assert.ok(calls.some((l) => l.startsWith('claude --setting-sources project,local -p ') && l.includes('--model claude-opus-5-5')), `用最新的 Opus，不用简称 opus（它不一定是最新版）\n${calls.join('\n')}`);
   assert.ok(calls.some((l) => l.startsWith('claude -p ')), '接 DeepSeek 的那位照常调用');
+
+  // 官方账号额度用完（新版的原话）：记成额度用完，按提示里的时区记下恢复时间，不是「出错」。
+  s.env.FAKE_CLAUDE_OFFICIAL_MODE = 'session-limit';
+  assert.match(s.relay(['go', 'claude-official']), /额度用完.*3:50 恢复/);
+  const third = s.stints()[2];
+  assert.equal(third.status, 'quota');
+  const q = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'quota.json'), 'utf8')).members['claude-official'];
+  const until = new Date(q.until);
+  assert.equal(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(until), '03:50');
+  assert.ok(until.getTime() > Date.now() && until.getTime() - Date.now() <= 24 * 3600_000, '下一个 3:50');
+  assert.equal(third.quotaUntil, q.until);
 });
 
 test('你自己在各家工具里做的棒：拿 Claude Code 自己的记录核对——自称 Opus 的 DeepSeek 认得出来，它给自己写的复核不算数', () => {

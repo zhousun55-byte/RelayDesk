@@ -2619,7 +2619,10 @@ function updateComposer() {
   C.ta.placeholder = task ? '要做什么' : S.slash ? S.slash.placeholder : vote ? '投票的问题' : '发消息';
   // 谁来回答
   const people = talkers();
-  if (!S.ask) S.ask = new Set(people.filter((m) => !m.cooling).map((m) => m.name));
+  if (!S.ask) {
+    const saved = store.json(`ask:${S.dir}`, null);
+    S.ask = new Set(Array.isArray(saved) ? saved.filter((n) => people.some((m) => m.name === n)) : people.filter((m) => !m.cooling).map((m) => m.name));
+  }
   const askSig = JSON.stringify([people.map((m) => [m.name, m.cooling]), [...S.ask], looks.key]);
   if (C.askers.dataset.sig !== askSig) {
     C.askers.dataset.sig = askSig;
@@ -2635,6 +2638,7 @@ function updateComposer() {
             onclick: () => {
               if (S.ask.has(m.name)) S.ask.delete(m.name);
               else S.ask.add(m.name);
+              saveAsk();
               updateComposer();
             },
             oncontextmenu: (e) =>
@@ -2643,6 +2647,7 @@ function updateComposer() {
                   label: '只选它',
                   run: () => {
                     S.ask = new Set([m.name]);
+                    saveAsk();
                     updateComposer();
                   },
                 },
@@ -2650,6 +2655,7 @@ function updateComposer() {
                   label: '全选',
                   run: () => {
                     S.ask = new Set(talkers().map((x) => x.name));
+                    saveAsk();
                     updateComposer();
                   },
                 },
@@ -2691,6 +2697,10 @@ function updateComposer() {
   else ok = (!!text || S.files.length > 0) && asked.length > 0;
   C.send.disabled = !ok;
   autoGrow();
+}
+
+function saveAsk() {
+  store.set(`ask:${S.dir}`, JSON.stringify([...S.ask]));
 }
 
 function autoGrow() {
@@ -2872,7 +2882,11 @@ function pickSuggest(i) {
     C.ta.value = v.slice(0, SUG.start) + v.slice(end);
     C.ta.selectionStart = C.ta.selectionEnd = SUG.start;
     if (it.member) {
-      if (!S.atUsed) S.ask = new Set();
+      // @ 只管这一句：发出去之后换回原来选的人。
+      if (!S.atUsed) {
+        S.askBefore = new Set(S.ask);
+        S.ask = new Set();
+      }
       S.atUsed = true;
       S.ask.add(it.member.name);
     } else if (it.file && !S.files.includes(it.file)) S.files.push(it.file);
@@ -2890,6 +2904,8 @@ async function send() {
     S.files = [];
     S.options = [];
     S.slash = null;
+    if (S.atUsed && S.askBefore) S.ask = S.askBefore;
+    S.askBefore = null;
     S.atUsed = false;
     drawOptions();
     store.set(`draft:${S.dir}`, null);
