@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadAutoSettings, normalizeAutoSettings, type AutoSettings } from '../core/auto-settings';
 import { errorMessage, RelayError } from '../core/errors';
-import { explainFailure, findHarness, locateCached, type Invocation } from '../core/harness';
+import { refreshHarnessModel } from '../core/detect';
+import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from '../core/harness';
 import { loadLedger, nextStintId, pendingReviews, requireInit, saveStint, stintTitle, tierWord, type Stint } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { pidAlive } from '../core/proc';
@@ -245,10 +246,16 @@ class GoRunner {
     };
   }
 
-  /** 跑一次编程工具；像是网络抖了一下（而且还没改文件）就原地再试一次。 */
-  private async runTool(logAbs: string, title: string, invoke: () => Invocation, timeoutMs: number, mayRetry: () => boolean): Promise<RunResult> {
+  /**
+   * 跑一次编程工具（还没改文件时才原地再试）：
+   * - 命令行太旧、用不了这个模型：记下来，换成它用得了的马上再试（升级之后自动换回来）；
+   * - 像是网络抖了一下：等几秒再试一次。
+   */
+  private async runTool(logAbs: string, title: string, invoke: () => Invocation, timeoutMs: number, mayRetry: () => boolean, harness?: string): Promise<RunResult> {
+    let blips = 0;
     for (let attempt = 0; ; attempt++) {
-      const h = startRun({ invocation: invoke(), cwd: this.root, timeoutMs, logPath: logAbs, title, onLine: this.hooks.onLine });
+      const inv = invoke();
+      const h = startRun({ invocation: inv, cwd: this.root, timeoutMs, logPath: logAbs, title, onLine: this.hooks.onLine });
       this.current = h;
       if (h.pid && this.state.current) {
         this.state.current.toolPid = h.pid;
@@ -256,9 +263,20 @@ class GoRunner {
       }
       const r = await h.done;
       this.current = null;
-      if (attempt > 0 || r.stopped || r.timedOut || r.code === 0 || this.stopRequested || !mayRetry()) return r;
-      const text = `${r.error ?? ''}\n${r.stderrTail}\n${logTail(logAbs)}`;
-      if (detectQuota(text).hit || !looksLikeNetworkBlip(text)) return r;
+      if (attempt > 3 || r.stopped || r.timedOut || r.code === 0 || this.stopRequested || !mayRetry()) return r;
+      const text = `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}\n${logTail(logAbs)}`;
+      const needs = cliTooOld(text);
+      const used = modelArg(inv.argv);
+      if (needs && used) {
+        noteModelNeeds(used, needs);
+        if (harness) refreshHarnessModel(harness);
+        const next = modelArg(invoke().argv);
+        if (!next || next === used) return r;
+        this.logger(logAbs)(`这个版本的命令行用不了 ${used}（要 ${needs} 或更新）：先换成 ${next} 再试；升级命令行之后会自动换回来。`);
+        continue;
+      }
+      if (blips > 0 || detectQuota(text).hit || !looksLikeNetworkBlip(text)) return r;
+      blips++;
       const waitMs = Number(process.env.RELAY_RETRY_MS ?? 5000);
       this.logger(logAbs)(`看起来是网络抖了一下，${Math.max(1, Math.round(waitMs / 1000))} 秒后原地再试一次。`);
       await this.sleep(waitMs);
@@ -348,7 +366,8 @@ class GoRunner {
           stintTitle(stint),
           () => spec.invoke(loc, { cwd: root, prompt, level: this.settings.level, readOnly: false, model: m.agent.model?.trim() || undefined, effort: m.agent.effort, outFile: tmpOut() }),
           timeoutMs,
-          () => takeSnapshot(root, '看看改了没有').sha === from
+          () => takeSnapshot(root, '看看改了没有').sha === from,
+          spec.id
         );
         finalText = r.finalText;
         stopped = r.stopped;

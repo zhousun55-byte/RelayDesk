@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { recentOfficialModel } from './claude-log';
 import { agentEnv, envValue, scanApps, which } from './env';
+import { relayHome } from './paths';
 
 /**
  * 认得的 AI 编程工具（harness）：怎么找到它、怎么看登录、默认用什么模型、怎么无人值守地调用。
@@ -42,6 +43,8 @@ export interface ModelInfo {
   efforts?: string[];
   /** 模型从哪来（如 经 api.deepseek.com）。 */
   via?: string;
+  /** 要你知道的事（比如命令行太旧、用不上最新的模型）。 */
+  note?: string;
 }
 
 export interface InvokeInput {
@@ -275,6 +278,63 @@ function claudeInvoke(loc: Located, i: InvokeInput, extra: string[] = []): Invoc
  * 官方账号：跳过你的用户设置、去掉 ANTHROPIC_* 这些变量，就走 claude.ai 登录；默认用最新的 Opus。
  * 没接别家模型时它和「Claude Code」是同一位，不单列。
  */
+// ---- 旧版命令行用不了的新模型 ----
+
+/** 「Claude Code 2.1.263 does not support this model; version 2.1.280 or newer is required」 */
+const NEEDS_NEWER = /does not support this model\b[\s\S]{0,120}?\bversion\s+(\d+(?:\.\d+)+)\s+or\s+newer/i;
+
+/** 输出里说「这个版本的命令行用不了这个模型」：返回要求的最低版本。 */
+export function cliTooOld(text: string): string | null {
+  return text.match(NEEDS_NEWER)?.[1] ?? null;
+}
+
+function needsPath(): string {
+  return path.join(relayHome(), 'cli-models.json');
+}
+
+function loadNeeds(): Record<string, string> {
+  try {
+    const j = JSON.parse(fs.readFileSync(needsPath(), 'utf8')) as unknown;
+    return j && typeof j === 'object' && !Array.isArray(j) ? (j as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 记下：这个模型要这么新的命令行（~/.relay/cli-models.json）。升级之后版本够了，自动又用它。 */
+export function noteModelNeeds(model: string, version: string): void {
+  const all = loadNeeds();
+  if (all[model] === version) return;
+  all[model] = version;
+  fs.mkdirSync(path.dirname(needsPath()), { recursive: true });
+  fs.writeFileSync(needsPath(), JSON.stringify(all, null, 2) + '\n');
+}
+
+function olderThan(a: string, b: string): boolean {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d) return d < 0;
+  }
+  return false;
+}
+
+/** 官方账号用哪个模型：这台电脑上最近用过的最新 Opus；命令行太旧用不了它，就先用简称 opus。 */
+export function officialModel(cliVersion: string): { model: string; blocked?: { model: string; needs: string } } {
+  const latest = recentOfficialModel();
+  if (!latest) return { model: 'opus' };
+  const needs = loadNeeds()[latest];
+  if (needs && /^\d/.test(cliVersion) && olderThan(cliVersion, needs)) return { model: 'opus', blocked: { model: latest, needs } };
+  return { model: latest };
+}
+
+/** 调用参数里的 --model。 */
+export function modelArg(argv: string[]): string | undefined {
+  const i = argv.indexOf('--model');
+  return i >= 0 ? argv[i + 1] : undefined;
+}
+
 const claudeOfficial: HarnessSpec = {
   id: 'claude-official',
   label: 'Claude Code 官方账号',
@@ -296,13 +356,17 @@ const claudeOfficial: HarnessSpec = {
       return { state: 'unknown', detail: '看不出官方账号的登录状态' };
     }
   },
-  model: () => {
-    const m = recentOfficialModel();
-    return { model: m ?? 'opus', label: m ?? 'opus' };
+  model(loc) {
+    const o = officialModel(loc.version);
+    return {
+      model: o.model,
+      label: o.model,
+      ...(o.blocked ? { note: `命令行 ${loc.version} 用不了 ${o.blocked.model}（要 ${o.blocked.needs} 或更新），先用 opus；在终端运行 claude update 升级之后自动换成 ${o.blocked.model}。` } : {}),
+    };
   },
   invoke(loc, i) {
-    // 没在名单里指定模型：用这台电脑上最近用过的最新 Opus（和桌面版一样），看不出来再用简称 opus。
-    return { ...claudeInvoke(loc, { ...i, model: i.model || recentOfficialModel() || 'opus' }, OFFICIAL_ARGS), dropEnv: CLAUDE_PROVIDER_ENV };
+    // 没在名单里指定模型：用这台电脑上最近用过的最新 Opus（和桌面版一样）；命令行太旧用不了它、或者看不出来，就用简称 opus。
+    return { ...claudeInvoke(loc, { ...i, model: i.model || officialModel(loc.version).model }, OFFICIAL_ARGS), dropEnv: CLAUDE_PROVIDER_ENV };
   },
 };
 

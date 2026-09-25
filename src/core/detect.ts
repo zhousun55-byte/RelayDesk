@@ -100,13 +100,14 @@ export function detectHarness(spec: HarnessSpec): HarnessReport | null {
   } catch {
     model = {};
   }
+  const note = [loc.note, model.note].filter(Boolean).join(' ');
   return {
     id: spec.id,
     label: spec.label,
     vendor: spec.vendor,
     version: loc.version,
     where: loc.where,
-    ...(loc.note ? { note: loc.note } : {}),
+    ...(note ? { note } : {}),
     login,
     model,
     workLevels: spec.workLevels,
@@ -114,6 +115,24 @@ export function detectHarness(spec: HarnessSpec): HarnessReport | null {
     tested: spec.tested,
     loginHint: spec.loginHint,
   };
+}
+
+/** 某个编程工具要用的模型变了（比如发现命令行太旧，换了模型）：只重看这一个，更新识别结果。 */
+export function refreshHarnessModel(id: string): void {
+  const report = loadDetected();
+  const spec = findHarness(id);
+  const h = report?.harnesses.find((x) => x.id === id);
+  const loc = spec ? locateCached(spec) : null;
+  if (!report || !spec || !h || !loc) return;
+  try {
+    h.model = spec.model(loc);
+  } catch {
+    return;
+  }
+  const note = [loc.note, h.model.note].filter(Boolean).join(' ');
+  if (note) h.note = note;
+  else delete h.note;
+  saveDetected(report);
 }
 
 let running: Promise<DetectReport> | null = null;

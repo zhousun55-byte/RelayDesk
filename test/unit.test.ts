@@ -15,6 +15,7 @@ import { installProtocol, protocolBlock, protocolState, removeProtocol } from '.
 import { detectQuota } from '../src/core/quota';
 import { redactSecrets } from '../src/core/redact';
 import { makeParser } from '../src/core/runner';
+import { cliTooOld } from '../src/core/harness';
 import { normalizeAgent } from '../src/core/registry';
 import { restoreFile, restoreSnapshot, snapChanges, snapFile, takeSnapshot } from '../src/core/snap';
 import { parseNameStatusZ, parseNumstatZ } from '../src/core/status';
@@ -370,6 +371,11 @@ test('额度用完：认得各家的提示，算出恢复时间；普通报错�
   assert.equal(w.until, '2026-10-09T02:00:00.000Z', '带日期的恢复时间');
   assert.equal(detectQuota("You've hit your Opus limit · resets Sep 26 at 9:30pm (Asia/Shanghai)", at).until, '2026-09-26T13:30:00.000Z');
   assert.equal(detectQuota("You've hit your weekly limit · resets Jan 2 (UTC)", at).until, '2027-01-02T00:00:00.000Z', '过了今年的就是明年');
+  // 命令行太旧不是额度用完。
+  const old = "API Error: 400 Claude Code 2.1.263 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.";
+  assert.equal(detectQuota(old, at).hit, false);
+  assert.equal(cliTooOld(old), '2.1.280');
+  assert.equal(cliTooOld('我改了 wc.py 的版本号'), null);
 });
 
 test('Claude Code 输出里的模型：以回复里记的为准，去掉 [1m] 这种上下文档位；<synthetic>（工具自己拼的话）不算', () => {

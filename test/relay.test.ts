@@ -318,6 +318,38 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   assert.equal(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(until), '03:50');
   assert.ok(until.getTime() > Date.now() && until.getTime() - Date.now() <= 24 * 3600_000, '下一个 3:50');
   assert.equal(third.quotaUntil, q.until);
+
+  // 命令行太旧、用不了最新的 Opus：当场换成 opus 再干，这一棒照样做完；记下来，下次直接用 opus，升级之后再换回来。
+  fs.rmSync(path.join(s.home, '.relay', 'quota.json'));
+  s.env.FAKE_CLAUDE_OFFICIAL_MODE = 'too-old';
+  fs.writeFileSync(path.join(s.base, 'fake.log'), '');
+  s.relay(['task', '再做一步', '--step', '第三步']);
+  s.relay(['go', 'claude-official']);
+  const fourth = s.stints()[3];
+  assert.equal(fourth.status, 'handed', '换成 opus 之后做完了');
+  const tries = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n').filter((l) => l.includes('--setting-sources'));
+  assert.deepEqual(
+    tries.map((l) => l.match(/--model (\S+)/)?.[1]),
+    ['claude-opus-5-5', 'opus']
+  );
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'cli-models.json'), 'utf8')), { 'claude-opus-5-5': '99.0.0' });
+  const det = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'detected.json'), 'utf8')).harnesses.find((h: { id: string }) => h.id === 'claude-official');
+  assert.equal(det.model.model, 'opus', '名单上显示实际会用的');
+  assert.match(det.note, /claude update/, '告诉你升级命令行就能用上');
+  fs.writeFileSync(path.join(s.base, 'fake.log'), '');
+  assert.match(s.relay(['talk', '说一句', '--ask', 'claude-official']), /Claude Code 官方账号 · opus：/, '署名写实际用的');
+  const talkCalls = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n');
+  assert.equal(talkCalls.length, 1, `记下来之后直接用 opus，不再先试一次：\n${talkCalls.join('\n')}`);
+  assert.match(talkCalls[0], /--model opus/);
+  // 群聊里第一次碰到：先试最新的被拒，换成 opus 再答；署名写答完之后实际用的。
+  fs.rmSync(path.join(s.home, '.relay', 'cli-models.json'));
+  s.relay(['detect', '--offline']);
+  fs.writeFileSync(path.join(s.base, 'fake.log'), '');
+  assert.match(s.relay(['talk', '再说一句', '--ask', 'claude-official']), /Claude Code 官方账号 · opus：claude 的看法/);
+  assert.deepEqual(
+    fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n').map((l) => l.match(/--model (\S+)/)?.[1]),
+    ['claude-opus-5-5', 'opus']
+  );
 });
 
 test('你自己在各家工具里做的棒：拿 Claude Code 自己的记录核对——自称 Opus 的 DeepSeek 认得出来，它给自己写的复核不算数', () => {

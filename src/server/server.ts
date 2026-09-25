@@ -87,7 +87,8 @@ function ensureDetected(force = false): void {
 function memberViews() {
   const s = loadAutoSettings();
   const now = new Date();
-  return orderMembers(allMembers(s.level), s.order).map((m) => ({
+  const report = loadDetected();
+  return orderMembers(allMembers(s.level, report), s.order).map((m) => ({
     name: m.name,
     label: m.label,
     model: m.model ?? null,
@@ -100,6 +101,8 @@ function memberViews() {
     cooling: m.cooling ?? null,
     coolingText: m.cooling ? untilText(m.cooling, now) : null,
     detected: !!m.agent.detected,
+    /** 识别时发现的要紧事（比如命令行太旧、用不上最新的模型）。 */
+    note: (m.harness && report?.harnesses.find((h) => h.id === m.harness)?.note) || null,
     agent: m.agent,
   }));
 }

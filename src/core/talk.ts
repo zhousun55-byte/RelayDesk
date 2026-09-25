@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RelayError, errorMessage } from './errors';
-import { loadDetected, memberModel } from './detect';
-import { findHarness, locateCached } from './harness';
+import { loadDetected, memberModel, refreshHarnessModel } from './detect';
+import { cliTooOld, findHarness, locateCached, modelArg, noteModelNeeds } from './harness';
 import { fillTemplate } from './launch';
 import { chat } from './llm';
 import { redactSecrets } from './redact';
@@ -170,17 +170,28 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     const loc = spec ? locateCached(spec) : null;
     if (!spec || !loc) throw new RelayError(`「${agentLabel(agent)}」没有配置讨论命令。`, 'no-ask');
     const stamp = `${process.pid}-${Date.now()}`;
-    const inv = spec.invoke(loc, {
-      cwd,
-      prompt,
-      level: 'safe',
-      readOnly: true,
-      model: agent.model?.trim() || undefined,
-      effort: agent.effort,
-      outFile: path.join(os.tmpdir(), `relay-talk-${stamp}.txt`),
-    });
+    const make = () =>
+      spec.invoke(loc, {
+        cwd,
+        prompt,
+        level: 'safe',
+        readOnly: true,
+        model: agent.model?.trim() || undefined,
+        effort: agent.effort,
+        outFile: path.join(os.tmpdir(), `relay-talk-${stamp}.txt`),
+      });
     const logPath = path.join(os.tmpdir(), `relay-talk-${stamp}.log`);
-    const r = await startRun({ invocation: inv, cwd, timeoutMs, logPath, title: '讨论' }).done;
+    const inv = make();
+    let r = await startRun({ invocation: inv, cwd, timeoutMs, logPath, title: '讨论' }).done;
+    // 命令行太旧、用不了这个模型：记下来，换成它用得了的再问一次。
+    const needs = r.code !== 0 ? cliTooOld(`${r.finalText}\n${r.error ?? ''}\n${r.stderrTail}`) : null;
+    const used = modelArg(inv.argv);
+    if (needs && used) {
+      noteModelNeeds(used, needs);
+      refreshHarnessModel(spec.id);
+      const again = make();
+      if (modelArg(again.argv) !== used) r = await startRun({ invocation: again, cwd, timeoutMs, logPath, title: '讨论' }).done;
+    }
     fs.rmSync(logPath, { force: true });
     const text = cleanReply(r.finalText);
     if (!text) throw new RelayError(r.error ?? (r.timedOut ? `${Math.round(timeoutMs / 1000)} 秒没回话，停掉了。` : `什么都没说（退出码 ${r.code}）。`), 'ask-empty');
@@ -293,8 +304,9 @@ async function speakOne(root: string, name: string, rows: TalkRow[], context: ()
     const who = speakerName(agent);
     const prompt = buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), ...(solo ? { solo: true } : {}) });
     const text = await askAgent(agent, prompt, root);
+    // 问的过程中可能换了模型（比如命令行太旧、换成了它用得了的）：署名按答完之后的算。
     const m = memberModel(agent, loadDetected());
-    appendTalk(root, { kind: 'ai', who, agent: agent.name, ...(m ? { model: m } : {}), text, ...(solo ? { round: solo } : {}) });
+    appendTalk(root, { kind: 'ai', who: speakerName(agent), agent: agent.name, ...(m ? { model: m } : {}), text, ...(solo ? { round: solo } : {}) });
   } catch (e) {
     appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agentLabel(agent ?? name)} 没回上来：${errorMessage(e)}`, error: true, ...(solo ? { round: solo } : {}) });
   }
