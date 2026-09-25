@@ -101,8 +101,8 @@ function memberViews() {
     cooling: m.cooling ?? null,
     coolingText: m.cooling ? untilText(m.cooling, now) : null,
     detected: !!m.agent.detected,
-    /** 识别时发现的要紧事（比如命令行太旧、用不上最新的模型）。 */
-    note: (m.harness && report?.harnesses.find((h) => h.id === m.harness)?.note) || null,
+    /** 要升级才用得上最新模型（命令行太旧）：写明怎么升级。别的识别说明不用管，不给。 */
+    update: (m.harness && report?.harnesses.find((h) => h.id === m.harness)?.model.note) || null,
     agent: m.agent,
   }));
 }

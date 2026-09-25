@@ -154,6 +154,58 @@ test('全自动：弱模型干一棒 → 强模型复核 → 再干 → 再复�
   assert.equal(s.read('work.txt'), 'claude 干了一步\nclaude 干了一步\n');
 });
 
+test('全自动：复核的那位实际跑的是弱模型，写的复核不算数；两次之后停下，说清楚是「算弱不算数」', () => {
+  const s = prepared('weak-reviewer', { FAKE_CLAUDE_OFFICIAL: 'pro', FAKE_CLAUDE_OFFICIAL_MODEL: 'deepseek-flash' });
+  setOrder(s, ['claude', 'claude-official']);
+  s.relay(['init']);
+  s.relay(['task', '做一件事', '--step', '第一件']);
+  const out = s.relay(['auto']);
+  assert.match(out, /第 1 棒复核了两次，但写复核的都算弱，结论不算数/);
+  const st = s.stints();
+  assert.deepEqual(
+    st.map((x) => [x.kind, x.who.member, x.who.tier]),
+    [
+      ['work', 'claude', 'weak'],
+      ['review', 'claude-official', 'weak'],
+      ['review', 'claude-official', 'weak'],
+    ]
+  );
+  assert.equal(st[0].review, 'needed');
+});
+
+test('全自动：终审没做成，不说「终审过了」，停下来说清楚', () => {
+  const s = prepared('final-fail', { FAKE_CODEX_MODE: 'final-fail' });
+  setOrder(s, ['claude', 'codex']);
+  s.relay(['init']);
+  s.relay(['task', '做一件事', '--step', '第一件']);
+  const out = s.relay(['auto']);
+  assert.match(out, /任务清单都打勾了，但终审没做成（Codex · gpt-6 出错了/);
+  assert.doesNotMatch(out, /终审过了/);
+  assert.deepEqual(
+    s.stints().map((x) => [x.kind, x.who.member, x.status]),
+    [
+      ['work', 'claude', 'handed'],
+      ['review', 'codex', 'handed'],
+      ['final', 'codex', 'failed'],
+    ]
+  );
+});
+
+test('全自动的终审换一双眼睛：强模型自己干完的活，请另一位强模型终审', () => {
+  const s = prepared('final-other', { FAKE_CLAUDE_OFFICIAL: 'pro' });
+  setOrder(s, ['codex', 'claude-official', 'claude']);
+  s.relay(['init']);
+  s.relay(['task', '做一件事', '--step', '第一件']);
+  s.relay(['auto']);
+  assert.deepEqual(
+    s.stints().map((x) => [x.kind, x.who.member]),
+    [
+      ['work', 'codex'],
+      ['final', 'claude-official'],
+    ]
+  );
+});
+
 test('额度用完：记下什么时候恢复，自动换下一位接着做；下次调度跳过它', () => {
   const s = prepared('quota', { FAKE_CLAUDE_MODE: 'quota' });
   setOrder(s, ['claude', 'codex'], { finalReview: false });

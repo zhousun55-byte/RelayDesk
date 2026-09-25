@@ -217,6 +217,8 @@ export function viewLedger(events: LedgerEvent[]): LedgerView {
       const prev = byId.get(ev.stint.id);
       const s = { ...ev.stint };
       if (prev?.rolledBack) s.rolledBack = true;
+      // 只有干活的棒要复核。复核、终审的棒就算账上记成了「待复核」（2.0 早期把终审结论里的「第 N 棒」当成了复核自己），也按不用复核算。
+      if (s.kind !== 'work' && s.review === 'needed') s.review = 'skip';
       byId.set(s.id, s);
       // 只在这一棒结束（或结束的快照变了）时往前推。后来给旧棒补记复核、标记不用复核，是把旧棒原样重存一遍，
       // 不能把起点拉回到它结束的地方——不然下一棒会把中间别人的改动再算一遍。

@@ -263,7 +263,8 @@ export function applyReviews(root: string, by: Stint | null, members: MemberInfo
     if (!r || !reviewFilled(r)) continue;
     for (const id of r.targets) {
       const s = v.stints.find((x) => x.id === id);
-      if (!s || s.status === 'working') continue;
+      // 只有干活的棒要复核。复核、终审的棒不算（终审的结论里常写「复核：第 5 棒终审」，5 是它自己）。
+      if (!s || s.status === 'working' || s.kind !== 'work') continue;
       const prev = (s.reviews ?? []).find((m) => m.file === r.file);
       const fresh = !prev || prev.verdict !== r.verdict || r.mtimeMs > Date.parse(prev.at);
       if (!fresh && prev?.byLog) continue;

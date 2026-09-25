@@ -3617,8 +3617,8 @@ function membersPane(redraw) {
         h('b', null, m.label),
         h(
           'small',
-          { 'data-tip': m.note || (!m.canWork && m.why ? m.why : null) },
-          [m.model, m.cooling ? `额度用完 · ${m.coolingText}` : m.kind === 'app' ? '桌面程序' : m.kind === 'api' ? '接口' : !m.canWork ? '不可调度' : '', m.note ? '命令行需要更新' : ''].filter(Boolean).join(' · ')
+          { 'data-tip': m.update || (!m.canWork && m.why ? m.why : null) },
+          [m.model, m.cooling ? `额度用完 · ${m.coolingText}` : m.kind === 'app' ? '桌面程序' : m.kind === 'api' ? '接口' : !m.canWork ? '不可调度' : '', m.update ? '命令行需要更新' : ''].filter(Boolean).join(' · ')
         )
       ),
       h(

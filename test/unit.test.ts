@@ -7,7 +7,7 @@ import { buildBrief } from '../src/core/brief';
 import { claudeWorkIn } from '../src/core/claude-log';
 import { normalizeConfig } from '../src/core/config';
 import { fillTemplate, shellWords, shq } from '../src/core/launch';
-import { viewLedger, type LedgerEvent, type Stint } from '../src/core/ledger';
+import { pendingReviews, viewLedger, type LedgerEvent, type Stint } from '../src/core/ledger';
 import { editTask, handoffFilled, parseHandoff, parseReview, parseTask, taskComplete, taskTemplate, verdictOf } from '../src/core/notes';
 import { PRESETS } from '../src/core/presets';
 import { globToRegExp, matchProtected } from '../src/core/protected';
@@ -97,6 +97,11 @@ test('成员配置校验：桌面程序要有 {{dir}}（旧的 {{worktree}} 也�
 
 test('强弱：看模型不看工具；小号算弱；不知道模型的用名单里记的；你设过的以你为准', () => {
   assert.equal(tierForModel('claude-opus-5-5'), 'strong');
+  // 工具报的是给人看的名字（2026-09-25 Cursor Agent 真实报的「Grok 4.6 Fast」被当成了弱）。
+  assert.equal(tierForModel('Grok 4.6 Fast'), 'strong');
+  assert.equal(tierForModel('GPT 6'), 'strong');
+  assert.equal(tierForModel('Gemini 3 Pro'), 'strong');
+  assert.equal(tierForModel('DeepSeek V4 Flash'), 'weak');
   assert.equal(tierForModel('gpt-6'), 'strong');
   assert.equal(tierForModel('gpt-6-mini'), 'weak');
   assert.equal(tierForModel('deepseek-v4-flash'), 'weak');
@@ -509,6 +514,15 @@ test('账本：同一棒记好几次取最后一条；退回作废之后的棒�
   );
   ev.push({ type: 'base', ts: T, snap: 'S4', why: '更新规矩' });
   assert.equal(viewLedger(ev).base, 'S4');
+  // 终审、复核的棒不用复核：旧账上记成了「待复核」也按不用复核算。
+  ev.push({ type: 'stint', ts: T, stint: stint(4, { kind: 'final', review: 'needed' }) });
+  ev.push({ type: 'stint', ts: T, stint: stint(5, { kind: 'review', review: 'needed' }) });
+  const w = viewLedger(ev);
+  assert.deepEqual(
+    w.stints.filter((x) => x.id >= 4).map((x) => x.review),
+    ['skip', 'skip']
+  );
+  assert.ok(!pendingReviews(w).some((x) => x.id >= 4));
 });
 
 test('账本：给旧棒补记复核、标记不用复核，下一棒还是从最后一棒结束的地方算', () => {

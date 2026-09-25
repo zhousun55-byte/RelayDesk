@@ -12,7 +12,8 @@ const SMALL = /(^|[-_\s.])(mini|flash|lite|nano|haiku|small|tiny|air|instant)([-
 const STRONG = /claude|opus|sonnet|gpt-?([5-9]|\d{2})|(^|[^a-z])o[34]([^a-z0-9]|$)|gemini.*pro|gemini-?([3-9])|grok-?([4-9])/i;
 
 export function tierForModel(model: string | undefined | null): Tier3 {
-  const m = (model ?? '').trim();
+  // 工具报的常是给人看的名字：「Grok 4.6 Fast」「GPT 6」「Gemini 3 Pro」，空格当成连字符再认。
+  const m = (model ?? '').trim().replace(/\s+/g, '-');
   if (!m) return 'unknown';
   if (SMALL.test(m)) return 'weak';
   if (STRONG.test(m)) return 'strong';

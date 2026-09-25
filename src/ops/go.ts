@@ -6,7 +6,7 @@ import { loadAutoSettings, normalizeAutoSettings, type AutoSettings } from '../c
 import { errorMessage, RelayError } from '../core/errors';
 import { refreshHarnessModel } from '../core/detect';
 import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from '../core/harness';
-import { loadLedger, nextStintId, pendingReviews, requireInit, saveStint, stintTitle, tierWord, type Stint } from '../core/ledger';
+import { loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, tierWord, type Stint } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { pidAlive } from '../core/proc';
 import { allMembers, orderMembers, readyMembers, type MemberInfo } from '../core/members';
@@ -537,7 +537,17 @@ class GoRunner {
         // 1. 有待复核、又有强模型能用：先复核。
         if (pending.length) {
           const stuck = pending.filter((p) => (this.reviewTries.get(p.id) ?? 0) >= 2);
-          if (stuck.length) return this.finish('needs-human', `第 ${stuck.map((p) => p.id).join('、')} 棒复核了两次都没写出结论。你看一下复核的日志，或者自己看看它们的改动。`);
+          if (stuck.length) {
+            const ids = stuck.map((p) => p.id).join('、');
+            // 写了复核、但写的人算弱（或者是自己复核自己）：结论不算数，和「没写出来」是两回事。
+            const weakOnly = stuck.every((p) => (p.reviews ?? []).length > 0 && (p.reviews ?? []).every((m) => m.weak));
+            return this.finish(
+              'needs-human',
+              weakOnly
+                ? `第 ${ids} 棒复核了两次，但写复核的都算弱，结论不算数。在「设置」里把复核它的那位改成强，或者等别的强模型有额度了再开全自动。`
+                : `第 ${ids} 棒复核了两次都没写出结论。看一下复核的日志，或者自己看看它们的改动。`
+            );
+          }
           const authors = pending.map((p) => p.who.member).filter(Boolean) as string[];
           const reviewer = this.pick(true, authors) ?? this.pick(true);
           if (reviewer) {
@@ -553,20 +563,30 @@ class GoRunner {
             if (c && (await this.waitFor(c, '活干完了，但还有弱模型的棒要复核；强模型都没额度，'))) continue;
             return this.finish('needs-human', '任务清单都打勾了，但还有弱模型做的棒没人复核（强模型都没额度，或者没有强模型）。等强模型额度恢复后再开全自动，会先复核。');
           }
-          const lastLive = [...v.stints].reverse().find((x) => !x.rolledBack && x.status !== 'working');
-          if (this.settings.finalReview && lastLive?.kind !== 'final') {
-            const fr = this.pick(true);
+          // 终审算做过：最后一棒干活之后，有一棒终审顺利交接了（出错、额度用完的不算）。
+          const live = v.stints.filter((x) => !x.rolledBack && x.status !== 'working');
+          const lastWork = [...live].reverse().find((x) => x.kind === 'work');
+          const finals = live.filter((x) => x.kind === 'final' && x.id > (lastWork?.id ?? 0));
+          const finalDone = finals.find((x) => x.status === 'handed');
+          if (this.settings.finalReview && !finalDone) {
+            // 终审换一双眼睛：有别的强模型，就不请这个任务里干过活的来审。
+            const since = Date.parse([...v.events].reverse().find((e) => e.type === 'task')?.ts ?? v.init?.ts ?? '');
+            const doers = v.stints.filter((x) => x.kind === 'work' && !x.rolledBack && !(Date.parse(x.startedAt) < since)).map((x) => x.who.member).filter((x): x is string => !!x);
+            const fr = this.pick(true, doers) ?? this.pick(true);
             if (fr) {
-              await this.runStint(fr, 'final');
+              const o = await this.runStint(fr, 'final');
+              if (o.stint.status === 'failed') this.failed.add(fr.name);
               continue;
             }
             const c = this.earliestCooling(true);
             if (c && (await this.waitFor(c, '活干完了，要请强模型终审；强模型都没额度，'))) continue;
+            const tried = finals.at(-1);
+            if (tried) return this.finish('needs-human', `任务清单都打勾了，但终审没做成（${tried.who.label} ${statusWord(tried.status)}${tried.note ? `：${clip(tried.note, 120)}` : ''}）。`);
           }
           const gateFail = [...v.stints].reverse().find((x) => x.gate)?.gate?.status === 'fail';
           if (gateFail) return this.finish('needs-human', '任务清单都打勾了，但最近一次检查没通过。');
           const p = taskProgress(task);
-          return this.finish('done', `完成：任务清单 ${p.done}/${p.total} 全部打勾${lastLive?.kind === 'final' ? `，${lastLive.who.label} 终审过了` : ''}。`);
+          return this.finish('done', `完成：任务清单 ${p.done}/${p.total} 全部打勾${finalDone ? `，${finalDone.who.label} 终审过了` : ''}。`);
         }
 
         // 3. 派人干活。
