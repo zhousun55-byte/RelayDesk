@@ -43,6 +43,7 @@ export function rollbackBefore(root: string, stintId: number): RollbackResult {
   const before = saveTaskCopy(root);
   const r = restoreSnapshot(root, s.from, `退回到${label}`);
   const t = old !== null ? restoreTaskChecks(root, old) : { unchecked: [], checked: [] };
+  const taskAfter = saveTaskCopy(root);
   appendLedger(root, {
     type: 'rollback',
     ts: new Date().toISOString(),
@@ -51,7 +52,7 @@ export function rollbackBefore(root: string, stintId: number): RollbackResult {
     safety: r.safety,
     after: r.after,
     dropped,
-    task: { ...(ref ? { from: ref } : {}), ...(before ? { before } : {}), unchecked: t.unchecked, checked: t.checked, ...(old === null ? { missing: true } : {}) },
+    task: { ...(ref ? { from: ref } : {}), ...(before ? { before } : {}), ...(taskAfter ? { after: taskAfter } : {}), unchecked: t.unchecked, checked: t.checked, ...(old === null ? { missing: true } : {}) },
   });
   refreshBrief(root);
   return { label, dropped, files: r.files, task: { ...t, missing: old === null } };
@@ -74,6 +75,7 @@ export function undoRollback(root: string): RollbackResult {
   const old = readTaskCopy(root, last.task?.before);
   const r = restoreSnapshot(root, last.safety, label);
   const t = old !== null ? restoreTaskChecks(root, old) : { unchecked: [], checked: [] };
+  const taskAfter = saveTaskCopy(root);
   appendLedger(root, {
     type: 'rollback',
     ts: new Date().toISOString(),
@@ -83,7 +85,7 @@ export function undoRollback(root: string): RollbackResult {
     after: r.after,
     dropped: [],
     restored: last.dropped,
-    task: { unchecked: t.unchecked, checked: t.checked, ...(old === null ? { missing: true } : {}) },
+    task: { ...(taskAfter ? { after: taskAfter } : {}), unchecked: t.unchecked, checked: t.checked, ...(old === null ? { missing: true } : {}) },
   });
   refreshBrief(root);
   return { label, dropped: [], files: r.files, task: { ...t, missing: old === null } };

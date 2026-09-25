@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { setOrder, withFakeDesktopClaude, withFakeDsh, withFakes } from './fakes';
-import { sandbox, type Sandbox } from './helpers';
+import { CLI, sandbox, until, type Sandbox } from './helpers';
 
 /**
  * 端到端（假工具）：全自动不会把「没验收」说成「完成」、换人前先确认外部工具停了、一个项目只能有一个调度、
@@ -172,4 +172,63 @@ test('官方账号的 Claude Code：用 Claude 桌面版自带的新版（终端
   const st = s.stints();
   assert.equal(st[0].who.member, 'claude-official');
   assert.equal(st[0].who.tier, 'strong');
+});
+
+test('全自动：检查命令自己会在项目里写文件（缓存、报告），不会以为有别的 AI 在改文件而停下，照样做完', () => {
+  const s = prepared('gate-writes', {}, (x) => setOrder(x, ['codex'], { finalReview: false }));
+  s.relay(['init']);
+  s.relay(['task', '分三步做完', '--step', '第一步', '第二步', '第三步']);
+  s.write('.relay/config.json', JSON.stringify({ gate: { command: 'mkdir -p .gate-out && date > .gate-out/stamp && test -f work.txt' }, protectedPaths: [] }));
+  const out = s.relay(['auto']);
+  assert.match(out, /验收通过/, out);
+  const st = s.stints();
+  assert.deepEqual(
+    st.map((x) => [x.via, x.who.member]),
+    [
+      ['relay', 'codex'],
+      ['relay', 'codex'],
+      ['relay', 'codex'],
+    ],
+    '没有冒出「不知道是谁」的棒'
+  );
+  assert.ok(s.journal().some((e) => e.type === 'base' && /检查命令写的文件：\.gate-out\/stamp/.test(String(e.why))));
+});
+
+test('复核棒正常做完、说的话里讲到 rate limit、quota：不算额度用完，这一位照样能接着派', () => {
+  const s = prepared('review-says-quota', { FAKE_REVIEW_SAY: '检查了 rate limit 和 quota exceeded 的错误处理，没问题。' });
+  s.relay(['init']);
+  s.relay(['task', '做一件事', '--step', '第一件']);
+  s.relay(['go', 'claude']);
+  const out = s.relay(['review', 'codex']);
+  assert.doesNotMatch(out, /额度用完/, out);
+  const st = s.stints();
+  assert.equal(st[1].status, 'handed');
+  assert.equal(st[0].review, 'done');
+  const quota = path.join(s.home, '.relay', 'quota.json');
+  assert.ok(!fs.existsSync(quota) || !JSON.parse(fs.readFileSync(quota, 'utf8')).members?.codex, 'Codex 没被记成额度用完');
+});
+
+test('关掉终端窗口（SIGHUP）：接力台先结束正在干活的工具、把这一棒记成「叫停了」再退，不会把工具留在后台接着改文件', async () => {
+  const s = prepared('hangup', { FAKE_CODEX_MODE: 'slow' });
+  s.relay(['init']);
+  s.relay(['task', '做一件事', '--step', '第一件']);
+  const child = spawn(process.execPath, [CLI, 'go', 'codex'], { cwd: s.repo, env: s.env });
+  const exited = new Promise((r) => child.on('exit', r));
+  const pidFile = path.join(s.base, 'codex.pid');
+  await until(15_000, () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', '工具开始干活');
+  const tool = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  child.kill('SIGHUP');
+  await exited;
+  let alive = true;
+  try {
+    process.kill(tool, 0);
+  } catch {
+    alive = false;
+  }
+  if (alive) process.kill(tool, 'SIGKILL');
+  assert.equal(alive, false, '工具跟着结束了');
+  const st = s.stints();
+  assert.equal(st.length, 1);
+  assert.equal(st[0].status, 'stopped');
+  assert.ok(!s.exists('work.txt'), '工具没来得及接着改文件');
 });

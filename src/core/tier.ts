@@ -8,8 +8,8 @@ import type { AgentConfig, Tier } from './types';
 
 /** 名字里带这些的是同一家的小号、快速版，按弱算。 */
 const SMALL = /(^|[-_\s.])(mini|flash|lite|nano|haiku|small|tiny|air|instant)([-_\s.]|$)/i;
-/** 默认算强的：Claude 大号、GPT-5 及以上、o3/o4、Gemini Pro / 3 及以上、Grok 4 及以上。 */
-const STRONG = /claude|opus|sonnet|gpt-?([5-9]|\d{2})|(^|[^a-z])o[34]([^a-z0-9]|$)|gemini.*pro|gemini-?([3-9])|grok-?([4-9])/i;
+/** 默认算强的：Claude 大号（Opus、Sonnet、Fable）、GPT-5 及以上、o3/o4、Gemini Pro / 3 及以上、Grok 4 及以上。 */
+const STRONG = /claude|opus|sonnet|fable|gpt-?([5-9]|\d{2})|(^|[^a-z])o[34]([^a-z0-9]|$)|gemini.*pro|gemini-?([3-9])|grok-?([4-9])/i;
 
 export function tierForModel(model: string | undefined | null): Tier3 {
   // 工具报的常是给人看的名字：「Grok 4.6 Fast」「GPT 6」「Gemini 3 Pro」，空格当成连字符再认。
@@ -20,12 +20,15 @@ export function tierForModel(model: string | undefined | null): Tier3 {
   return 'weak';
 }
 
-/** 名单里一位的强弱：你设过的优先；知道模型就按模型猜；不知道模型（桌面程序）用名单里记的。 */
-export function memberTier(a: Pick<AgentConfig, 'tier' | 'tierSet'>, model: string | undefined): Tier {
+/**
+ * 名单里一位的强弱：你设过的优先；知道模型就按模型猜；不知道模型的，自动识别加进来的按弱算（认不出来按弱处理，
+ * 它做的活要复核——你在设置里把它改成强就行），你自己加的、桌面程序用名单里记的。
+ */
+export function memberTier(a: Pick<AgentConfig, 'tier' | 'tierSet' | 'detected' | 'kind'>, model: string | undefined): Tier {
   if (a.tierSet) return a.tier;
   const t = tierForModel(model);
-  if (t === 'unknown') return a.tier;
-  return t;
+  if (t !== 'unknown') return t;
+  return a.detected && (a.kind ?? 'cli') === 'cli' ? 'weak' : a.tier;
 }
 
 /** 认得的工具名（交接里写的「工具」和工人名单对上）。 */

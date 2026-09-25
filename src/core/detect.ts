@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { scanApps } from './env';
+import { RelayError } from './errors';
 import { checkCommand } from './launch';
 import { findHarness, HARNESSES, harnessForCommand, locateCached, clearLocateCache, type HarnessSpec, type Level, type LoginInfo, type ModelInfo } from './harness';
 import { apiUsable } from './llm';
@@ -216,8 +217,9 @@ export function syncRegistry(report: DetectReport): string[] {
     let name = DEFAULT_NAMES[h.id] ?? h.id;
     for (let i = 2; names.has(name); i++) name = `${DEFAULT_NAMES[h.id] ?? h.id}${i}`;
     names.add(name);
+    // 看不出用的哪个模型：按弱算（它做的活要复核），你在设置里可以改成强。
     const t = tierForModel(h.model.model);
-    reg.agents.push({ name, label: LABELS[h.id] ?? h.label, kind: 'cli', cmd, tier: t === 'weak' ? 'weak' : 'strong', prompt: { mode: MANUAL_MODE[h.id] ?? 'arg' }, harness: h.id, detected: true });
+    reg.agents.push({ name, label: LABELS[h.id] ?? h.label, kind: 'cli', cmd, tier: t === 'strong' ? 'strong' : 'weak', prompt: { mode: MANUAL_MODE[h.id] ?? 'arg' }, harness: h.id, detected: true });
     changes.push(`新加了 ${LABELS[h.id] ?? h.label}（${name}）。`);
   }
 
@@ -254,14 +256,16 @@ export function syncRegistry(report: DetectReport): string[] {
 /** 用户同意后，启用一个要用别的工具密钥的接口（如 MiMo 的 Token Plan）。 */
 export function enableProvider(report: DetectReport, id: string, name?: string): AgentConfig {
   const p = report.providers.find((x) => x.id === id);
-  if (!p) throw new Error(`识别结果里没有 ${id}，先重新识别一次。`);
+  if (!p) throw new RelayError(`识别结果里没有 ${id}，先重新识别一次。`, 'no-provider');
   const reg = loadRegistry();
   const existing = reg.agents.find((a) => a.api?.keyFrom === p.keyFrom && a.api?.baseUrl === p.baseUrl);
   if (existing) return existing;
   const names = new Set(reg.agents.map((a) => a.name));
-  let n = name ?? (p.source === 'mimocode' ? 'mimo-api' : p.id.replace(/[^a-zA-Z0-9_-]/g, '-'));
-  for (let i = 2; names.has(n); i++) n = `${name ?? 'mimo-api'}${i}`;
-  const agent: AgentConfig = { name: n, label: p.source === 'mimocode' ? 'MiMo 接口' : p.label, kind: 'api', tier: 'strong', api: toApiSpec(p), model: p.model, detected: true };
+  const want = name ?? (p.source === 'mimocode' ? 'mimo-api' : p.id.replace(/[^a-zA-Z0-9_-]/g, '-'));
+  let n = want;
+  for (let i = 2; names.has(n); i++) n = `${want}${i}`;
+  // 强弱按接口里的模型算；认不出来的模型按弱。
+  const agent: AgentConfig = { name: n, label: p.source === 'mimocode' ? 'MiMo 接口' : p.label, kind: 'api', tier: tierForModel(p.model) === 'strong' ? 'strong' : 'weak', api: toApiSpec(p), model: p.model, detected: true };
   reg.agents.push(agent);
   backupRegistryOnce();
   saveRegistry(reg);
@@ -310,7 +314,9 @@ export function listMembers(level: Level, report: DetectReport | null = loadDete
     if (!spec || kind !== 'cli') continue;
     const hr = report?.harnesses.find((x) => x.id === spec.id);
     let why: string | undefined;
-    if (!locateCached(spec)) why = '这台电脑上找不到它';
+    // 识别结果里有它就不再现找（现找要运行一遍它的 --version；网页每隔几秒要一次成员，找工具的缓存一过期就会卡住整个接力台）。
+    // 识别结果里没有（没识别过、或者识别之后才装的）才现找：没装的工具找得很快，装了的只在这时慢一次。
+    if (!hr && !locateCached(spec)) why = '这台电脑上找不到它';
     else if (hr?.login.state === 'no') why = `没登录：${spec.loginHint}`;
     const work = !why && spec.workLevels.includes(level);
     out.push({

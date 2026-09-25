@@ -1857,7 +1857,8 @@ function streamItems(t) {
   if (title) {
     items.push({ key: `task:${t.id}`, at: -Infinity, sig: JSON.stringify(latest ? [title, p.task.body, p.task.items, t.from] : [title, t.from]), make: () => taskBubble(t, latest) });
   }
-  for (const s of threadStints(t)) items.push({ key: `s${s.id}`, at: msOf(s.startedAt), sig: stintSig(s), make: () => stintCard(s) });
+  // 这一棒变了（交接写完了、有了复核……）：展开的全文也要重新取，不能一直显示第一次展开时的样子。
+  for (const s of threadStints(t)) items.push({ key: `s${s.id}`, at: msOf(s.startedAt), sig: stintSig(s), make: () => stintCard(s), changed: () => S.detail.delete(s.id) });
   const talk = threadTalk(t);
   const rounds = new Map();
   for (const r of talk.rows) {
@@ -1900,6 +1901,7 @@ function syncList(box, items, animate) {
   for (const it of items) {
     let el = old.get(it.key);
     if (el && el.dataset.sig !== it.sig) {
+      if (it.changed) it.changed();
       const fresh = it.make();
       fresh.dataset.key = it.key;
       fresh.dataset.sig = it.sig;
@@ -1933,7 +1935,9 @@ function renderStream(t) {
   updateLive();
   for (const el of CE.stream.querySelectorAll('.card.open')) {
     const s = stintById(Number(el.dataset.stint));
-    if (s && !el.querySelector('.detail')) fillDetail(el, s);
+    if (!s) continue;
+    if (!el.querySelector('.detail')) fillDetail(el, s);
+    if (!S.detail.has(s.id)) loadDetail(s.id);
   }
   if (fresh || wasStuck) scrollBottom();
   else if (added) CE.toBottom.hidden = false;
@@ -2215,7 +2219,12 @@ function toggleCard(id) {
   if (!S.detail.has(id)) loadDetail(id);
 }
 
+/** 正在取全文的棒（定时刷新时别重复去取）。 */
+const detailLoading = new Set();
+
 async function loadDetail(id) {
+  if (detailLoading.has(id)) return;
+  detailLoading.add(id);
   const t = ticket(`detail:${id}`);
   try {
     const d = await api(q(`/api/stint?id=${id}`));
@@ -2226,6 +2235,8 @@ async function loadDetail(id) {
     if (el && s) fillDetail(el, s);
   } catch (e) {
     if (!stale(t)) toast(e.message, { bad: true });
+  } finally {
+    detailLoading.delete(id);
   }
 }
 
@@ -2289,10 +2300,14 @@ async function copyHandoff(s) {
   toast((await copyText(d.handoff || '')) ? '已复制' : '没能复制', { bad: false });
 }
 
-function skipReview(btn, s) {
+async function skipReview(btn, s) {
   if (!S.st) return;
-  const root = S.st.project.root;
-  act(btn, () => api('/api/mark', { dir: root, stint: s.id }), `第 ${s.id} 棒已跳过复核`);
+  const { root, name } = S.st.project;
+  const who = s.who.tier === 'unknown' ? '不知道是谁做的' : s.who.tier === 'weak' ? '弱模型做的' : '还没复核过';
+  if (!(await confirmSheet(`跳过第 ${s.id} 棒的复核？`, `项目「${name}」：这一棒是${who}。跳过之后它不再等强模型复核，验收也不会因为它卡住。可以撤销。`, '跳过复核'))) return;
+  if (!S.st || S.st.project.root !== root) return toast('项目已经换了，没有跳过。', { bad: true });
+  const r = await act(btn, () => api('/api/mark', { dir: root, stint: s.id }));
+  if (r) toast(`第 ${s.id} 棒已跳过复核`, { action: { label: '撤销', run: () => act(null, () => api('/api/mark', { dir: root, stint: s.id, review: 'needed' }), '已改回待复核') } });
 }
 
 async function rollbackTo(btn, s) {

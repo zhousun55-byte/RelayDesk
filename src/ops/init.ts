@@ -4,7 +4,7 @@ import path from 'node:path';
 import { defaultRelayConfig, relayConfigPath } from '../core/config';
 import { RelayError } from '../core/errors';
 import { appendLedger, loadLedger } from '../core/ledger';
-import { HANDOFF_DIR, REVIEW_DIR, TASK_REL, readTask, taskTemplate, setTask } from '../core/notes';
+import { HANDOFF_DIR, REVIEW_DIR, TASK_REL, readTask, saveTaskCopy, taskTemplate, setTask } from '../core/notes';
 import { loadMemory, rememberProject } from '../core/memory';
 import { relayHome } from '../core/paths';
 import { installProtocol, protocolState } from '../core/protocol';
@@ -85,7 +85,8 @@ export function initProject(dir: string, opts: InitOptions = {}): InitResult {
   ensureSnapRepo(root);
   if (!already) {
     const snap = takeSnapshot(root, '接入').sha;
-    appendLedger(root, { type: 'init', ts: new Date().toISOString(), snap, version: '2' });
+    const taskCopy = saveTaskCopy(root);
+    appendLedger(root, { type: 'init', ts: new Date().toISOString(), snap, version: '2', ...(taskCopy ? { taskCopy } : {}) });
     actions.push('存了第一张快照（以后改坏了能退回到这里）');
   } else if (changed.length) {
     markBase(root, '接力台更新了接力规矩');
@@ -115,6 +116,7 @@ export function newTask(root: string, text: string, items: string[] = []): void 
   const before = readTask(root);
   const doc = setTask(root, t, items);
   const snap = takeSnapshot(root, '换任务').sha;
-  appendLedger(root, { type: 'task', ts: new Date().toISOString(), title: doc.title, snap, prev: before.empty ? '' : before.title });
+  const taskCopy = saveTaskCopy(root);
+  appendLedger(root, { type: 'task', ts: new Date().toISOString(), title: doc.title, snap, prev: before.empty ? '' : before.title, ...(taskCopy ? { taskCopy } : {}) });
   refreshBrief(root);
 }

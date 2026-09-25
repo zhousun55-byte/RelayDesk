@@ -11,7 +11,8 @@ import type { Sandbox } from './helpers';
  * - 复核：给「要复核的是」里的每一棒写复核结论；
  * - 终审：写终审结论，交接状态写「全部完成」；
  * - 只读（群聊 / 投票）：按提示词回答（投票时不投自己）。
- * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail，FAKE_<名字>_WHO = 交接里写的身份。
+ * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail / slow（先把进程号写进 FAKE_DIR/<名字>.pid，
+ * 睡 30 秒再干活），FAKE_<名字>_WHO = 交接里写的身份；FAKE_REVIEW_SAY = 复核完说的那句话。
  * claude 带 --setting-sources（跳过用户设置）时扮演「官方账号」：FAKE_CLAUDE_OFFICIAL=pro 算登录了，
  * 身份和行为看 FAKE_CLAUDE_OFFICIAL_WHO / FAKE_CLAUDE_OFFICIAL_MODE；这时环境里还带着 ANTHROPIC_* 就报错（说明接力台没去掉）。
  */
@@ -115,6 +116,7 @@ function fakeScript(name: 'claude' | 'codex'): string {
     `    printf '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"%s"}]}}\\n' "$T"`,
     `    printf '{"type":"result","subtype":"success","is_error":true,"result":"%s"}\\n' "$T"`,
     '    exit 1 ;;',
+    '  slow) echo $$ > "$FAKE_DIR/$NAME.pid"; sleep 30 ;;',
     '  blip-once)',
     '    if [ ! -f "$FAKE_DIR/$NAME-blipped" ]; then',
     '      touch "$FAKE_DIR/$NAME-blipped"',
@@ -126,10 +128,10 @@ function fakeScript(name: 'claude' | 'codex'): string {
     "if grep -q '派来复核' \"$P\"; then",
     "  for n in $(grep '要复核的是' \"$P\" | grep -o '第 [0-9]* 棒' | grep -o '[0-9][0-9]*'); do",
     '    mkdir -p .relay/复核',
-    `    printf '# 复核：第 %s 棒\\n\\n- 复核人：%s\\n- 结论：%s\\n\\n## 发现的问题和怎么处理的\\n\\n- 看过了，对得上\\n' "$n" "$WHO" "\${FAKE_REVIEW_VERDICT:-没问题}" > ".relay/复核/第$n棒.md"`,
+    `    printf '# 复核：第 %s 棒\\n\\n- 复核人：%s\\n- 结论：%s\\n\\n## 发现的问题和怎么处理的\\n\\n- 看过了，对得上\\n' "$n" "$WHO" "\${FAKE_REVIEW_VERDICT:-没问题}" > ".relay/复核/第\${n}棒.md"`,
     '  done',
     `  [ -n "$H" ] && printf '# 交接：%s\\n\\n- 状态：已交接\\n\\n## 做了什么\\n\\n- 复核了\\n' "$WHO" > "$H"`,
-    '  say "复核完了"',
+    '  say "${FAKE_REVIEW_SAY:-复核完了}"',
     '  exit 0',
     'fi',
     "if grep -q '派来做终审' \"$P\"; then",

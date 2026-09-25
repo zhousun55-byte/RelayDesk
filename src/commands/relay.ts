@@ -85,25 +85,32 @@ function printGo(s: GoState): void {
   console.log(`${s.status === 'done' ? c.green('✓') : s.status === 'failed' ? c.red('✗') : c.yellow('•')} ${word[s.status]}：${s.result ?? s.phase}`);
 }
 
+const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+
 async function runAndWait(root: string, opts: Parameters<typeof startGo>[1]): Promise<void> {
   augmentPath();
   let lastPhase = '';
+  /** 终端关掉了（SIGHUP）：不再往里打字。 */
+  let quiet = false;
   const { done } = startGo(root, opts, {
     onUpdate: (s) => {
-      if (s.phase !== lastPhase) {
+      if (!quiet && s.phase !== lastPhase) {
         lastPhase = s.phase;
         info(c.dim(s.phase));
       }
     },
   });
-  const onSig = () => {
-    warn('收到 Ctrl-C：正在停下（正在干活的工具会被结束，改到一半的东西都留在文件夹里）……');
-    stopAllGo();
+  // Ctrl-C、kill、关掉终端窗口：都先叫停，等正在干活的工具结束、这一棒记好账再退（不然工具会接着改文件，没人记账）。
+  const onSig = (sig: NodeJS.Signals) => {
+    if (sig === 'SIGHUP') quiet = true;
+    else warn(`收到${sig === 'SIGINT' ? ' Ctrl-C' : '停止信号'}：正在停下（正在干活的工具会被结束，改到一半的东西都留在文件夹里）……`);
+    void stopAllGo();
   };
-  process.once('SIGINT', onSig);
+  for (const sig of STOP_SIGNALS) process.on(sig, onSig);
+  for (const s of [process.stdout, process.stderr]) s.on('error', () => undefined);
   const s = await done;
-  process.off('SIGINT', onSig);
-  printGo(s);
+  for (const sig of STOP_SIGNALS) process.off(sig, onSig);
+  if (!quiet) printGo(s);
   if (s.status === 'failed') process.exitCode = 1;
 }
 

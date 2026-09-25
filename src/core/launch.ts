@@ -100,9 +100,11 @@ export function runOpener(cmd: string, cwd: string, timeoutMs = 15_000): Promise
   return new Promise((resolve) => {
     const child = spawn('sh', ['-c', cmd], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
-    const keep = (c: Buffer) => {
-      output = (output + c.toString('utf8')).slice(-4000);
+    const keep = (c: string) => {
+      output = (output + c).slice(-4000);
     };
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', keep);
     child.stderr?.on('data', keep);
     let settled = false;
@@ -163,7 +165,8 @@ export function chooseFolder(): Promise<string | null> {
   return new Promise((resolve) => {
     const child = spawn('osascript', ['-e', 'POSIX path of (choose folder with prompt "选一个项目文件夹")'], { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
-    child.stdout?.on('data', (c: Buffer) => (out += c.toString('utf8')));
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (c: string) => (out += c));
     const timer = setTimeout(() => child.kill('SIGKILL'), 10 * 60_000);
     child.on('error', () => {
       clearTimeout(timer);

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -14,7 +15,7 @@ import { allMembers, orderMembers, readyMembers, type MemberInfo } from '../core
 import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc } from '../core/notes';
 import { finalPrompt, reviewPrompt, workPrompt } from '../core/prompts';
 import { clearQuota, detectQuota, markQuota, untilText } from '../core/quota';
-import { clip, logTail, looksLikeNetworkBlip, startRun, type RunHandle, type RunResult } from '../core/runner';
+import { clip, logTail, looksLikeNetworkBlip, startRun, toolLines, type RunHandle, type RunResult } from '../core/runner';
 import { takeSnapshot } from '../core/snap';
 import { memberTier, sameModel, whoOfMember } from '../core/tier';
 import { applyReviews, closeStint, gateStint, projectConfig, projectConfigSafe, refreshBrief, track } from './track';
@@ -36,7 +37,7 @@ export interface GoState {
   status: GoStatus;
   /** 现在在干什么（给人看）。 */
   phase: string;
-  current?: { stint: number; member: string; label: string; kind: Stint['kind']; since: string; log: string; toolPid?: number };
+  current?: { stint: number; member: string; label: string; kind: Stint['kind']; since: string; log: string; toolPid?: number; toolExe?: string };
   /** 在等谁的额度恢复。 */
   waitingUntil?: string;
   /** 这次跑过的棒。 */
@@ -193,6 +194,8 @@ export function goLogTail(root: string, s: GoState | null, maxLines = 60): strin
 }
 
 const runners = new Map<string, GoRunner>();
+/** 每个调度收完尾（这一棒记好账）时兑现。 */
+const finishing = new Map<string, Promise<unknown>>();
 
 export function goActive(root: string): boolean {
   if (runners.has(canonRoot(root))) return true;
@@ -215,23 +218,45 @@ export function stopGo(root: string): boolean {
   return false;
 }
 
-export function stopAllGo(): void {
+/**
+ * 叫停所有调度，等它们把正在跑的工具结束、把这一棒记好账（最多等 timeoutMs）。
+ * 接力台要退出时用：不等的话，工具会在接力台退出之后接着改文件，没人记账。
+ */
+export async function stopAllGo(timeoutMs = 10_000): Promise<void> {
   for (const r of runners.values()) r.stop();
+  const all = [...finishing.values()];
+  if (!all.length) return;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([Promise.allSettled(all), new Promise<void>((res) => (timer = setTimeout(res, timeoutMs)))]);
+  if (timer) clearTimeout(timer);
 }
 
-/** 上次接力台被关掉时留下、还在跑的工具进程：结束掉（不然两个 AI 同时改一个文件夹）。 */
-function killLeftover(prev: GoState | null): void {
+/** 这个进程是不是当时派出去的那个工具（进程号可能已经被别的程序用了：命令对不上就不动它）。 */
+function sameTool(pid: number, exe: string | undefined): boolean {
+  if (!exe) return false;
+  const r = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
+  return r.status === 0 && (r.stdout ?? '').includes(exe);
+}
+
+/** 上次接力台被关掉时留下、还在跑的工具进程：结束掉（不然两个 AI 同时改一个文件夹）。返回结束了没有。 */
+function killLeftover(prev: GoState | null): boolean {
   const pid = prev?.current?.toolPid;
-  if (!pid || !prev || pidAlive(prev.pid) || !pidAlive(pid)) return;
+  if (!pid || !prev || pidAlive(prev.pid) || !pidAlive(pid) || !sameTool(pid, prev.current?.toolExe)) return false;
   try {
     process.kill(-pid, 'SIGKILL');
   } catch {
     try {
       process.kill(pid, 'SIGKILL');
     } catch {
-      /* 已经没了 */
+      return false;
     }
   }
+  return true;
+}
+
+/** 接力台启动时：上次被关掉时还在跑的工具，结束掉。返回结束了没有。 */
+export function reapLeftover(root: string): boolean {
+  return killLeftover(loadGoState(root));
 }
 
 function nowIso(): string {
@@ -356,12 +381,13 @@ class GoRunner {
       this.current = h;
       if (h.pid && this.state.current) {
         this.state.current.toolPid = h.pid;
+        this.state.current.toolExe = inv.argv[0];
         this.save();
       }
       const r = await h.done;
       this.current = null;
       if (attempt > 3 || r.stopped || r.timedOut || r.code === 0 || this.stopRequested || !mayRetry()) return r;
-      const text = `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}\n${logTail(logAbs)}`;
+      const text = `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}\n${toolLines(logTail(logAbs))}`;
       const needs = cliTooOld(text);
       const used = modelArg(inv.argv);
       if (needs && used) {
@@ -481,8 +507,11 @@ class GoRunner {
         finalText = r.finalText;
         stopped = r.stopped;
         actualModel = r.model;
-        quotaText = `${r.error ?? ''}\n${r.stderrTail}\n${logTail(logAbs, 6000)}\n${r.finalText.slice(-2000)}`;
-        if (!r.stopped && (r.error || r.timedOut || r.code !== 0)) {
+        // 认额度只看工具自己报的话（出错信息、标准错误、日志里的「出错」「提示」）和最后一句话，不看 AI 说的话、搜的词：
+        // 任务本身讲限流、额度时，那些话里全是 rate limit、quota。
+        const failed = !r.stopped && (!!r.error || r.timedOut || r.code !== 0);
+        quotaText = `${r.error ?? ''}\n${r.stderrTail}\n${toolLines(logTail(logAbs, 6000))}\n${r.finalText.slice(-2000)}`;
+        if (failed) {
           const said = clip(r.stderrTail.split('\n').filter(Boolean).slice(-2).join(' '), 200);
           const hint = explainFailure(m.harness, `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}`);
           error = r.error ?? (r.timedOut ? `超过 ${Math.round(timeoutMs / 60000)} 分钟，停掉了` : hint ?? `退出码 ${r.code}${said ? `：${said}` : ''}`);
@@ -528,7 +557,9 @@ class GoRunner {
       const extra = listHandoffFiles(root).find((f) => !handoffsBefore.has(f.rel));
       if (extra) h = readHandoff(root, extra.rel);
     }
-    const quota = error || !finalText || from === to ? detectQuota(quotaText) : { hit: false as const };
+    // 出错退出、或者什么都没说就结束了，才去认是不是额度用完（各家额度用完都是这样结束的）。
+    // 正常做完、交了话的一棒——哪怕没改文件（复核棒多半只写结论）——不算额度用完。
+    const quota = error || !finalText ? detectQuota(quotaText) : { hit: false as const };
     let status: Stint['status'] = 'handed';
     let note: string | undefined;
     let quotaUntil: string | undefined;
@@ -549,7 +580,8 @@ class GoRunner {
     }
     const ran = actualModel && !(who.model && who.model === actualModel) ? { ...who, model: actualModel, label: `${m.label} · ${actualModel}`, tier: who.model && sameModel(who.model, actualModel) ? who.tier : memberTier(m.agent, actualModel) } : who;
     const closed = closeStint(root, { ...stint, who: ran, pid: process.pid }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
-    if (kind !== 'work' || closed.facts?.files || closed.factsError) await gateStint(root, id, cfg).catch(() => undefined);
+    // 调度拿着锁，这时只有检查命令在跑：它自己写的缓存、报告算接力台的改动，不算到哪一棒头上（不然下一轮会以为有别的 AI 在改文件）。
+    if (kind !== 'work' || closed.facts?.files || closed.factsError) await gateStint(root, id, cfg, { absorb: 'all' }).catch(() => undefined);
     // 终审的结论：收工时要看它（交接成功不等于终审通过）。
     if (kind === 'final' && reviewFile) {
       const r = readReview(root, reviewFile);
@@ -657,7 +689,8 @@ class GoRunner {
             const ids = stuck.map((p) => p.id).join('、');
             // 写了复核、但写的人算弱（或者是自己复核自己）：结论不算数，和「没写出来」「写了有问题」是三回事。
             const weakOnly = stuck.every((p) => (p.reviews ?? []).length > 0 && (p.reviews ?? []).every((m) => m.weak));
-            if (weakOnly) return this.finish('needs-human', `第 ${ids} 棒复核了两次，但写复核的都算弱，结论不算数。在「设置」里把复核它的那位改成强，或者等别的强模型有额度了再开全自动。`);
+            const anon = stuck.some((p) => (p.reviews ?? []).some((m) => m.anon));
+            if (weakOnly) return this.finish('needs-human', anon ? `第 ${ids} 棒复核了两次，但复核结论认不出是谁写的（写的时候没有哪一棒在做），不算数。让强模型在自己那一棒里重新复核（先建交接、再写结论）。` : `第 ${ids} 棒复核了两次，但写复核的都算弱，结论不算数。在「设置」里把复核它的那位改成强，或者等别的强模型有额度了再开全自动。`);
             const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
             const why = stuck.map((p) => {
               const last = countedReviews(p, dropped).at(-1);
@@ -710,7 +743,7 @@ class GoRunner {
             if (last) {
               this.gateRuns++;
               this.phase('清单都打勾了，跑一遍检查……');
-              await gateStint(this.root, last.id);
+              await gateStint(this.root, last.id, undefined, { absorb: 'all' });
               continue;
             }
           }
@@ -792,8 +825,10 @@ export function startGo(root: string, opts: GoOptions, hooks: GoHooks = {}): { s
   const done = (opts.mode === 'auto' ? runner.auto() : runner.once()).finally(() => {
     clearInterval(poll);
     runners.delete(abs);
+    finishing.delete(abs);
     release();
   });
+  finishing.set(abs, done);
   return { state: runner.state, done };
 }
 

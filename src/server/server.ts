@@ -11,7 +11,7 @@ import { enableProvider, loadDetected, type DetectReport } from '../core/detect'
 import { RelayError, errorMessage } from '../core/errors';
 import { projectFiles, projectPath, readProjectFile } from '../core/files';
 import { copyToClipboard, fillTemplate, openTerminal, reveal, runOpener, shq, chooseFolder } from '../core/launch';
-import { loadLedger, saveStint } from '../core/ledger';
+import { loadLedger, saveStint, type Stint } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
 import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
 import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
@@ -55,8 +55,10 @@ function detectInChild(offline: boolean): Promise<{ report: DetectReport | null;
     const child = spawn(process.execPath, [cli, 'detect', '--json', ...(offline ? ['--offline'] : [])], { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
-    child.stdout.on('data', (c: Buffer) => (out += c.toString('utf8')));
-    child.stderr.on('data', (c: Buffer) => (err += c.toString('utf8')));
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (c: string) => (out += c));
+    child.stderr.on('data', (c: string) => (err += c));
     child.on('error', (e) => reject(new RelayError(`识别没能开始：${e.message}`, 'detect-failed')));
     child.on('close', (code) => {
       const tail = (err || out).trim().split('\n').slice(-3).join(' ');
@@ -174,13 +176,18 @@ function strList(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()) : [];
 }
 
-/** 防 DNS 重绑定和跨站请求：只认本机地址 + 本端口；POST 必须是 JSON。 */
+/**
+ * 防 DNS 重绑定和跨站请求：只认本机地址 + 本端口；POST 必须是 JSON。
+ * 别的网站里的一张图片、一个链接也会带着本机地址来请求（不带 Origin）：浏览器标明是从别的网站来的（Sec-Fetch-Site: cross-site / same-site），一律不认。
+ */
 function trusted(req: http.IncomingMessage): boolean {
   const port = req.socket.localPort;
   const okHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
   if (!okHosts.has(String(req.headers.host ?? ''))) return false;
   const origin = req.headers.origin;
   if (origin && !okHosts.has(origin.replace(/^http:\/\//, ''))) return false;
+  const site = String(req.headers['sec-fetch-site'] ?? '');
+  if (site && site !== 'same-origin' && site !== 'none') return false;
   if (req.method === 'POST' && !String(req.headers['content-type'] ?? '').includes('application/json')) return false;
   return true;
 }
@@ -257,6 +264,8 @@ export function createServer(opts: ServerOptions): http.Server {
     },
     '/api/diff': (q) => {
       const root = dirOf(q, {});
+      // 看「还没人交接的改动」要先存一张快照：只在接入过的文件夹里做，不能给随便一个文件夹建快照仓库。
+      requireProject(root);
       const v = loadLedger(root);
       const id = q.get('id');
       const file = q.get('path') ?? undefined;
@@ -397,14 +406,25 @@ export function createServer(opts: ServerOptions): http.Server {
       return undoRollback(root);
     },
     '/api/mark': (q, b) => {
-      // 你说这一棒不用复核（比如其实是你自己改的）。
+      // 你说这一棒不用复核（比如其实是你自己改的）；review: 'needed' = 撤销，改回待复核。
       const root = dirOf(q, b);
+      requireProject(root);
       const v = loadLedger(root);
       const s = v.stints.find((x) => x.id === Number(b.stint));
       if (!s) throw new RelayError('没有这一棒。', 'no-stint');
       if (s.status === 'working') throw new RelayError('这一棒还在进行中。', 'working');
-      const note = str(b.note)?.trim() || '你标记为不用复核。';
-      saveStint(root, { ...s, review: 'skip', note: [s.note, note].filter(Boolean).join(' ') });
+      if (b.review === 'needed') {
+        if (s.kind !== 'work') throw new RelayError('只有干活的棒要复核。', 'not-work');
+        // 撤销：去掉跳过时记的那句说明，改回待复核。
+        const next: Stint = { ...s, review: 'needed' };
+        const note = (s.note ?? '').replace(/\s*你标记为不用复核。\s*$/, '');
+        if (note) next.note = note;
+        else delete next.note;
+        saveStint(root, next);
+      } else {
+        const note = str(b.note)?.trim() || '你标记为不用复核。';
+        saveStint(root, { ...s, review: 'skip', note: [s.note, note].filter(Boolean).join(' ') });
+      }
       refreshBrief(root);
       return {};
     },

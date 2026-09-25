@@ -831,6 +831,8 @@ const copilot: HarnessSpec = {
   model: () => ({}),
   invoke(loc, i) {
     const a = [...loc.exec, '-p', i.prompt, '--allow-all-tools'];
+    // 只读（群聊、投票）：不许改文件、不许跑命令（按官方参数写的，没实测）。
+    if (i.readOnly) a.push('--deny-tool', 'write', '--deny-tool', 'shell');
     if (i.model) a.push('--model', i.model);
     return { argv: a, format: 'lines' };
   },
@@ -870,12 +872,15 @@ export function explainFailure(harnessId: string | undefined, text: string): str
   if (harnessId === 'dsh' && /ACCOUNT_SIGN_IN_REQUIRED|ACCOUNT_TOKEN_INVALID|sign.?in required/i.test(text)) {
     return 'DeepSeek Harness 没登录（或者登录过期了）：打开 DeepSeek Harness 桌面版，重新登录 DeepSeek 账号。';
   }
-  if (harnessId === 'claude-official' && /not logged in|log ?in|unauthorized|401|invalid api key/i.test(text)) {
+  if (harnessId === 'claude-official' && (NOT_LOGGED_IN.test(text) || /invalid api key/i.test(text))) {
     return 'Claude Code 的官方账号没登录（或者登录过期了）：在终端运行 claude auth login，用 claude.ai 账号登录。';
   }
-  if (/not logged in|please log ?in|unauthorized|401/i.test(text)) return '看起来没登录（或者登录过期了）：在终端里打开这个工具重新登录一下。';
+  if (NOT_LOGGED_IN.test(text)) return '看起来没登录（或者登录过期了）：在终端里打开这个工具重新登录一下。';
   return null;
 }
+
+/** 没登录、登录过期的说法。只认成句的，不认单独的 login、401（文件名 login.ts、行号 401 也会有）。 */
+const NOT_LOGGED_IN = /not logged in|please (?:log ?in|sign ?in|run \/login)|(?:log ?in|sign ?in|authentication) (?:is )?required|\bunauthori[sz]ed\b|(?:http|status|error|code)[ :=]*401\b|\b401 unauthori|(?:token|session|credentials?) (?:has )?expired/i;
 
 export function findHarness(id: string | undefined): HarnessSpec | null {
   if (!id) return null;

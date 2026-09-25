@@ -106,7 +106,7 @@ export function workersCommand(): Command {
   withFlags(workers.command('add').description('添加一个工人').argument('<名字>', '英文名，命令里用它，如 claude'))
     .option('--preset <编号>', '从现成配置开始（relay workers presets 查看）')
     .action((name: string, f: AgentFlags) => {
-      let base: Partial<AgentConfig> = { kind: 'cli', tier: 'strong', prompt: { mode: 'file' } };
+      let base: Partial<AgentConfig> = { kind: 'cli', tier: 'weak', prompt: { mode: 'file' } };
       if (f.preset) {
         const p = findPreset(f.preset);
         if (!p) throw new RelayError(`没有叫 ${f.preset} 的现成配置。relay workers presets 查看。`, 'no-preset');

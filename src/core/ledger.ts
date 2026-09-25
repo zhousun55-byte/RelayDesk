@@ -56,14 +56,16 @@ export type Verdict = 'ok' | 'fixed' | 'reverted' | 'problem' | 'insufficient' |
 export const PASSING: ReadonlySet<Verdict> = new Set<Verdict>(['ok', 'fixed', 'reverted']);
 
 export interface ReviewMark {
-  /** 哪一棒复核的。 */
+  /** 哪一棒复核的（0 = 认不出是哪一棒）。 */
   by: number;
   byLabel: string;
   file: string;
   verdict: Verdict;
   at: string;
-  /** 写复核的是弱模型（或者是它自己复核自己）：不算数，还要强模型再核。 */
+  /** 写复核的是弱模型（或者是它自己复核自己、认不出是谁）：不算数，还要强模型再核。 */
   weak?: boolean;
+  /** 认不出是谁写的：复核文件改动的时候没有哪一棒在做（不能记到前后哪一棒头上）。 */
+  anon?: boolean;
   /** 是谁写的由 Claude Code 的会话记录认定（以后不用再核）。 */
   byLog?: boolean;
 }
@@ -119,6 +121,8 @@ export interface Stint {
   taskAfter?: string;
   /** 自己在工具里干的棒被接力台换人时：你确认过它已经停下（没确认就只是账面上结束）。 */
   stopConfirmed?: boolean;
+  /** 这一棒在任务清单里新打的勾（没改文件、只打勾的弱模型也要复核：要确认这几步真做完了）。 */
+  ticked?: string[];
 }
 
 export interface InitEvent {
@@ -127,6 +131,8 @@ export interface InitEvent {
   /** 接入时的快照：第 1 棒从这里开始算。 */
   snap: string;
   version?: string;
+  /** 接入时的任务清单（副本编号）：第 1 棒打了哪些勾，和它比。 */
+  taskCopy?: string;
 }
 
 export interface StintEvent {
@@ -152,9 +158,10 @@ export interface RollbackEvent {
   restored?: number[];
   /**
    * 任务清单跟着退回：按「第 N 棒开始前」的清单改回打勾（unchecked 取消的勾、checked 重新勾上的）；
-   * before = 退回前清单的副本（撤销退回时恢复）；missing = 找不到那时的清单（旧账本），清单没动。
+   * before = 退回前清单的副本（撤销退回时恢复）；after = 退回后清单的副本（下一棒打了哪些勾，和它比）；
+   * missing = 找不到那时的清单（旧账本），清单没动。
    */
-  task?: { from?: string; before?: string; unchecked: string[]; checked: string[]; missing?: boolean };
+  task?: { from?: string; before?: string; after?: string; unchecked: string[]; checked: string[]; missing?: boolean };
 }
 
 export interface TaskEvent {
@@ -165,6 +172,8 @@ export interface TaskEvent {
   snap?: string;
   /** 被换掉的旧任务（网页上的历史列表用它当上一段的标题）；空字符串 = 旧任务是空的。旧版账本没有这一项。 */
   prev?: string;
+  /** 换任务时的任务清单（副本编号）：下一棒打了哪些勾，和它比。 */
+  taskCopy?: string;
 }
 
 /** 接力台自己改了项目里的文件（比如更新 AGENTS.md 里的规矩）：从这里重新算，不算到哪一棒头上。 */
@@ -181,30 +190,65 @@ export function ledgerPath(root: string): string {
   return path.join(root, '.relay', 'journal.jsonl');
 }
 
-export function appendLedger(root: string, ev: LedgerEvent): void {
-  fs.mkdirSync(path.dirname(ledgerPath(root)), { recursive: true });
-  fs.appendFileSync(ledgerPath(root), JSON.stringify(ev) + '\n');
+/** 文件是不是以换行结尾（上次写到一半断了的话不是：先补一个换行，免得下一条粘在坏的那行上一起读不出来）。 */
+function endsWithNewline(p: string): boolean {
+  let fd: number;
+  try {
+    fd = fs.openSync(p, 'r');
+  } catch {
+    return true;
+  }
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (!size) return true;
+    const b = Buffer.alloc(1);
+    fs.readSync(fd, b, 0, 1, size - 1);
+    return b[0] === 0x0a;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
-/** 读账本。坏掉的行跳过（AI 不小心改坏了一行，不能让整个接力台打不开）。 */
-export function readLedger(root: string): LedgerEvent[] {
+export function appendLedger(root: string, ev: LedgerEvent): void {
+  const p = ledgerPath(root);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.appendFileSync(p, `${endsWithNewline(p) ? '' : '\n'}${JSON.stringify(ev)}\n`);
+}
+
+/** 账本里读不出来的一行（第几行，从 1 数）。 */
+export interface BadLine {
+  line: number;
+  text: string;
+}
+
+/**
+ * 读账本。坏掉的行不让整个接力台打不开，但也不悄悄跳过：记下是第几行，验收会说「没法验收」
+ * （坏的可能正好是一次退回、一份复核，跳过了结论就不对了）。
+ */
+export function readLedgerFull(root: string): { events: LedgerEvent[]; bad: BadLine[] } {
   let text: string;
   try {
     text = fs.readFileSync(ledgerPath(root), 'utf8');
   } catch {
-    return [];
+    return { events: [], bad: [] };
   }
-  const out: LedgerEvent[] = [];
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
+  const events: LedgerEvent[] = [];
+  const bad: BadLine[] = [];
+  text.split('\n').forEach((line, i) => {
+    if (!line.trim()) return;
     try {
       const ev = JSON.parse(line) as LedgerEvent;
-      if (ev && typeof ev === 'object' && typeof ev.type === 'string') out.push(ev);
+      if (ev && typeof ev === 'object' && typeof ev.type === 'string') events.push(ev);
+      else bad.push({ line: i + 1, text: line.slice(0, 120) });
     } catch {
-      /* 跳过坏行 */
+      bad.push({ line: i + 1, text: line.slice(0, 120) });
     }
-  }
-  return out;
+  });
+  return { events, bad };
+}
+
+export function readLedger(root: string): LedgerEvent[] {
+  return readLedgerFull(root).events;
 }
 
 export function isInitialized(root: string): boolean {
@@ -223,10 +267,12 @@ export interface LedgerView {
   /** 最近一次退回。 */
   lastRollback: RollbackEvent | null;
   task: TaskEvent | null;
+  /** 读不出来的行（有就没法验收）。 */
+  bad?: BadLine[];
 }
 
 /** 把账本折成现在的样子。 */
-export function viewLedger(events: LedgerEvent[]): LedgerView {
+export function viewLedger(events: LedgerEvent[], bad: BadLine[] = []): LedgerView {
   const byId = new Map<number, Stint>();
   let init: InitEvent | null = null;
   let base: string | null = null;
@@ -265,7 +311,7 @@ export function viewLedger(events: LedgerEvent[]): LedgerView {
   const dropped = new Set(stints.filter((s) => s.rolledBack).map((s) => s.id));
   for (const s of stints) s.review = reviewStateOf(s, dropped);
   const open = [...stints].reverse().find((s) => s.status === 'working') ?? null;
-  return { events, init, stints, open, base, lastRollback, task };
+  return { events, init, stints, open, base, lastRollback, task, bad };
 }
 
 /**
@@ -289,13 +335,28 @@ export function countedReviews(s: Pick<Stint, 'reviews'>, rolledBack: ReadonlySe
 }
 
 export function loadLedger(root: string): LedgerView {
-  return viewLedger(readLedger(root));
+  const { events, bad } = readLedgerFull(root);
+  return viewLedger(events, bad);
 }
 
 export function requireInit(root: string): LedgerView {
   const v = loadLedger(root);
   if (!v.init) throw new RelayError('这个文件夹还没接入接力台。先在接力台里点「接入」，或执行 relay init。', 'not-init');
   return v;
+}
+
+/**
+ * 下一棒开始前的任务清单（副本编号）：最近一次记下的——上一棒结束时、换任务时、退回后、接入时。
+ * 你自己在工具里干的棒，接力台看到它的时候它可能已经打过勾了：不能拿那时的清单当「开始前」。
+ */
+export function taskBaseline(v: LedgerView): string | undefined {
+  let id: string | undefined;
+  for (const e of v.events) {
+    if ((e.type === 'init' || e.type === 'task') && e.taskCopy) id = e.taskCopy;
+    else if (e.type === 'rollback' && e.task?.after) id = e.task.after;
+    else if (e.type === 'stint' && e.stint.status !== 'working' && e.stint.taskAfter && !v.stints.find((s) => s.id === e.stint.id)?.rolledBack) id = e.stint.taskAfter;
+  }
+  return id;
 }
 
 export function nextStintId(v: LedgerView): number {

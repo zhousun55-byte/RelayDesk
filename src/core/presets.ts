@@ -86,7 +86,7 @@ export const PRESETS: Preset[] = [
     id: 'cli',
     title: '其他终端工具',
     hint: '任何能在终端里启动的 AI 工具。',
-    agent: { name: 'mycli', label: '我的工具', kind: 'cli', cmd: '', tier: 'strong', prompt: { mode: 'file' } },
+    agent: { name: 'mycli', label: '我的工具', kind: 'cli', cmd: '', tier: 'weak', prompt: { mode: 'file' } },
   },
 ];
 

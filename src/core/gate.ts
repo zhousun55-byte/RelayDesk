@@ -31,9 +31,12 @@ export function runGate(worktree: string, cfg: RelayConfig, timeoutMs = 10 * 60_
   return new Promise((resolve) => {
     const child = spawn('sh', ['-c', cmd], { cwd: worktree, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let out = '';
-    const keep = (c: Buffer) => {
-      out = (out + c.toString('utf8')).slice(-8000);
+    const keep = (c: string) => {
+      out = (out + c).slice(-8000);
     };
+    // 按字符读：汉字被切在两次读取之间也不会变成乱码。
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', keep);
     child.stderr?.on('data', keep);
     let timedOut = false;

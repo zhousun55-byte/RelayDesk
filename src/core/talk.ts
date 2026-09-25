@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RelayError, errorMessage } from './errors';
 import { loadDetected, memberModel, refreshHarnessModel } from './detect';
+import { agentEnv } from './env';
 import { cliTooOld, findHarness, locateCached, modelArg, noteModelNeeds } from './harness';
 import { fillTemplate } from './launch';
 import { chat } from './llm';
@@ -200,15 +201,18 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
   const outFile = tpl.includes(OUT_PLACEHOLDER) ? path.join(os.tmpdir(), `relay-talk-${process.pid}-${Date.now()}.txt`) : null;
   const cmd = fillTemplate(tpl, outFile ? { out: outFile } : {});
   return new Promise((resolve, reject) => {
-    const child = spawn('sh', ['-c', cmd], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true, env: { ...process.env, NO_COLOR: '1' } });
+    // 和编程工具一样用 agentEnv：接力台是从某个 AI 工具里启动的时候，它注入的会话变量（CLAUDE_*、ANTHROPIC_*）不传过去。
+    const child = spawn('sh', ['-c', cmd], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true, env: agentEnv({ NO_COLOR: '1' }) });
     let out = '';
     let err = '';
-    child.stdout?.on('data', (c: Buffer) => {
-      out += c.toString('utf8');
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (c: string) => {
+      out += c;
       if (out.length > 200_000) out = out.slice(-200_000);
     });
-    child.stderr?.on('data', (c: Buffer) => {
-      err = (err + c.toString('utf8')).slice(-4000);
+    child.stderr?.on('data', (c: string) => {
+      err = (err + c).slice(-4000);
     });
     child.stdin?.on('error', () => {
       /* 有的命令不读标准输入 */

@@ -64,13 +64,14 @@ export function projectPath(root: string, rel: string): { clean: string; real: s
   if (!clean || clean === '.' || path.isAbsolute(clean) || clean.startsWith('..')) throw new RelayError('路径不对。', 'bad-path');
   let real: string;
   try {
-    real = fs.realpathSync(path.join(root, clean));
+    // native：macOS 上顺便把大小写换成磁盘上的写法（.GIT 就是 .git），下面按真实写法拦。
+    real = fs.realpathSync.native(path.join(root, clean));
   } catch {
     throw new RelayError(`找不到：${clean}`, 'no-file');
   }
-  const realRoot = fs.realpathSync(root);
+  const realRoot = fs.realpathSync.native(root);
   const inner = path.relative(realRoot, real).split(path.sep).join('/');
-  if (!isInside(realRoot, real) || /^(\.git|\.relay\/snapshots)(\/|$)/.test(inner)) throw new RelayError('不能看这个文件。', 'bad-path');
+  if (!isInside(realRoot, real) || /^(\.git|\.relay\/snapshots)(\/|$)/i.test(inner)) throw new RelayError('不能看这个文件。', 'bad-path');
   return { clean: clean.split(path.sep).join('/'), real };
 }
 

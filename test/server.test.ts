@@ -74,6 +74,11 @@ test('网页接口：接入 → 写任务 → 派人接着做一棒 → 看交�
     assert.equal(mark.status, 200);
     st = await ui.call(`/api/state${q(s)}`);
     assert.equal(st.json.project.pending.length, 0, '你说不用复核就不用');
+    const unmark = await ui.call('/api/mark', { dir: s.repo, stint: 1, review: 'needed' });
+    assert.equal(unmark.status, 200);
+    st = await ui.call(`/api/state${q(s)}`);
+    assert.equal(st.json.project.pending.length, 1, '跳过复核可以撤销');
+    await ui.call('/api/mark', { dir: s.repo, stint: 1 });
 
     const rb = await ui.call('/api/rollback', { dir: s.repo, stint: 1 });
     assert.equal(rb.status, 200, JSON.stringify(rb.json));
@@ -215,6 +220,21 @@ test('网页接口的安全检查：只认本机地址和本端口，POST 必须
       req.end();
     });
     assert.equal(badHost, 403);
+    // 别的网站里的一张图片：不带 Origin，浏览器标明是从别的网站来的（Sec-Fetch-Site: cross-site）
+    const fromOtherSite = await new Promise<number>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: ui.port, path: `/api/diff${q(s)}`, headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'image' } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(fromOtherSite, 403);
+    // 看改动要先存快照：没接入的文件夹不给建快照仓库
+    const diff = await ui.call(`/api/diff${q(s)}`);
+    assert.equal(diff.status, 400);
+    assert.equal(diff.json.code, 'not-init');
+    assert.ok(!s.exists('.relay'), '没给没接入的文件夹建快照仓库');
     assert.equal((await ui.call('/api/init', { dir: s.repo }, { Origin: 'http://evil.example.com' })).status, 403);
     assert.equal((await ui.call('/api/quit', {}, { Origin: 'http://evil.example.com' })).status, 403, '别的网站关不掉接力台');
     assert.ok(!s.exists('.relay'), '别的网站接入不了');

@@ -4,7 +4,8 @@ import { Command } from 'commander';
 import fs from 'node:fs';
 import { augmentPath } from '../core/launch';
 import { lastProject, rememberProject } from '../core/memory';
-import { stopAllGo } from '../ops/go';
+import { reapLeftover, stopAllGo } from '../ops/go';
+import { liveProjects } from '../ops/init';
 import { unwatchAll } from '../ops/watch';
 import { createServer, listen } from '../server/server';
 import { ok, warn } from './print';
@@ -41,12 +42,17 @@ export function uiCommand(): Command {
       const wanted = Number(opts.port) || 7388;
 
       for (let port = wanted; port < wanted + 10; port++) {
+        let stopping = false;
         const stop = () => {
-          stopAllGo();
-          unwatchAll();
-          server.close();
-          // 给正在干活的工具一点时间收尾（runner 会先发 SIGTERM）。
-          setTimeout(() => process.exit(0), 300);
+          if (stopping) return;
+          stopping = true;
+          // 先叫停调度，等正在干活的工具真正结束、这一棒记好账再退（最多等 10 秒：先发 SIGTERM，5 秒后没停就强制结束）。
+          // 不等就退的话，工具会在接力台退出之后接着改文件，没人记账。
+          void stopAllGo(10_000).finally(() => {
+            unwatchAll();
+            server.close();
+            process.exit(0);
+          });
         };
         const server = createServer({ defaultDir: dir, autoDetect: true, watch: true, onQuit: stop });
         try {
@@ -55,8 +61,15 @@ export function uiCommand(): Command {
           ok(`接力台已启动：${url}`);
           console.log('  关掉这个窗口（或按 Ctrl-C），或在网页「设置」里点「关闭接力台」，接力台就停了。');
           if (opts.open !== false) openBrowser(url);
+          // 上次接力台被关掉时还在跑的工具：结束掉（不然它会接着改文件，没人记账）。
+          for (const r of liveProjects()) {
+            if (reapLeftover(r)) warn(`上次接力台关掉时还在跑的工具已经结束：${r}`);
+          }
           process.on('SIGINT', stop);
           process.on('SIGTERM', stop);
+          // 关掉终端窗口时收到的是 SIGHUP：一样先收尾再退。终端没了，往里打字会出错，出错就不管。
+          process.on('SIGHUP', stop);
+          for (const s of [process.stdout, process.stderr]) s.on('error', () => undefined);
           return;
         } catch (e) {
           const code = (e as NodeJS.ErrnoException).code;

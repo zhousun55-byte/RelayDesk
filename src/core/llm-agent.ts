@@ -255,9 +255,11 @@ function shell(root: string, cmd: string, timeoutMs: number, shouldStop: () => b
   return new Promise((resolve) => {
     const child = spawn('sh', ['-c', cmd], { cwd: root, env: agentEnv(), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
-    const keep = (c: Buffer) => {
-      out = (out + c.toString('utf8')).slice(-12_000);
+    const keep = (c: string) => {
+      out = (out + c).slice(-12_000);
     };
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', keep);
     child.stderr?.on('data', keep);
     const kill = () => {

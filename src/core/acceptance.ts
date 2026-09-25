@@ -55,8 +55,11 @@ export function pendingWhy(s: Stint, rolledBack: ReadonlySet<number> = new Set()
   if (s.factsError) return '读不到改动，要复核';
   const last = countedReviews(s, rolledBack).at(-1);
   if (last) return `复核结论是「${verdictWord(last.verdict)}」（${last.byLabel}）`;
-  if ((s.reviews ?? []).some((m) => m.weak)) return '只有弱模型复核过，不算数';
-  if ((s.reviews ?? []).some((m) => m.by && rolledBack.has(m.by))) return '复核它的那一棒被退回了，要重新复核';
+  const marks = s.reviews ?? [];
+  if (marks.some((m) => m.weak && !m.anon)) return '只有弱模型复核过，不算数';
+  if (marks.some((m) => m.anon)) return '复核是在没有哪一棒进行中的时候写的，认不出是谁写的，不算数';
+  if (marks.some((m) => m.by && rolledBack.has(m.by))) return '复核它的那一棒被退回了，要重新复核';
+  if (!s.facts?.files && s.ticked?.length) return `没改文件，只在清单里打了勾（${s.ticked.slice(0, 3).join('、')}${s.ticked.length > 3 ? '……' : ''}），要确认真做完了`;
   return '';
 }
 
@@ -76,6 +79,11 @@ export function acceptance(input: AcceptInput): Acceptance {
 
   // 证据
   if (input.configError) items.push({ kind: 'config', text: `配置文件坏了：${input.configError}` });
+  // 账本坏了几行：坏的可能正好是一次退回、一份复核，跳过它们算出来的结论不可信。
+  if (v.bad?.length) {
+    const lines = v.bad.map((b) => b.line);
+    items.push({ kind: 'evidence', text: `账本 .relay/journal.jsonl 第 ${lines.slice(0, 5).join('、')}${lines.length > 5 ? ' 等' : ''} 行读不出来` });
+  }
   // 强模型的棒不用复核，但读不到它改了什么（改没改不许改的文件都不知道）：没法判断。弱模型的这种棒已经算待复核了，下面会列。
   for (const s of closed.filter((x) => x.kind === 'work' && x.factsError && x.review === 'skip')) items.push({ kind: 'evidence', text: `第 ${s.id} 棒读不到改动`, stint: s.id });
 

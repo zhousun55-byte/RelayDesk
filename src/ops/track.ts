@@ -6,7 +6,7 @@ import { claudeWorkIn, claudeWriterOf } from '../core/claude-log';
 import { defaultRelayConfig, loadRelayConfig } from '../core/config';
 import { errorMessage, RelayError } from '../core/errors';
 import { runGate } from '../core/gate';
-import { appendLedger, countedReviews, loadLedger, nextStintId, reviewStateOf, saveStint, type Facts, type LedgerView, type ReviewMark, type Stint, type Who } from '../core/ledger';
+import { appendLedger, countedReviews, loadLedger, nextStintId, reviewStateOf, saveStint, taskBaseline, type Facts, type LedgerView, type ReviewMark, type Stint, type Who } from '../core/ledger';
 import { pidAlive } from '../core/proc';
 import { allMembers, type MemberInfo } from '../core/members';
 import {
@@ -16,16 +16,19 @@ import {
   handoffFilled,
   listHandoffFiles,
   listReviewFiles,
+  newlyChecked,
   readHandoff,
   readReview,
   readTask,
+  readTaskCopy,
   reviewDiffFileFor,
   reviewFilled,
   saveTaskCopy,
   type HandoffDoc,
+  type ReviewDoc,
 } from '../core/notes';
 import { matchProtected } from '../core/protected';
-import { changeLine, headSnap, snapChanges, snapDiff, takeSnapshot } from '../core/snap';
+import { changeLine, generatedPath, headSnap, snapChanges, snapDiff, takeSnapshot } from '../core/snap';
 import { stampLocal } from '../core/time';
 import { needsReview, resolveWho, sameModel, UNKNOWN_WHO } from '../core/tier';
 import type { RelayConfig } from '../core/types';
@@ -244,6 +247,8 @@ export interface CloseInput {
   now?: Date;
   /** 成员名单（核对身份用；不给就现读）。 */
   members?: MemberInfo[];
+  /** 不看这一棒打了哪些勾（好几棒的改动混在一起、记在最后一棒里时，前面几棒用）。 */
+  noTicks?: boolean;
 }
 
 /**
@@ -290,24 +295,38 @@ export function closeStint(root: string, s: Stint, input: CloseInput, cfg?: Rela
     out.ghost = true;
     out.summary = !out.facts ? '没留交接，改动也读不到' : out.facts.files ? `没留交接：${out.facts.files} 个文件，+${out.facts.added} −${out.facts.removed}` : '没留交接，也没改文件';
   }
-  if (out.kind !== 'work') out.review = 'skip';
-  else if (out.facts && out.facts.files === 0) out.review = 'skip';
-  else out.review = forceReview || needsReview(out.who, real) ? 'needed' : 'skip';
-  if (out.review === 'needed') writeReviewDiff(root, out);
   const task = saveTaskCopy(root);
   if (task) out.taskAfter = task;
+  // 任务清单不进快照：只在清单里打勾、一个文件都没改的弱模型，看起来是「没改文件」，其实是在说「这几步做完了」——也要复核。
+  const ticked = out.kind === 'work' && !input.noTicks ? newlyChecked(readTaskCopy(root, out.taskBefore), readTaskCopy(root, out.taskAfter)) : [];
+  if (ticked.length) out.ticked = ticked;
+  else delete out.ticked;
+  if (out.kind !== 'work') out.review = 'skip';
+  else if (out.facts && out.facts.files === 0 && !ticked.length) out.review = 'skip';
+  else out.review = forceReview || needsReview(out.who, real) ? 'needed' : 'skip';
+  if (out.review === 'needed') writeReviewDiff(root, out);
   saveStint(root, out);
   return out;
+}
+
+export interface GateOptions {
+  /**
+   * 检查命令自己在项目里写了文件（pytest 的 .pytest_cache、覆盖率报告……）怎么记。不记的话，下一次对账会把它们当成
+   * 「有人在改文件」，开出一棒「不知道是谁」——全自动会以为有别的 AI 在干活而停下。
+   * - all：都算接力台自己的改动，从检查跑完那张快照重新算（调度时用：调度拿着锁，这段时间只有检查命令在改）；
+   * - generated：只有改的全是缓存、报告这类生成出来的文件才这样记（盯文件夹时用：这时可能已经有别的 AI 开工了）。
+   */
+  absorb?: 'all' | 'generated';
 }
 
 /**
  * 跑检查命令，把结果记到这一棒上（没配检查命令就什么都不做）。
  * 配置文件坏了、检查根本跑不起来：记成「没跑成」，不能当成没配检查。
  */
-export async function gateStint(root: string, id: number, cfg?: RelayConfig): Promise<void> {
-  const record = (gate: Stint['gate']) => {
+export async function gateStint(root: string, id: number, cfg?: RelayConfig, opts: GateOptions = {}): Promise<void> {
+  const record = (gate: Stint['gate'], note?: string) => {
     const s = loadLedger(root).stints.find((x) => x.id === id);
-    if (s) saveStint(root, { ...s, gate });
+    if (s) saveStint(root, { ...s, ...(gate ? { gate } : {}), ...(note ? { note: joinNote(s.note, note) } : {}) });
   };
   let conf: RelayConfig;
   try {
@@ -317,19 +336,66 @@ export async function gateStint(root: string, id: number, cfg?: RelayConfig): Pr
     return;
   }
   if (!conf.gate.command.trim()) return;
+  const before = opts.absorb ? takeSnapshot(root, '跑检查之前').sha : null;
   try {
     const r = await runGate(root, conf);
     record({ status: r.status, command: r.command, ...(r.status === 'fail' ? { detail: r.detail.slice(-1500) } : {}) });
   } catch (e) {
     record({ status: 'error', command: conf.gate.command, detail: `检查没跑起来：${errorMessage(e)}` });
   }
+  if (before && opts.absorb) {
+    const note = absorbGateWrites(root, before, opts.absorb);
+    if (note) record(undefined, note);
+  }
 }
 
 /**
- * 看复核文件：写好了的，记到它复核的那几棒上。by = 做复核的那一棒。
- * 算不算「复核过了」看结论：强模型写的没问题 / 已修好 / 已退回才算；有问题、证据不足、没写清楚都还是待复核。
+ * 检查命令跑完、它自己改了项目里的文件：从跑完的那张快照重新算，记一笔「检查命令写的」，不算到哪一棒头上。
+ * 只在跑检查之前和账上的起点一样、现在也没人在做的时候这样记（不然会把别人的改动一起吞掉）。返回给那一棒的说明。
  */
-export function applyReviews(root: string, by: Stint | null, members: MemberInfo[] = allMembers()): number[] {
+function absorbGateWrites(root: string, before: string, mode: 'all' | 'generated'): string | undefined {
+  const v = loadLedger(root);
+  if (v.open || v.base !== before) return undefined;
+  const after = takeSnapshot(root, '检查命令跑完').sha;
+  if (after === before) return undefined;
+  let paths: string[];
+  try {
+    paths = snapChanges(root, before, after).map((f) => f.path);
+  } catch {
+    return undefined;
+  }
+  if (!paths.length || (mode === 'generated' && !paths.every(generatedPath))) return undefined;
+  const list = `${paths.slice(0, 8).join('、')}${paths.length > 8 ? ` 等 ${paths.length} 个` : ''}`;
+  appendLedger(root, { type: 'base', ts: nowIso(), snap: after, why: `检查命令写的文件：${list}` });
+  return `检查命令跑完改了 ${paths.length} 个文件（${list}），算接力台自己的改动，不算到哪一棒头上。`;
+}
+
+/**
+ * 复核文件改动的时间和一棒的时间对得上的余量：开工前留 30 秒（先写复核、紧跟着才建交接，同一次对账里也算这一棒的）。
+ * 收工后不留：接力台调度的棒在工具退出之后才记收工，自己在工具里做的棒在对账那一刻记收工，它写的复核都在这之前；
+ * 收工以后才改的，可能是别人改的，不能算到这一棒头上。
+ */
+const REVIEW_BEFORE_MS = 30_000;
+
+/**
+ * 复核文件是哪一棒写的：改动时间落在哪一棒从开工到收工的时间里。by（正在做的、刚做完的那一棒）对得上就是它；
+ * 落不进任何一棒——没有哪一棒在做的时候改的——就认不出来。不能随手记到最后一棒头上：那一棒早收工了，
+ * 后来改这份文件的可能是弱模型、可能是你，记成它的，弱模型写的「没问题」就被当成强模型复核过了。
+ */
+function writerOf(v: LedgerView, by: Stint | null, mtimeMs: number, now: number): Stint | null {
+  const end = (s: Stint) => (s.status === 'working' || !s.endedAt ? now : Date.parse(s.endedAt));
+  // 修改时间比毫秒精细：取整到毫秒再比（收工时间是在写完之后才记的，取整后不会比它晚）。
+  const within = (s: Stint) => mtimeMs >= Date.parse(s.startedAt) - REVIEW_BEFORE_MS && Math.floor(mtimeMs) <= end(s);
+  if (by && within(by)) return by;
+  return [...v.stints].reverse().find(within) ?? null;
+}
+
+/**
+ * 看复核文件：写好了的，记到它复核的那几棒上。by = 正在做（或刚做完）的那一棒。
+ * 算不算「复核过了」看结论：强模型写的没问题 / 已修好 / 已退回才算；有问题、证据不足、没写清楚都还是待复核。
+ * 认不出是谁写的、弱模型写的都不算数；弱模型、认不出的人后来改了强模型写的复核，原来强模型的结论还在。
+ */
+export function applyReviews(root: string, by: Stint | null, members: MemberInfo[] = allMembers(), now = new Date()): number[] {
   const v = loadLedger(root);
   const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
   const marked: number[] = [];
@@ -340,24 +406,27 @@ export function applyReviews(root: string, by: Stint | null, members: MemberInfo
       const s = v.stints.find((x) => x.id === id);
       // 只有干活的棒要复核。复核、终审的棒不算（终审的结论里常写「复核：第 5 棒终审」，5 是它自己）。
       if (!s || s.status === 'working' || s.kind !== 'work') continue;
-      const prev = (s.reviews ?? []).find((m) => m.file === r.file);
+      const prev = [...(s.reviews ?? [])].reverse().find((m) => m.file === r.file);
       const fresh = !prev || prev.verdict !== r.verdict || r.mtimeMs > Date.parse(prev.at);
-      if (!fresh && prev?.byLog) continue;
-      // 复核文件改过了就是新写的：看现在是谁在做；没改过就还是原来那一棒。
-      const reviewer = (!fresh && prev ? v.stints.find((x) => x.id === prev.by) : null) ?? by ?? v.stints.at(-1) ?? null;
-      const judged = judgeReviewer(root, r.file, r.mtimeMs, r.by, reviewer, s, members, fresh);
+      if (!fresh && (prev?.byLog || prev?.anon)) continue;
+      // 复核文件改过了就是新写的：按改动时间找是哪一棒写的。没改过就还是原来那一棒——它的身份后来可能认得更清楚了（交接写好了、对过了记录），再判一次。
+      const reviewer = fresh ? writerOf(v, by, r.mtimeMs, now.getTime()) : (v.stints.find((x) => x.id === prev!.by) ?? null);
+      if (!fresh && !reviewer) continue;
+      const judged = judgeReviewer(root, r, reviewer, s, members, fresh);
       if (!fresh && prev && !!prev.weak === judged.weak) continue;
       const mark: ReviewMark = {
         by: reviewer?.id ?? 0,
         // 显示认出来的身份（强弱也是按它定的），不用复核文件里自己写的「复核人」：两个 Claude Code 自称时常常分不出来。
-        byLabel: judged.label || r.by || '不知道是谁',
+        byLabel: judged.label,
         file: r.file,
         verdict: r.verdict,
-        at: nowIso(),
+        at: nowIso(now),
         ...(judged.weak ? { weak: true } : {}),
+        ...(judged.anon ? { anon: true } : {}),
         ...(judged.byLog ? { byLog: true } : {}),
       };
-      const reviews = [...(s.reviews ?? []).filter((m) => m.file !== r.file), mark];
+      // 同一份复核文件：算数的复核只被算数的复核替换（不算数的那一份记在后面，原来强模型写的结论还算）。
+      const reviews = [...(s.reviews ?? []).filter((m) => m.file !== r.file || (mark.weak && !m.weak)), mark];
       // 原来不用复核（强模型做的）又没有算数的复核：还是不用；有算数的复核就按结论算。
       const review = s.review === 'skip' && !countedReviews({ reviews }, dropped).length ? 'skip' : reviewStateOf({ ...s, review: 'needed', reviews }, dropped);
       saveStint(root, { ...s, review, reviews });
@@ -369,19 +438,25 @@ export function applyReviews(root: string, by: Stint | null, members: MemberInfo
 
 /**
  * 这份复核算不算数：写它的得是强模型，而且不能是它自己复核自己。
- * 复核文件是 Claude Code 写的：以记录里的模型为准；否则看做复核的那一棒是谁，再不行看复核里写的「复核人」。
+ * 复核文件是 Claude Code 写的：以记录里的模型为准；否则看写它的那一棒是谁（还没认出是谁的不算）。
+ * 复核文件里自己写的「复核人」只用来往下核：写的是弱模型，就不算数。
  */
-function judgeReviewer(root: string, file: string, mtimeMs: number, claimed: string, reviewer: Stint | null, target: Stint, members: MemberInfo[], look: boolean): { weak: boolean; label: string; byLog: boolean } {
+function judgeReviewer(root: string, r: ReviewDoc, reviewer: Stint | null, target: Stint, members: MemberInfo[], look: boolean): { weak: boolean; anon?: boolean; label: string; byLog: boolean } {
+  const claim = r.by ? `（复核文件里写的复核人是「${r.by.slice(0, 60)}」）` : '';
   if (look) {
-    const w = claudeWriterOf(path.join(root, file), new Date(mtimeMs - 10 * 60_000).toISOString(), new Date(mtimeMs).toISOString());
+    const w = claudeWriterOf(path.join(root, r.file), new Date(r.mtimeMs - 10 * 60_000).toISOString(), new Date(r.mtimeMs).toISOString());
     if (w) {
       const who = resolveWho({ tool: 'Claude Code', model: w.model }, members);
       return { weak: who.tier !== 'strong', label: who.label, byLog: true };
     }
   }
-  if (reviewer && reviewer.id === target.id) return { weak: true, label: reviewer.who.label, byLog: false };
-  const who = reviewer && reviewer.who.tier !== 'unknown' ? reviewer.who : resolveWho({ who: claimed }, members);
-  return { weak: who.tier !== 'strong', label: who.label, byLog: false };
+  if (!reviewer) return { weak: true, anon: true, label: `认不出是谁${claim}`, byLog: false };
+  if (reviewer.id === target.id) return { weak: true, label: reviewer.who.label, byLog: false };
+  const who = reviewer.who;
+  if (who.tier === 'unknown') return { weak: true, label: `${who.label}${claim}`, byLog: false };
+  if (who.tier !== 'strong') return { weak: true, label: who.label, byLog: false };
+  if (r.by && resolveWho({ who: r.by }, members).tier === 'weak') return { weak: true, label: `${who.label}${claim}`, byLog: false };
+  return { weak: false, label: who.label, byLog: false };
 }
 
 // ---- 接力本 ----
@@ -566,9 +641,9 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
   // 没有进行中的棒：有新改动、或者有新交接，就开一棒。
   if (!open) {
     const base = v.base ?? snap;
-    // 这一棒开始前的任务清单：上一棒结束时存的那份（没有就现存一份）。退回时按它恢复打勾。
-    const lastAfter = [...v.stints].reverse().find((x) => !x.rolledBack && x.taskAfter)?.taskAfter;
-    const taskBefore = lastAfter ?? saveTaskCopy(root);
+    // 这一棒开始前的任务清单：最近一次记下的（上一棒结束时、换任务时、退回后、接入时），都没有才现存一份。
+    // 退回时按它恢复打勾；收工时和它比，看这一棒新打了哪些勾。
+    const taskBefore = taskBaseline(v) ?? saveTaskCopy(root);
     if (unlinked.length > 1) {
       // 接力台没开着的时候，好几个 AI 先后写了交接：改动分不清是谁的，都记在最后一棒里，按其中最弱的算。
       const docs = unlinked.map((f) => readHandoff(root, f.rel));
@@ -583,7 +658,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
           kind: 'work',
           who: last ? { ...whos[i], tier: weakest } : whos[i],
           via: 'native',
-          startedAt: nowIso(h?.mtimeMs ? new Date(Math.min(h.mtimeMs, now.getTime())) : now),
+          startedAt: nowIso(h ? new Date(Math.min(h.bornMs ?? h.mtimeMs, now.getTime())) : now),
           activeAt: nowIso(now),
           from: base,
           to: last ? snap : base,
@@ -598,7 +673,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
         };
         saveStint(root, s);
         res.opened.push(s.id);
-        closeStint(root, s, { status: h && h.state !== 'working' ? 'handed' : last ? 'unfinished' : 'handed', to: s.to!, handoff: h, now, members });
+        closeStint(root, s, { status: h && h.state !== 'working' ? 'handed' : last ? 'unfinished' : 'handed', to: s.to!, handoff: h, now, members, noTicks: !last });
         res.closed.push(s.id);
       });
       unlinked.length = 0;
@@ -611,7 +686,8 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
         kind: 'work',
         who: whoFromHandoff(h, members),
         via: 'native',
-        startedAt: nowIso(h?.mtimeMs ? new Date(Math.min(h.mtimeMs, now.getTime())) : now),
+        // 开工时间：它建交接文件的时候（接力台没开着时也对得上），没有交接就是现在。
+        startedAt: nowIso(h ? new Date(Math.min(h.bornMs ?? h.mtimeMs, now.getTime())) : now),
         activeAt: nowIso(now),
         from: base,
         to: snap,
@@ -637,7 +713,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
   }
 
   const reviewer = loadLedger(root).open;
-  const marked = applyReviews(root, reviewer, members);
+  const marked = applyReviews(root, reviewer, members, now);
   if (marked.length) {
     res.reviewed.push(...marked);
     res.changed = true;
@@ -651,7 +727,7 @@ export async function trackAndGate(root: string, opts: TrackOptions = {}): Promi
   const r = track(root, opts);
   for (const id of r.closed) {
     try {
-      await gateStint(root, id);
+      await gateStint(root, id, undefined, { absorb: 'generated' });
     } catch {
       /* 检查跑不了不影响记账 */
     }

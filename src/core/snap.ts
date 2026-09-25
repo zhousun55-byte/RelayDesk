@@ -30,7 +30,28 @@ const DEFAULT_EXCLUDES = [
   'DerivedData/',
   '.gradle/',
   '*.pyc',
+  // 测试、检查工具自己写的缓存和报告（检查命令一跑就变，不是谁写的代码）。
+  '.pytest_cache/',
+  '.mypy_cache/',
+  '.ruff_cache/',
+  '.hypothesis/',
+  '.tox/',
+  '.nox/',
+  '.nyc_output/',
+  'htmlcov/',
+  '.coverage',
+  '.eslintcache',
+  '*.tsbuildinfo',
 ];
+
+/** 生成出来的目录和文件（缓存、报告、依赖）：检查命令改了这些，不算谁写了代码。 */
+const GENERATED_DIRS = new Set(['.pytest_cache', '.mypy_cache', '.ruff_cache', '.hypothesis', '.tox', '.nox', '.nyc_output', 'htmlcov', 'coverage', '__pycache__', 'node_modules', '.cache', '.next', '.nuxt', '.turbo', '.parcel-cache', '.gradle', '.venv', 'venv', 'DerivedData', 'Pods', '.dart_tool', '.svelte-kit', '.angular', '.vite']);
+const GENERATED_FILE = /(?:^|\/)(?:\.coverage(?:\.[^/]+)?|\.eslintcache|\.stylelintcache|coverage\.xml|junit\.xml|test-results\.xml|[^/]+\.tsbuildinfo|[^/]+\.pyc|\.DS_Store)$/;
+
+export function generatedPath(p: string): boolean {
+  const parts = p.split('/');
+  return parts.slice(0, -1).some((d) => GENERATED_DIRS.has(d)) || GENERATED_FILE.test(p);
+}
 
 const BIG_MARK = '# 接力台：太大的文件，不进快照';
 /** 超过这个大小的新文件不进快照（多半是数据、安装包、视频）。 */

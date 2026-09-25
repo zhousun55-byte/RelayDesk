@@ -1,10 +1,12 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadDetected, memberModel } from './detect';
 import { errorMessage, RelayError } from './errors';
 import { TASK_REL } from './notes';
 import { redactSecrets } from './redact';
 import { findAgent } from './registry';
+import { memberTier } from './tier';
 import { appendTalkRaw, askAgent, checkSpeakers, inParallel, speakerName, talkPath, type TalkContext } from './talk';
 import { stampLocal } from './time';
 
@@ -82,6 +84,15 @@ export function findVote(root: string, id: string): Vote | null {
 function save(root: string, v: Vote): Vote {
   appendTalkRaw(root, { ...v, ts: new Date().toISOString() });
   return v;
+}
+
+/**
+ * AI 投票的时候你也可以投：存之前先把记录里你最新的那一票并进来。
+ * 不然后面每个 AI 投完都拿自己手里那份（没有你那一票的）去存，你的票就被盖掉了。
+ */
+function withHumanBallot(root: string, v: Vote): void {
+  const human = findVote(root, v.id)?.ballots.filter((b) => b.voter === 'human') ?? [];
+  v.ballots = [...v.ballots.filter((b) => b.voter !== 'human'), ...human];
 }
 
 const KEYS = 'ABCDEFGHIJKL';
@@ -232,7 +243,8 @@ async function runVote(root: string, v: Vote, context: () => TalkContext): Promi
       const a = findAgent(name);
       if (!a) return;
       const mine = v.options.find((o) => o.author === name)?.key ?? null;
-      const tier = a.tier;
+      // 显示用的强弱按它实际用的模型算（接了 DeepSeek 的 Claude Code 是弱），和名单、接力台其他地方一致。
+      const tier = memberTier(a, memberModel(a, loadDetected()));
       try {
         const text = await askAgent(a, ballotPrompt({ speaker: speaker(name), question: v.question, options: v.options, own: mine, context: ctx }), root);
         const b = parseBallot(text, keys);
@@ -241,8 +253,10 @@ async function runVote(root: string, v: Vote, context: () => TalkContext): Promi
       } catch (e) {
         v.ballots.push({ voter: name, voterLabel: speaker(name), choice: null, reason: '', tier, void: `出错：${errorMessage(e)}` });
       }
+      withHumanBallot(root, v);
       save(root, { ...v, ...tally(v.options, v.ballots) });
     });
+    withHumanBallot(root, v);
     v.status = 'done';
     Object.assign(v, tally(v.options, v.ballots));
     return save(root, v);

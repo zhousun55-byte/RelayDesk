@@ -50,7 +50,7 @@ function when(ts: string | undefined): string {
 function factsLine(s: Stint): string {
   const f = s.facts;
   const parts = [f ? (f.files ? `改了 ${f.files} 个文件，+${f.added} −${f.removed}` : '没有改文件') : ''];
-  if (s.gate) parts.push(s.gate.status === 'pass' ? '检查通过' : '检查没通过');
+  if (s.gate) parts.push(s.gate.status === 'pass' ? '检查通过' : s.gate.status === 'error' ? '检查没跑成' : '检查没通过');
   if (s.protectedHits?.length) parts.push(`⚠ 改到了不许改的文件：${s.protectedHits.join('、')}`);
   return parts.filter(Boolean).join(' · ');
 }
@@ -75,7 +75,16 @@ function reviewBlock(s: Stint, h: HandoffDoc | undefined, gate: string, dropped:
       `- 某个文件在它改之前的样子：\`${snapGit()} show ${short(s.from)}:文件路径\``
     );
   }
-  for (const m of (s.reviews ?? []).filter((x) => x.weak)) out.push(`- ${m.byLabel} 复核过（\`${m.file}\`），但它是弱模型、或者是自己复核自己，不算数；可以参考，要你再核一遍。`);
+  for (const m of (s.reviews ?? []).filter((x) => x.weak)) {
+    out.push(
+      m.anon
+        ? `- \`${m.file}\` 是在没有哪一棒在做的时候写的，认不出是谁写的，不算数；可以参考，要你再核一遍。`
+        : `- ${m.byLabel} 复核过（\`${m.file}\`），但它是弱模型、或者是自己复核自己，不算数；可以参考，要你再核一遍。`
+    );
+  }
+  if (s.ticked?.length && !s.facts?.files) {
+    out.push(`- 它没改文件，只在任务清单里打了勾：${s.ticked.slice(0, 8).join('、')}。确认这几步真的做完了（看代码、实际运行）；没做完就把勾去掉，结论写「有问题，还没修」或「证据不足」。`);
+  }
   const last = countedReviews(s, dropped).at(-1);
   if (last) out.push(`- 上一次复核（${last.byLabel}）的结论是「${verdictWord(last.verdict)}」，见 \`${last.file}\`：这次要把里面的问题修好（或者补上验证），再重写结论。`);
   if (s.factsError) out.push(`- 接力台读不到这一棒的改动（${s.factsError}）：自己用上面的 diff 命令看，看不了就在结论里写「证据不足」。`);
@@ -211,7 +220,7 @@ export function buildBrief(input: BriefInput): string {
     '',
     `- 强：${strong.map(name).join('、') || '（还没有）'}`,
     `- 弱：${weak.map(name).join('、') || '（还没有）'}`,
-    '- 看的是模型，不是工具（Claude Code 接的是 DeepSeek，就算弱）。名单里没有你：Claude Opus / Sonnet、GPT-5 及以上、Gemini Pro 算强，其他算弱。',
+    '- 看的是模型，不是工具（Claude Code 接的是 DeepSeek，就算弱）。名单里没有你：Claude（Opus、Sonnet、Fable）、GPT-5 及以上、o3 / o4、Gemini Pro 或 3 及以上、Grok 4 及以上算强，其他算弱；看不出是什么模型的按弱算。',
     ''
   );
 

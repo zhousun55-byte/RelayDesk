@@ -73,12 +73,12 @@ export function agentKind(a: Pick<AgentConfig, 'kind'>): AgentKind {
   return a.kind ?? 'cli';
 }
 
-/** 显示名：自己填的 > 常见工具名 > 名字本身。只给名字时会去工人名单里查。 */
 /** 工人在用的模型：接口工人以接口里填的为准。 */
 export function agentModel(a: Pick<AgentConfig, 'kind' | 'model' | 'api'>): string | undefined {
   return ((a.kind === 'api' ? a.api?.model : a.model) ?? '').trim() || undefined;
 }
 
+/** 显示名：自己填的 > 常见工具名 > 名字本身。只给名字时会去工人名单里查。 */
 export function agentLabel(a: Pick<AgentConfig, 'name' | 'label'> | string | undefined | null): string {
   if (!a) return '未登记';
   if (typeof a === 'string') {
@@ -126,7 +126,8 @@ export function normalizeAgent(input: unknown): AgentConfig {
   }
   const kind = (o.kind ?? 'cli') as AgentKind;
   if (!KINDS.includes(kind)) throw new RelayError(`类型只能是 终端(cli) / 桌面(app) / 接口(api)。`, 'bad-agent');
-  const tier = (o.tier ?? 'strong') as Tier;
+  // 没说强弱的按弱（认不出来按弱处理：它做的活要复核）。
+  const tier = (o.tier ?? 'weak') as Tier;
   if (!TIERS.includes(tier)) throw new RelayError('能力只能是 strong（强）或 weak（弱）。', 'bad-agent');
 
   const agent: AgentConfig = { name, kind, tier };

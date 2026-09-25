@@ -357,6 +357,7 @@ test('网页切换项目：A 的请求晚回来也不会显示在 B 里（状态
   const out: string[] = [];
   const script = `
 let treeKey = '', stintsKey = '', streamThread = null, docSig = '', barSig = '', heroSig = '', tabsSig = '';
+const detailLoading = new Set();
 const S = { dir: 'A', st: null, gen: 0, seq: {}, talk: { rows: [], votes: [], status: { speaking: [], queue: [] } }, tree: null, treeRev: 0, thread: null, draft: false, fold: false, open: new Set(), detail: new Map(), tabs: [], tab: 0, docs: new Map(), ask: null, files: [], treeOpen: new Set(), treeFilter: '', onlyChanged: false, treeSel: '', offline: false };
 const node = () => ({ replaceChildren() {}, querySelector: () => null, hidden: true });
 const CE = { offline: node(), stream: node(), bar: node(), hero: node() };

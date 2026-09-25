@@ -37,13 +37,14 @@ export interface TaskDoc {
 
 export const TASK_PLACEHOLDER = '（还没有任务。在接力台里写一句要做什么，或者直接告诉 AI，它会写在这里。）';
 
-export function taskTemplate(title?: string, items: string[] = []): string {
+export function taskTemplate(title?: string, items: string[] = [], body = ''): string {
   const t = title?.trim() || TASK_PLACEHOLDER;
   return [
     '# 任务',
     '',
     t,
     '',
+    ...(body.trim() ? [body.trim(), ''] : []),
     '## 进度',
     '',
     ...(items.length ? items.map((x) => `- [ ] ${x}`) : ['- [ ] （把任务拆成几步写在这里，做完一步打一个勾）']),
@@ -121,12 +122,17 @@ export function setTask(root: string, text: string, items: string[] = []): TaskD
     fs.appendFileSync(arch, `${head}\n---\n\n> 存档于 ${stampLocal(new Date())}\n\n${old.raw.trim()}\n`);
   }
   const lines = text.trim().split('\n');
-  const title = lines[0].trim();
-  const rest = lines.slice(1).join('\n').trim();
-  let doc = taskTemplate(title, items);
-  if (rest) doc = doc.replace(`${title}\n`, `${title}\n\n${rest}\n`);
+  // 说明原样放在标题下面（不用字符串替换：说明里的 $$、$& 会被当成替换符号改掉）。
+  const doc = taskTemplate(lines[0].trim(), items, lines.slice(1).join('\n'));
   fs.writeFileSync(p, doc);
   return parseTask(doc);
+}
+
+/** 从 before 到 after 新打上勾的步骤（按步骤的字对；before 里没有的步骤、after 里打了勾的也算）。 */
+export function newlyChecked(beforeRaw: string | null, afterRaw: string | null): string[] {
+  if (afterRaw === null) return [];
+  const was = new Map(parseTask((beforeRaw ?? '').replace(/\r/g, '')).items.map((i) => [i.text, i.done]));
+  return parseTask(afterRaw.replace(/\r/g, '')).items.filter((i) => i.done && !was.get(i.text)).map((i) => i.text);
 }
 
 // ---- 任务清单的副本（退回时按它恢复打勾） ----
@@ -307,6 +313,8 @@ export interface HandoffDoc {
   summary: string;
   raw: string;
   mtimeMs: number;
+  /** 文件建出来的时间（它开工建交接的时候；系统不记就没有）。 */
+  bornMs?: number;
 }
 
 export function handoffTemplate(who: string, ts: string | Date = new Date()): string {
@@ -347,8 +355,10 @@ function stateOf(text: string | undefined): HandoffDoc['state'] {
   if (!text) return 'unknown';
   if (/全部完成|全部做完|都做完|任务完成|已完成全部/.test(text)) return 'finished';
   if (/卡住|卡在|做不下去|需要人/.test(text)) return 'stuck';
+  // 明说交接了就是交接了，后面补一句「没做完的写在下一步」也算（那说的是任务，不是这一棒）。
+  if (/已交接|已经交接|交接完|(?<!快|要|准备|将)交接了|收工/.test(text)) return 'handed';
   if (/进行中|正在做|还在做|未完成|没做完/.test(text)) return 'working';
-  if (/已交接|交接了|完成|做完|结束|收工/.test(text)) return 'handed';
+  if (/完成|做完|结束/.test(text)) return 'handed';
   return 'unknown';
 }
 
@@ -375,7 +385,7 @@ function workBullet(text: string): string {
   return clip80(all.find((t) => !reading.test(t)) ?? all[0] ?? '');
 }
 
-export function parseHandoff(raw: string, file = '', mtimeMs = 0): HandoffDoc {
+export function parseHandoff(raw: string, file = '', mtimeMs = 0, bornMs?: number): HandoffDoc {
   const h1 = raw.match(/^#[ \t]*交接[ \t]*[:：]?[ \t]*(.*)$/m) ?? raw.match(/^#[ \t]+(.*)$/m);
   const did = section(raw, /做了什么|做了|完成了/);
   return {
@@ -391,6 +401,7 @@ export function parseHandoff(raw: string, file = '', mtimeMs = 0): HandoffDoc {
     summary: workBullet(did),
     raw,
     mtimeMs,
+    ...(bornMs && bornMs > 0 && bornMs <= mtimeMs ? { bornMs } : {}),
   };
 }
 
@@ -403,7 +414,7 @@ export function readHandoff(root: string, rel: string): HandoffDoc | null {
   const p = path.join(root, rel);
   try {
     const st = fs.statSync(p);
-    return parseHandoff(fs.readFileSync(p, 'utf8'), rel, st.mtimeMs);
+    return parseHandoff(fs.readFileSync(p, 'utf8'), rel, st.mtimeMs, st.birthtimeMs);
   } catch {
     return null;
   }

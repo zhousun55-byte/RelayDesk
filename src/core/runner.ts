@@ -96,11 +96,13 @@ function claudeParser(): StreamParser {
           if (!replyModel && m !== initModel) out.push(`模型：${m}`);
           replyModel = m;
         }
+        // <synthetic> 是工具自己拼的话（额度用完、出错的提示），不是模型说的：记成「提示」。
+        const synthetic = m.startsWith('<');
         for (const b of (o(j.message).content as unknown[]) ?? []) {
           const blk = o(b);
           if (blk.type === 'text' && s(blk.text).trim()) {
             last = s(blk.text);
-            out.push(`说：${clip(last)}`);
+            out.push(`${synthetic ? '提示' : '说'}：${clip(last)}`);
           } else if (blk.type === 'tool_use') {
             out.push(`工具 ${s(blk.name)}：${toolSummary(blk.input)}`);
           }
@@ -361,6 +363,18 @@ export function looksLikeNetworkBlip(text: string): boolean {
   );
 }
 
+/**
+ * 日志里工具自己报的话：出错、提示、结束、退出、状态、工具自己打到标准错误的输出。
+ * 不含 AI 说的话、它调用的工具和命令、改了哪些文件——认「额度用完」「网络抖了一下」只看这些：
+ * 任务本身讲限流、额度时，AI 说的话、搜的词里全是 rate limit、quota，不能当成它自己没额度了。
+ */
+export function toolLines(log: string): string {
+  return log
+    .split('\n')
+    .filter((l) => /^(?:\d\d:\d\d:\d\d )?(?:出错：|提示：|（工具自己的输出）|结束（|退出（|状态：|超过 \d+ 分钟)/.test(l))
+    .join('\n');
+}
+
 /** 这一步日志的最后一段（不含开头的命令行，免得把任务原文当成出错原因）。 */
 export function logTail(logPath: string, bytes = 4000): string {
   try {
@@ -472,9 +486,12 @@ export function startRun(req: RunRequest): RunHandle {
     child.stdin.end(inv.stdin);
   }
 
+  // 按字符读（setEncoding）：一个汉字被切在两次读取之间也不会变成乱码。
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
   let buf = '';
-  child.stdout?.on('data', (c: Buffer) => {
-    buf += c.toString('utf8');
+  child.stdout?.on('data', (c: string) => {
+    buf += c;
     let i: number;
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i);
@@ -484,8 +501,7 @@ export function startRun(req: RunRequest): RunHandle {
     if (buf.length > 4_000_000) buf = buf.slice(-1_000_000);
   });
   let ebuf = '';
-  child.stderr?.on('data', (c: Buffer) => {
-    const t = c.toString('utf8');
+  child.stderr?.on('data', (t: string) => {
     stderrTail = (stderrTail + t).slice(-6000);
     ebuf += t;
     let i: number;
