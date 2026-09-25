@@ -338,6 +338,9 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
   // Codex 真实的写法：先「完整读取」、再「复核当前」，第三条才是活。
   const codex = parseHandoff('# 交接：Codex · gpt-6-astra\n\n## 做了什么\n\n- 完整读取接力本、AGENTS.md、CLAUDE.md。\n- 复核当前 wc.py、test_wc.py 与上一棒一致，现有测试通过。\n- README.md 补充命令格式和选项。\n');
   assert.equal(codex.summary, 'README.md 补充命令格式和选项。');
+  // DeepSeek Harness 真实的写法（2026-09-25 冒烟测试）：读了接力本、建了交接文件，「wc.py：」下面那条才是活。
+  const dsh = parseHandoff('# 交接：DeepSeek Harness · deepseek-flash\n\n## 做了什么\n\n- 读了 `.relay/接力本.md`、`AGENTS.md`：本棒是第 1 棒。\n- 建了本交接文件（边做边记）。\n- `wc.py`：\n  - `count(text)` 返回 `(行数, 词数, 字符数)`。\n- `.relay/任务.md` 三项全部打勾。\n');
+  assert.equal(dsh.summary, '`wc.py`：`count(text)` 返回 `(行数, 词数, 字符数)`。');
 });
 
 test('复核结论：认出复核的是第几棒、结论是哪一种', () => {

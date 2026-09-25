@@ -376,13 +376,18 @@ function firstBullet(text: string): string {
 }
 
 /**
- * 「做了什么」里挑一条当一句话摘要：跳过开头「读了接力本」「完整读取……」「复核当前……」这种准备和核对，找第一条真干了活的；
- * 都是这种就用第一条。
+ * 「做了什么」里挑一条当一句话摘要：跳过开头「读了接力本」「完整读取……」「复核当前……」这种准备和核对，
+ * 还有「建了本交接文件」「任务清单打勾」这种记账，找第一条真干了活的；「wc.py：」这种小标题接上它下面的第一条。
+ * 都是准备和记账就用第一条。
  */
 function workBullet(text: string): string {
   const all = bullets(text);
   const reading = /^(先|已|已经|完整|仔细|逐一|重新)?(读|读取|阅读|通读|浏览|看|查看|了解|熟悉|复核|核对|核实|确认|检查)|^(read|reviewed|checked)\b/i;
-  return clip80(all.find((t) => !reading.test(t)) ?? all[0] ?? '');
+  const bookkeeping = /交接文件|本交接|建了?交接|接力本|任务\.md|任务清单|打(?:了)?(?:个)?勾/;
+  const i = all.findIndex((t) => !reading.test(t) && !bookkeeping.test(t));
+  if (i < 0) return clip80(all[0] ?? '');
+  const t = all[i];
+  return clip80(/[:：]$/.test(t) && all[i + 1] ? `${t}${all[i + 1]}` : t);
 }
 
 export function parseHandoff(raw: string, file = '', mtimeMs = 0, bornMs?: number): HandoffDoc {
