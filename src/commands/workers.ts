@@ -32,7 +32,7 @@ function withFlags(cmd: Command): Command {
     .option('--cmd <命令>', '启动命令；桌面程序要含 {{dir}}（项目文件夹）')
     .option('--tier <能力>', 'strong（强）| weak（弱）')
     .option('--mode <喂法>', '终端工人的上岗词喂法：arg | stdin | file')
-    .option('--model <模型>', '正在用的模型（只做记录）')
+    .option('--model <模型>', '派活时用的模型（如 gpt-6-sol；不填用工具自己的默认）')
     .option('--ask <命令>', '讨论命令：从标准输入读题、标准输出回答')
     .option('--api-base <地址>', 'API 地址（kind=api）')
     .option('--api-model <模型>', 'API 模型名（kind=api）')
