@@ -127,6 +127,9 @@ export function agentEnv(extra: Record<string, string> = {}, drop?: RegExp): Nod
   if (drop) {
     for (const k of Object.keys(env)) if (drop.test(k)) delete env[k];
   }
+  // 接力台自己怎么运行的（由小程序看着、登录时启动），不带给 AI 工具。
+  delete env.RELAY_KEEPER;
+  delete env.RELAY_AT_LOGIN;
   env.PATH = mergedPath();
   return { ...env, NO_COLOR: '1', FORCE_COLOR: '0', ...extra };
 }

@@ -197,6 +197,11 @@ const runners = new Map<string, GoRunner>();
 /** 每个调度收完尾（这一棒记好账）时兑现。 */
 const finishing = new Map<string, Promise<unknown>>();
 
+/** 这个接力台进程里有没有调度在跑（或者在收尾）。 */
+export function goBusy(): boolean {
+  return runners.size > 0 || finishing.size > 0;
+}
+
 export function goActive(root: string): boolean {
   if (runners.has(canonRoot(root))) return true;
   const s = loadGoState(root);

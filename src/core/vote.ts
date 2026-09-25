@@ -319,6 +319,11 @@ export function appendRule(root: string, line: string): void {
   fs.writeFileSync(p, next.join('\n').replace(/\n{3,}/g, '\n\n'));
 }
 
+/** 这个接力台进程里有没有投票在进行。 */
+export function voteBusy(): boolean {
+  return running.size > 0;
+}
+
 export function voteRunning(id: string): boolean {
   return running.has(id);
 }

@@ -4,8 +4,12 @@ import { Command } from 'commander';
 import fs from 'node:fs';
 import { augmentPath } from '../core/launch';
 import { lastProject, rememberProject } from '../core/memory';
-import { reapLeftover, stopAllGo } from '../ops/go';
+import { anyTalkBusy } from '../core/talk';
+import { voteBusy } from '../core/vote';
+import { goBusy, reapLeftover, stopAllGo } from '../ops/go';
 import { liveProjects } from '../ops/init';
+import { keeperMode, markStopped, watchBuild } from '../ops/keeper';
+import { gateBusy } from '../ops/track';
 import { unwatchAll } from '../ops/watch';
 import { createServer, listen } from '../server/server';
 import { ok, warn } from './print';
@@ -40,6 +44,8 @@ export function uiCommand(): Command {
       if (fs.existsSync(path.join(dir, '.relay', 'journal.jsonl'))) rememberProject(dir);
       const q = `?dir=${encodeURIComponent(dir)}`;
       const wanted = Number(opts.port) || 7388;
+      // 由「接力台」小程序拉起的：它在后台看着，退出了会重新拉起（见 ops/keeper.ts）。
+      const keeper = keeperMode();
 
       for (let port = wanted; port < wanted + 10; port++) {
         let stopping = false;
@@ -54,12 +60,27 @@ export function uiCommand(): Command {
             process.exit(0);
           });
         };
-        const server = createServer({ defaultDir: dir, autoDetect: true, watch: true, onQuit: stop });
+        // 在网页上点「关闭」：留个记号，小程序就不再把它拉起来。
+        const quit = () => {
+          if (keeper) markStopped();
+          stop();
+        };
+        const server = createServer({ defaultDir: dir, autoDetect: true, watch: true, onQuit: quit });
         try {
           const actual = await listen(server, port);
           const url = `http://127.0.0.1:${actual}/${q}`;
           ok(`接力台已启动：${url}`);
-          console.log('  关掉这个窗口（或按 Ctrl-C），或在网页「设置」里点「关闭接力台」，接力台就停了。');
+          if (keeper) {
+            console.log('  「接力台」小程序在后台看着：意外退出或者有了新版本，会自己重新启动。');
+            // 编译出了新版：手上没活时自己退出，小程序几秒内用新版重新拉起。
+            watchBuild(
+              () => {
+                warn('接力台有新版本，重新启动……');
+                stop();
+              },
+              { idle: () => !goBusy() && !anyTalkBusy() && !voteBusy() && !gateBusy(), intervalMs: Number(process.env.RELAY_BUILD_WATCH_MS) || undefined }
+            );
+          } else console.log('  关掉这个窗口（或按 Ctrl-C），或在网页「设置」里点「关闭接力台」，接力台就停了。');
           if (opts.open !== false) openBrowser(url);
           // 上次接力台被关掉时还在跑的工具：结束掉（不然它会接着改文件，没人记账）。
           for (const r of liveProjects()) {

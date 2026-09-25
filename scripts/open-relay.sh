@@ -1,14 +1,17 @@
 #!/bin/zsh
-# 桌面「接力台」小程序调用的脚本。
-#   open-relay.sh           接力台没在运行就启动它，然后用默认浏览器打开网页；最后打印端口号。
-#   open-relay.sh --check   接力台在运行就返回 0（小程序每隔几秒问一次，接力台关了它也跟着退出）。
-#   open-relay.sh --quit    请接力台正常关闭（小程序退出时调用）。
+# 「接力台」小程序调用的脚本（小程序没有图标挂在桌面和程序坞上，见 make-desktop-app.sh）。
+#   open-relay.sh               接力台没在运行就启动它，然后用默认浏览器打开网页；最后打印端口号。
+#   open-relay.sh --background  同上，但不打开网页（登录电脑时、接力台意外退出或换新版后，小程序用它在后台拉起）。
+#   open-relay.sh --check       接力台在运行返回 0；你在网页上点了「关闭」返回 3（小程序跟着退出）；没在运行返回 1（小程序重新拉起）。
+#   open-relay.sh --quit        请接力台正常关闭（小程序退出时调用）。
 # 不弹「终端」窗口。接力台的输出记在 ~/.relay/ui.log；出错时把原因写到标准错误，由小程序弹窗告诉你。
 # 设了 RELAY_NO_BROWSER=1 时不开浏览器（测试用）。
 
 DIR="${0:A:h:h}"
 RELAY_DIR="${RELAY_HOME:-$HOME/.relay}"
 LOG="$RELAY_DIR/ui.log"
+# 你在网页上点了「关闭」时，接力台留下的记号（见 src/ops/keeper.ts）。
+STOPPED="$RELAY_DIR/ui-stopped"
 
 fail() {
   print -u2 -r -- "$1"
@@ -31,20 +34,22 @@ running_port() {
   return 1
 }
 
+BACKGROUND=
 open_page() {
-  [[ -n "${RELAY_NO_BROWSER:-}" ]] || open "http://127.0.0.1:$1/"
+  [[ -n "$BACKGROUND" || -n "${RELAY_NO_BROWSER:-}" ]] || open "http://127.0.0.1:$1/"
   print -r -- "$1"
 }
 
 case "${1:-}" in
   --check)
     # 接力台忙的时候可能一两秒顾不上回答：多问几次；进程还在就算在运行。
-    # 不然小程序会以为它停了，自己退出、顺手把接力台也关掉，网页就打不开了。
+    # 不然小程序会以为它停了，又去拉起一个。
     for i in 1 2 3; do
       running_port >/dev/null && exit 0
       sleep 1
     done
     pgrep -f 'cli\.js ui --no-open$' >/dev/null 2>&1 && exit 0
+    [[ -f "$STOPPED" ]] && exit 3
     exit 1
     ;;
   --quit)
@@ -53,7 +58,13 @@ case "${1:-}" in
     fi
     exit 0
     ;;
+  --background)
+    BACKGROUND=1
+    ;;
 esac
+
+# 要接力台运行了：去掉「你关掉了」的记号。
+rm -f "$STOPPED" 2>/dev/null
 
 # 已经在运行：直接打开网页。
 if port=$(running_port); then
@@ -67,7 +78,7 @@ if ! command -v node >/dev/null 2>&1; then
     [[ -x "$p/node" ]] && export PATH="$p:$PATH" && break
   done
 fi
-command -v node >/dev/null 2>&1 || fail "找不到 Node.js（需要 20 或更新的版本）。先到 https://nodejs.org 安装，再双击「接力台」。"
+command -v node >/dev/null 2>&1 || fail "找不到 Node.js（需要 20 或更新的版本）。先到 https://nodejs.org 安装，再打开「接力台」。"
 
 cd "$DIR" 2>/dev/null || fail "找不到接力台的程序文件夹：$DIR"
 mkdir -p "$RELAY_DIR"
@@ -83,16 +94,16 @@ fi
 
 # 没编译过、或者源码比编译结果新：先编译。
 if [[ ! -f dist/src/cli.js || -n "$(find src package.json -newer dist/src/cli.js -print -quit 2>/dev/null)" ]]; then
-  notify "正在准备接力台……"
+  [[ -n "$BACKGROUND" ]] || notify "正在准备接力台……"
   npm run build >>"$LOG" 2>&1 || fail "编译失败。在 agent-relay 文件夹里执行 npm run build 看看原因。"
 fi
 
 # 在家目录启动：接力台会打开上次用过的项目。
 cd "$HOME"
 print -r -- "" >>"$LOG"
-print -r -- "==== $(date '+%Y-%m-%d %H:%M:%S') 从桌面「接力台」启动 ====" >>"$LOG"
+print -r -- "==== $(date '+%Y-%m-%d %H:%M:%S') 由「接力台」小程序启动${BACKGROUND:+（后台）} ====" >>"$LOG"
 # 放进独立的进程组启动，不跟着这个脚本的进程组走。
-# 注意：从桌面双击时，小程序一退出，系统会把它带起来的进程全部结束，所以小程序要一直开着（见 make-desktop-app.sh）。
+# 注意：小程序一退出，系统会把它带起来的进程全部结束，所以小程序要一直开着（它没有图标，见 make-desktop-app.sh）。
 node -e '
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");

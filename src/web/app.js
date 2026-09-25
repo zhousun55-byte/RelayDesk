@@ -317,6 +317,9 @@ const S = {
   onlyChanged: false,
   treeSel: '',
   offline: false,
+  /** 打开网页时接力台跑的是哪一份编译结果；变了（换了新版重启过）就刷新网页。 */
+  build: '',
+  newBuild: false,
   /** 切换项目一次加一；请求回来时代数不对就丢掉（不然 A 项目的东西会显示在 B 项目里）。 */
   gen: 0,
   /** 每类请求发到第几次了：回来的不是最新那次就丢掉。 */
@@ -890,6 +893,13 @@ async function refresh() {
     S.st = st;
     if (!S.dir) S.dir = st.project.root;
     setOffline(false);
+    // 接力台换了新版重启过：网页也换成新版。你正在打字、开着弹窗或菜单时先不刷，等空下来再刷。
+    if (!S.build) S.build = st.build || '';
+    else if (st.build && st.build !== S.build) S.newBuild = true;
+    if (S.newBuild && !sheetStack.length && !layer.querySelector('.menu') && !(C.ta && C.ta.value.trim())) {
+      location.reload();
+      return;
+    }
     renderAll();
   } catch (e) {
     if (stale(t)) return;
@@ -1250,7 +1260,7 @@ let streamThread = null;
 let stick = true;
 
 function buildCenter() {
-  CE.offline = h('div', { class: 'offline', hidden: true }, icon('warn'), '接力台已停止运行，在桌面双击「接力台」重新打开', h('button', { class: 'btn small', onclick: () => refresh() }, '重试'));
+  CE.offline = h('div', { class: 'offline', hidden: true }, icon('warn'), '连不上接力台：正在重启的话，几秒后会自己连上；关掉了的话，在启动台或聚焦搜索里打开「接力台」', h('button', { class: 'btn small', onclick: () => refresh() }, '重试'));
   CE.cfgBad = h('div', { class: 'offline cfg-bad', hidden: true });
   CE.bar = h('header', { class: 'bar' });
   CE.tabs = h('div', { class: 'tabs', role: 'tablist', hidden: true });
@@ -3795,7 +3805,8 @@ function settingsBody(tab, redraw) {
           class: 'btn small',
           onclick: async (e) => {
             const b = e.currentTarget;
-            if (!(await confirmSheet('关闭接力台？', '正在进行的调度会停止。', '关闭'))) return;
+            const later = S.st && S.st.keeper ? '下次打开「接力台」或重新登录电脑时，它会自己启动。' : '';
+            if (!(await confirmSheet('关闭接力台？', `正在进行的调度会停止。${later}`, '关闭'))) return;
             await act(b, () => api('/api/quit', {}), '接力台已关闭');
             setTimeout(() => setOffline(true), 600);
           },

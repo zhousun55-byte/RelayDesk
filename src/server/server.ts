@@ -24,6 +24,7 @@ import { archiveTalk, readTalk, say, talkBusy, talkStatus } from '../core/talk';
 import { adoptOption, castHumanVote, readVotes, startVote } from '../core/vote';
 import { goActive, startGo, stopGo } from '../ops/go';
 import { initProject, liveProjects, newTask } from '../ops/init';
+import { buildStamp, keeperMode } from '../ops/keeper';
 import { rollbackBefore, undoRollback } from '../ops/rollback';
 import { refreshBrief, relayBusy, trackAndGate } from '../ops/track';
 import { projectView, readRunLog, stintDetail } from '../ops/view';
@@ -37,6 +38,9 @@ const VERSION = (() => {
     return '?';
   }
 })();
+
+/** 这个进程跑的是哪一份编译结果：网页看到它变了（接力台换了新版重启过），就自己刷新。 */
+const BUILD = buildStamp();
 
 /** 你自己在别的 AI 工具里接着做时，对它说的第一句话。 */
 export const HINT = '接着做这个项目：先读 .relay/接力本.md，再按 AGENTS.md（或 CLAUDE.md）里的「接力规矩」来。';
@@ -243,6 +247,8 @@ export function createServer(opts: ServerOptions): http.Server {
       const w = watching(root);
       return {
         version: VERSION,
+        build: BUILD,
+        keeper: keeperMode(),
         home: os.homedir(),
         project: pv,
         members: memberViews(),

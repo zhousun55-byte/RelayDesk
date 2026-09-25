@@ -323,6 +323,13 @@ export interface GateOptions {
  * 跑检查命令，把结果记到这一棒上（没配检查命令就什么都不做）。
  * 配置文件坏了、检查根本跑不起来：记成「没跑成」，不能当成没配检查。
  */
+let gatesRunning = 0;
+
+/** 这个接力台进程里有没有检查命令在跑。 */
+export function gateBusy(): boolean {
+  return gatesRunning > 0;
+}
+
 export async function gateStint(root: string, id: number, cfg?: RelayConfig, opts: GateOptions = {}): Promise<void> {
   const record = (gate: Stint['gate'], note?: string) => {
     const s = loadLedger(root).stints.find((x) => x.id === id);
@@ -337,11 +344,14 @@ export async function gateStint(root: string, id: number, cfg?: RelayConfig, opt
   }
   if (!conf.gate.command.trim()) return;
   const before = opts.absorb ? takeSnapshot(root, '跑检查之前').sha : null;
+  gatesRunning++;
   try {
     const r = await runGate(root, conf);
     record({ status: r.status, command: r.command, ...(r.status === 'fail' ? { detail: r.detail.slice(-1500) } : {}) });
   } catch (e) {
     record({ status: 'error', command: conf.gate.command, detail: `检查没跑起来：${errorMessage(e)}` });
+  } finally {
+    gatesRunning--;
   }
   if (before && opts.absorb) {
     const note = absorbGateWrites(root, before, opts.absorb, conf.gate.command);

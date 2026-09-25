@@ -40,6 +40,9 @@ export function testEnv(home: string): NodeJS.ProcessEnv {
     NO_COLOR: '1',
   };
   delete env.DEEPSEEK_API_KEY;
+  // 测试可能是接力台派出去的工具跑的：别让测试里的接力台以为自己由小程序看着。
+  delete env.RELAY_KEEPER;
+  delete env.RELAY_AT_LOGIN;
   // 测试可能是在某个 AI 工具里跑的：去掉它注入的会话变量，结果不随在哪儿跑而变。
   for (const k of Object.keys(env)) if (/^(CLAUDECODE$|CLAUDE_|ANTHROPIC_|CODEX_|CURSOR_)/.test(k)) delete env[k];
   return env;

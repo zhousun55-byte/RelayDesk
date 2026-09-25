@@ -391,6 +391,11 @@ export function say(root: string, text: string, ask: string[], context: () => Ta
 }
 
 /** 群聊现在有没有人在说话（清空记录、投票前要等）。 */
+/** 这个接力台进程里有没有哪个项目的群聊在说话、在排队。 */
+export function anyTalkBusy(): boolean {
+  return [...rounds.values()].some((r) => !!r.running || r.current.size > 0 || r.queue.length > 0 || r.soloQueue.length > 0);
+}
+
 export function talkBusy(root: string): boolean {
   const r = rounds.get(path.resolve(root));
   return !!r && (!!r.running || r.current.size > 0);

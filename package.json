@@ -17,7 +17,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/src/cli.js && cp -R src/web dist/src/web",
+    "build": "rm -rf dist.new dist.old && tsc -p tsconfig.json --outDir dist.new && chmod +x dist.new/src/cli.js && cp -R src/web dist.new/src/web && (test ! -d dist || mv dist dist.old) && mv dist.new dist && rm -rf dist.old",
     "test": "npm run build && node --test dist/test/*.test.js",
     "start": "node dist/src/cli.js ui"
   },
