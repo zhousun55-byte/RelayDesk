@@ -341,6 +341,9 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
   // DeepSeek Harness 真实的写法（2026-09-25 冒烟测试）：读了接力本、建了交接文件，「wc.py：」下面那条才是活。
   const dsh = parseHandoff('# 交接：DeepSeek Harness · deepseek-flash\n\n## 做了什么\n\n- 读了 `.relay/接力本.md`、`AGENTS.md`：本棒是第 1 棒。\n- 建了本交接文件（边做边记）。\n- `wc.py`：\n  - `count(text)` 返回 `(行数, 词数, 字符数)`。\n- `.relay/任务.md` 三项全部打勾。\n');
   assert.equal(dsh.summary, '`wc.py`：`count(text)` 返回 `(行数, 词数, 字符数)`。');
+  // DeepSeek Harness 真实的写法（2026-09-25 原生冒烟测试）：一条写成三行，后两行缩进接着写。以前摘要停在「现在改成」
+  const wrapped = parseHandoff('# 交接：DeepSeek Harness · deepseek-flash\n\n## 做了什么\n\n- 开工先读了 `.relay/接力本.md`。\n- 改 `slug.py` 的 `slugify`：原来会把汉字一起删掉；现在改成\n  `re.split(r"[\\W_]+", text)` 切段再用 `-` 连接。\n  汉字属于 `\\w`，所以原样保留。\n- 改 `test_slug.py`：新增 5 个测试。\n');
+  assert.match(wrapped.summary, /^改 `slug\.py` 的 `slugify`：原来会把汉字一起删掉；现在改成 `re\.split\(r"\[\\W_\]\+", text\)` 切段/);
   // Codex 在自己的工具里复核的真实写法（2026-09-25 原生冒烟测试）：以前挑成「没有修改 wc.py 或 test_wc.py。」
   const reviewing = parseHandoff('# 交接：Codex · gpt-6-sol\n\n## 做了什么\n\n- 已读接力本、第 7 棒交接和快照差异，核对了实际改动的三个文件。\n- 复核结论写入 `.relay/复核/第7棒.md`：没问题。\n- 在 `.relay/任务.md` 勾选第 7 棒复核进度。\n- 没有修改 `wc.py` 或 `test_wc.py`。\n');
   assert.equal(reviewing.summary, '复核结论写入 `.relay/复核/第7棒.md`：没问题。');

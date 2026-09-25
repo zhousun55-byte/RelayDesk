@@ -363,10 +363,16 @@ function stateOf(text: string | undefined): HandoffDoc['state'] {
 }
 
 function bullets(text: string): string[] {
-  return text
-    .split('\n')
-    .map((l) => l.replace(/^\s*[-*+]\s*|^\s*\d+[.、)]\s*/, '').trim())
-    .filter((t) => t && !/^[（(].*[）)]$/.test(t));
+  const mark = /^\s*[-*+]\s*|^\s*\d+[.、)]\s*/;
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    const t = line.replace(mark, '').trim();
+    if (!t) continue;
+    // 一条写不下、缩进着接到下一行的（不带「-」）：接回这一条，不然摘要会停在半句上。
+    if (!mark.test(line) && /^\s/.test(line) && out.length) out[out.length - 1] += ` ${t}`;
+    else out.push(t);
+  }
+  return out.filter((t) => !/^[（(].*[）)]$/.test(t));
 }
 
 const clip80 = (t: string) => (t.length > 80 ? `${t.slice(0, 80)}…` : t);
