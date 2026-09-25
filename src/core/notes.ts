@@ -299,10 +299,13 @@ function firstBullet(text: string): string {
   return clip80(bullets(text)[0] ?? '');
 }
 
-/** 「做了什么」里挑一条当一句话摘要：跳过开头「读了接力本、看了任务」这种准备工作，找第一条真干了活的。 */
+/**
+ * 「做了什么」里挑一条当一句话摘要：跳过开头「读了接力本」「完整读取……」「复核当前……」这种准备和核对，找第一条真干了活的；
+ * 都是这种就用第一条。
+ */
 function workBullet(text: string): string {
   const all = bullets(text);
-  const reading = /^(先)?(读|看|查看|阅读|浏览|了解|熟悉)(了|过|完)?|^read\b/i;
+  const reading = /^(先|已|已经|完整|仔细|逐一|重新)?(读|读取|阅读|通读|浏览|看|查看|了解|熟悉|复核|核对|核实|确认|检查)|^(read|reviewed|checked)\b/i;
   return clip80(all.find((t) => !reading.test(t)) ?? all[0] ?? '');
 }
 

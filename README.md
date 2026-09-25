@@ -88,6 +88,8 @@ zsh scripts/make-desktop-app.sh
 
 - 「Claude Code」：接的别家模型（比如 DeepSeek），多半算弱；
 - 「Claude Code 官方账号」：claude.ai 登录的，默认用最新的 Opus，算强。接力台派它时会跳过你的用户设置（`--setting-sources project,local`）、去掉 `ANTHROPIC_*` 这些变量，让它走官方账号。Claude 桌面版用的也是官方账号。
+  - 「最新的 Opus」按这台电脑上最近用过的来定（和桌面版一样）。命令行里的简称 `opus` 不一定是最新版，所以接力台会写全名。
+  - Claude Code 命令行太旧、用不了这个模型时，接力台会当场换成 `opus` 接着干，这一棒不算失败，并记下来；名单上会标「命令行需要更新」。在终端运行 `claude update` 升级之后，会自动换回最新的。
 
 **到底是哪个 Claude 干的，以记录为准。** Claude Code 自己的会话记录（`~/.claude/projects/`）里记着每条回复实际用的是哪个模型。接力台拿它核对三件事：交接是哪个模型写的、复核结论是哪个模型写的、这段时间谁改了项目文件。所以接了 DeepSeek 的 Claude Code 在交接里自称 Opus，照样按弱的算；它写的复核（包括给自己写的）不算数，还要强模型再核。
 
