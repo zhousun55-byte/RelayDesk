@@ -1918,7 +1918,7 @@ function stintCard(s) {
         s.kind !== 'work' ? h('span', { class: 'kind' }, s.kind === 'review' ? '复核' : '终审') : null,
         h('span', { class: 'time' }, live ? h('span', { class: 'num', 'data-since': s.startedAt }, elapsed(s.startedAt)) : stamp(s.endedAt || s.startedAt))
       ),
-      h('div', { class: `sum${sum.faint ? ' faint' : ''}` }, sum.text),
+      h('div', { class: `sum${sum.faint ? ' faint' : ''}`, html: inline(esc(sum.text)) }),
       cardFoot(s),
       live && s.via === 'relay' ? [h('div', { class: 'runbar' }), h('pre', { class: 'tail', 'data-stint': String(s.id), hidden: true })] : null,
       h('div', { class: 'more-body' }, h('div', null))
