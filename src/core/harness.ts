@@ -15,7 +15,7 @@ import { relayHome } from './paths';
 export type Level = 'safe' | 'full';
 
 /** 工具标准输出的格式（决定怎么解析进度和最后一句话）。 */
-export type StreamFormat = 'claude' | 'codex' | 'cursor' | 'agy' | 'lines';
+export type StreamFormat = 'claude' | 'codex' | 'cursor' | 'agy' | 'dsh' | 'lines';
 
 export interface Located {
   /** 调用前缀：可执行文件（+ 固定参数），如 ['/…/codex'] 或 ['/…/node', '/…/index.js']。 */
@@ -25,6 +25,8 @@ export interface Located {
   where: string;
   /** 找的过程中发现的问题（比如快捷命令装坏了、已绕过）。 */
   note?: string;
+  /** 调用时要带的环境变量（比如用桌面程序自带的运行时跑命令行）。 */
+  env?: Record<string, string>;
 }
 
 export interface LoginInfo {
@@ -96,8 +98,8 @@ function home(): string {
   return os.homedir();
 }
 
-function run(argv: string[], timeoutMs = 15_000, dropEnv?: RegExp): { code: number; out: string; err: string } {
-  const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: timeoutMs, env: agentEnv({}, dropEnv), cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] });
+function run(argv: string[], timeoutMs = 15_000, dropEnv?: RegExp, extraEnv: Record<string, string> = {}): { code: number; out: string; err: string } {
+  const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: timeoutMs, env: agentEnv(extraEnv, dropEnv), cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] });
   return { code: r.status ?? -1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() };
 }
 
@@ -261,6 +263,9 @@ const claude: HarnessSpec = {
   invoke: (loc, i) => claudeInvoke(loc, i),
 };
 
+/** 接力台调用 Claude Code 时一律关掉它的自动更新：升不升级、升到哪一版由你决定。 */
+const CLAUDE_ENV = { DISABLE_AUTOUPDATER: '1' };
+
 function claudeInvoke(loc: Located, i: InvokeInput, extra: string[] = []): Invocation {
   const a = [...loc.exec, ...extra, '-p', '--output-format', 'stream-json', '--verbose'];
   if (i.readOnly) a.push('--tools', 'Read,Grep,Glob');
@@ -269,7 +274,7 @@ function claudeInvoke(loc: Located, i: InvokeInput, extra: string[] = []): Invoc
   else a.push('--permission-mode', 'acceptEdits', '--settings', JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true } }));
   if (i.model) a.push('--model', i.model);
   if (i.effort) a.push('--effort', i.effort);
-  return { argv: a, stdin: i.prompt, format: 'claude' };
+  return { argv: a, stdin: i.prompt, format: 'claude', env: { ...CLAUDE_ENV } };
 }
 
 /**
@@ -335,6 +340,58 @@ export function modelArg(argv: string[]): string | undefined {
   return i >= 0 ? argv[i + 1] : undefined;
 }
 
+/**
+ * Claude 桌面版自己带着一份 Claude Code（~/Library/Application Support/Claude/claude-code/<版本>/，跟着桌面版更新），
+ * 通常比终端里的新：用它就能用上最新的 Opus，走的还是同一个 claude.ai 账号的额度，终端里的 claude 一点不动。
+ * RELAY_CLAUDE_DESKTOP_DIR 可以指定别的位置（测试用）。
+ */
+export function desktopClaude(): { bin: string; version: string } | null {
+  const custom = process.env.RELAY_CLAUDE_DESKTOP_DIR;
+  if (!custom && (process.platform !== 'darwin' || !scanApps())) return null;
+  const dir = custom || path.join(home(), 'Library', 'Application Support', 'Claude', 'claude-code');
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  const versions = names.filter((n) => /^\d+(\.\d+)+$/.test(n)).sort((a, b) => (olderThan(a, b) ? 1 : olderThan(b, a) ? -1 : 0));
+  for (const v of versions) {
+    for (const bin of [path.join(dir, v, 'claude.app', 'Contents', 'MacOS', 'claude'), path.join(dir, v, 'claude')]) {
+      try {
+        fs.accessSync(bin, fs.constants.X_OK);
+        if (fs.statSync(bin).isFile()) return { bin, version: v };
+      } catch {
+        /* 这一版不完整 */
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 官方账号用哪个 claude：有桌面版自带的就用它（通常更新，能用最新的 Opus）；
+ * 没有的话，只有终端里的 Claude Code 被接到了别家模型时才单列（没接别家时它和「Claude Code」是同一位）。
+ */
+function locateOfficial(): Located | null {
+  const desk = desktopClaude();
+  if (desk) {
+    const v = run([desk.bin, '--version'], 20_000, undefined, CLAUDE_ENV);
+    if (v.code === 0 || v.out) {
+      const version = firstVersion(v.out || v.err) || desk.version;
+      const term = which('claude');
+      const tv = term ? firstVersion(run([term, '--version'], 15_000, undefined, CLAUDE_ENV).out) : '';
+      return {
+        exec: [desk.bin],
+        version,
+        where: desk.bin,
+        note: `用的是 Claude 桌面版自带的 Claude Code ${version}（跟着桌面版更新，走你的 claude.ai 账号额度）${tv ? `；终端里的 claude ${tv} 没动` : ''}。`,
+      };
+    }
+  }
+  return claudeThirdParty() ? locateBin('claude') : null;
+}
+
 const claudeOfficial: HarnessSpec = {
   id: 'claude-official',
   label: 'Claude Code 官方账号',
@@ -343,9 +400,9 @@ const claudeOfficial: HarnessSpec = {
   workLevels: ['safe', 'full'],
   canReview: true,
   tested: 'partial',
-  loginHint: '在终端运行 claude auth login，用 claude.ai 账号登录。',
+  loginHint: '在终端运行 claude auth login，用 claude.ai 账号登录（Claude 桌面版登录的是同一个账号）。',
   manualArgs: OFFICIAL_ARGS,
-  locate: () => (claudeThirdParty() ? locateBin('claude') : null),
+  locate: locateOfficial,
   login(loc) {
     const r = run([...loc.exec, ...OFFICIAL_ARGS, 'auth', 'status'], 20_000, CLAUDE_PROVIDER_ENV);
     try {
@@ -361,7 +418,13 @@ const claudeOfficial: HarnessSpec = {
     return {
       model: o.model,
       label: o.model,
-      ...(o.blocked ? { note: `命令行 ${loc.version} 用不了 ${o.blocked.model}（要 ${o.blocked.needs} 或更新），先用 opus；在终端运行 claude update 升级之后自动换成 ${o.blocked.model}。` } : {}),
+      ...(o.blocked
+        ? {
+            note: loc.where.includes(`${path.sep}claude-code${path.sep}`)
+              ? `这份 Claude Code（${loc.version}）用不了 ${o.blocked.model}（要 ${o.blocked.needs} 或更新），先用 opus；Claude 桌面版更新后它自带的 Claude Code 会跟着变新，到时自动换成 ${o.blocked.model}。`
+              : `命令行 ${loc.version} 用不了 ${o.blocked.model}（要 ${o.blocked.needs} 或更新），先用 opus。想用上它：在终端运行 claude update，或者装 Claude 桌面版（接力台会用它自带的新版 Claude Code，终端里的不用动）。`,
+          }
+        : {}),
     };
   },
   invoke(loc, i) {
@@ -521,6 +584,112 @@ const zcode: HarnessSpec = {
     const mode = i.readOnly ? 'plan' : i.level === 'full' ? 'yolo' : 'edit';
     const cfg = zcodeBuiltinConfig(loc);
     return { argv: [...loc.exec, '-p', i.prompt, '--cwd', i.cwd, '--mode', mode, '--no-color'], format: 'lines', ...(cfg ? { env: { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: cfg } } : {}) };
+  },
+};
+
+// ---- DeepSeek Harness（DeepSeek 官方的桌面编程助手） ----
+
+/** DeepSeek Harness 的数据目录（桌面版和命令行共用：登录、会话、配置都在这里）。 */
+export function dshHome(): string {
+  return envValue('DSH_HOME') || path.join(home(), '.dsh');
+}
+
+/**
+ * 桌面版选的账号和模型（~/.dsh/profiles/desktop/cordis.patch.yml 里 agent-default-model 那一段）。
+ * 无界面模式默认走接口密钥；接力台调度时带上这一段，让它和桌面版用同一个账号、同一个模型。
+ */
+export function dshSettings(): { provider?: string; model?: string; effort?: string } {
+  for (const prof of ['desktop', 'headless']) {
+    let text = '';
+    try {
+      text = fs.readFileSync(path.join(dshHome(), 'profiles', prof, 'cordis.patch.yml'), 'utf8');
+    } catch {
+      continue;
+    }
+    const block = text.split(/\n(?=-\s)/).find((b) => /^-?\s*id:\s*["']?agent-default-model["']?\s*$/m.test(b));
+    if (!block) continue;
+    const get = (k: string) => block.match(new RegExp(`^\\s+${k}:\\s*["']?([^"'\\n#]+?)["']?\\s*$`, 'm'))?.[1]?.trim();
+    const out = { provider: get('provider'), model: get('model'), effort: get('reasoningEffort') };
+    if (out.provider || out.model) return out;
+  }
+  return {};
+}
+
+function dshPatch(sel: { provider?: string; model?: string; effort?: string }): string | null {
+  if (!sel.provider && !sel.model) return null;
+  const lines = ['# 接力台写的：让无界面模式用和 DeepSeek Harness 桌面版一样的账号和模型。', '- id: agent-default-model', "  name: '@deepseek-ai/dsh-agent-default-model'", '  config:'];
+  if (sel.provider) lines.push(`    provider: ${sel.provider}`);
+  if (sel.model) lines.push(`    model: ${sel.model}`);
+  if (sel.effort) lines.push(`    reasoningEffort: ${sel.effort}`);
+  const file = path.join(relayHome(), 'dsh', 'headless-patch.yml');
+  const text = `${lines.join('\n')}\n`;
+  try {
+    if (fs.readFileSync(file, 'utf8') === text) return file;
+  } catch {
+    /* 还没有 */
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+  return file;
+}
+
+const DSH_APP_NAME = 'DeepSeek Harness';
+
+/**
+ * 找 dsh：npm 装的 dsh 命令优先；没有的话用桌面版自带的——它的命令行在 app.asar 里，
+ * 用桌面程序本身当 Node 运行（ELECTRON_RUN_AS_NODE=1），和桌面版共用 ~/.dsh 里的登录。
+ */
+function locateDsh(): Located | null {
+  const bin = which('dsh');
+  if (bin) {
+    const v = run([bin, '--version'], 30_000);
+    if (v.code === 0 && v.out) return { exec: [bin], version: firstVersion(v.out), where: bin };
+  }
+  if (process.platform !== 'darwin' || !scanApps()) return null;
+  for (const app of [`/Applications/${DSH_APP_NAME}.app`, path.join(home(), 'Applications', `${DSH_APP_NAME}.app`)]) {
+    const exe = path.join(app, 'Contents', 'MacOS', DSH_APP_NAME);
+    const asar = path.join(app, 'Contents', 'Resources', 'app.asar');
+    if (!fs.existsSync(exe) || !fs.existsSync(asar)) continue;
+    const js = path.join(asar, 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+    const env = { ELECTRON_RUN_AS_NODE: '1' };
+    const v = run([exe, js, '--version'], 30_000, undefined, env);
+    if (v.code === 0 && v.out) return { exec: [exe, js], version: firstVersion(v.out), where: app, env, note: '用的是 DeepSeek Harness 桌面版自带的 dsh（无界面模式），和桌面版共用登录和额度。' };
+  }
+  return null;
+}
+
+const dsh: HarnessSpec = {
+  id: 'dsh',
+  label: 'DeepSeek Harness',
+  vendor: 'DeepSeek',
+  rank: 35,
+  workLevels: ['safe', 'full'],
+  canReview: true,
+  tested: 'no',
+  loginHint: '打开 DeepSeek Harness 桌面版，登录 DeepSeek 账号（接力台用的是同一个登录）。',
+  locate: locateDsh,
+  login() {
+    const sel = dshSettings();
+    if (fs.existsSync(path.join(dshHome(), '.credentials.yaml'))) return { state: 'ok', detail: sel.provider === 'deepseek-account' ? '用 DeepSeek Harness 桌面版登录的 DeepSeek 账号' : '找到 DeepSeek Harness 的登录凭据' };
+    if (envValue('DEEPSEEK_API_KEY')) return { state: 'ok', detail: '用环境变量 DEEPSEEK_API_KEY' };
+    return { state: 'no', detail: '没登录' };
+  },
+  model() {
+    const sel = dshSettings();
+    const model = sel.model ?? 'deepseek-flash';
+    return { model, label: model, ...(sel.effort ? { effort: sel.effort } : {}), via: sel.provider === 'deepseek-account' ? 'DeepSeek 账号（和桌面版同一个）' : sel.provider === 'deepseek-official' ? 'DeepSeek 接口密钥' : sel.provider };
+  },
+  invoke(loc, i) {
+    const sel = dshSettings();
+    const patch = dshPatch({ ...sel, ...(i.model ? { model: i.model } : {}), ...(i.effort ? { effort: i.effort } : {}) });
+    // 没人应答的审批一律拒绝（它自己的规矩）：安全档 = 只能写工作目录；完全放开 = 不设限。
+    const mode = i.readOnly ? 'read-only' : i.level === 'full' ? 'danger-full-access' : 'workspace-write';
+    return {
+      argv: [...loc.exec, '--profile', 'headless', ...(patch ? ['--patch', patch] : []), '--json', '-'],
+      stdin: i.prompt,
+      format: 'dsh',
+      env: { ...(loc.env ?? {}), DSH_PERMISSION_MODE: mode },
+    };
   },
 };
 
@@ -691,12 +860,15 @@ const grok: HarnessSpec = {
   },
 };
 
-export const HARNESSES: HarnessSpec[] = [claude, claudeOfficial, codex, cursorAgent, zcode, antigravity, gemini, qwen, opencode, droid, copilot, grok];
+export const HARNESSES: HarnessSpec[] = [claude, claudeOfficial, codex, cursorAgent, dsh, zcode, antigravity, gemini, qwen, opencode, droid, copilot, grok];
 
 /** 认得的工具报错：翻成能照着做的一句话（认不出返回 null）。 */
 export function explainFailure(harnessId: string | undefined, text: string): string | null {
   if (harnessId === 'zcode' && /Select a model before continuing|Model creation failed/i.test(text)) {
     return 'ZCode 命令行还没选默认模型（桌面版里选的它不认）。在终端里运行一次 ZCode 的命令行，输入 /model 选好模型，之后接力台就能调度它。';
+  }
+  if (harnessId === 'dsh' && /ACCOUNT_SIGN_IN_REQUIRED|ACCOUNT_TOKEN_INVALID|sign.?in required/i.test(text)) {
+    return 'DeepSeek Harness 没登录（或者登录过期了）：打开 DeepSeek Harness 桌面版，重新登录 DeepSeek 账号。';
   }
   if (harnessId === 'claude-official' && /not logged in|log ?in|unauthorized|401|invalid api key/i.test(text)) {
     return 'Claude Code 的官方账号没登录（或者登录过期了）：在终端运行 claude auth login，用 claude.ai 账号登录。';
@@ -714,7 +886,7 @@ export function findHarness(id: string | undefined): HarnessSpec | null {
 export function harnessForCommand(cmd: string | undefined): HarnessSpec | null {
   const first = (cmd ?? '').trim().split(/\s+/)[0] ?? '';
   const base = path.basename(first);
-  const map: Record<string, string> = { claude: 'claude', codex: 'codex', 'cursor-agent': 'cursor-agent', zcode: 'zcode', agy: 'agy', gemini: 'gemini', qwen: 'qwen', opencode: 'opencode', droid: 'droid', copilot: 'copilot', grok: 'grok' };
+  const map: Record<string, string> = { claude: 'claude', codex: 'codex', 'cursor-agent': 'cursor-agent', dsh: 'dsh', zcode: 'zcode', agy: 'agy', gemini: 'gemini', qwen: 'qwen', opencode: 'opencode', droid: 'droid', copilot: 'copilot', grok: 'grok' };
   return findHarness(map[base]);
 }
 

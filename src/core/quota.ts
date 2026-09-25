@@ -164,7 +164,8 @@ export function detectQuota(text: string, now = new Date()): QuotaHit {
   const lines = text.split('\n').filter((l) => HIT.test(l));
   if (!lines.length) return { hit: false };
   // 讲「额度」的正常说明文字（比如任务本身在做额度功能）不算：要像报错。
-  const line = lines.find((l) => /error|错误|失败|limit|用完|不足|上限|exceed|exhaust|429|402|频繁|try again|重试|upgrade/i.test(l));
+  // DeepSeek Harness 报的是「dsh: ACCOUNT_QUOTA: …」这种错误码。
+  const line = lines.find((l) => /error|错误|失败|limit|用完|不足|上限|exceed|exhaust|429|402|频繁|try again|重试|upgrade/i.test(l) || /\b(?:ACCOUNT_)?QUOTA\b/.test(l));
   if (!line) return { hit: false };
   const all = lines.join('\n');
   const until = absolute(all, now) ?? relative(all, now) ?? clock(all, now);

@@ -33,6 +33,7 @@ const FAMILIES: { app: RegExp; siblings: string[]; accept?: RegExp }[] = [
   { app: /^cursor$|cursor/i, siblings: ['cursor-agent'] },
   { app: /zcode/i, siblings: ['zcode-cli', 'zcode'] },
   { app: /mimo/i, siblings: ['mimo-api'] },
+  { app: /deepseek/i, siblings: ['deepseek-harness', 'deepseek'], accept: /deepseek/i },
   { app: /chatgpt|^gpt$|codex/i, siblings: ['codex'] },
   { app: /antigravity/i, siblings: ['agy'] },
   { app: /^claude(-app)?$/i, siblings: ['claude-official', 'claude'], accept: /claude|opus|sonnet|fable|haiku/i },

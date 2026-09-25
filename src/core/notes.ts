@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { RelayError } from './errors';
@@ -126,6 +127,71 @@ export function setTask(root: string, text: string, items: string[] = []): TaskD
   if (rest) doc = doc.replace(`${title}\n`, `${title}\n\n${rest}\n`);
   fs.writeFileSync(p, doc);
   return parseTask(doc);
+}
+
+// ---- 任务清单的副本（退回时按它恢复打勾） ----
+
+export const TASK_COPIES_DIR = '.relay/runs/tasks';
+
+/** 存一份现在的任务清单（按内容取名，一样的只存一份），返回编号；没有任务文件返回 undefined。 */
+export function saveTaskCopy(root: string): string | undefined {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(root, TASK_REL), 'utf8');
+  } catch {
+    return undefined;
+  }
+  const id = crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16);
+  const p = path.join(root, TASK_COPIES_DIR, `${id}.md`);
+  try {
+    if (!fs.existsSync(p)) {
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, raw);
+    }
+  } catch {
+    return undefined;
+  }
+  return id;
+}
+
+export function readTaskCopy(root: string, id: string | undefined): string | null {
+  if (!id || !/^[0-9a-f]{8,40}$/.test(id)) return null;
+  try {
+    return fs.readFileSync(path.join(root, TASK_COPIES_DIR, `${id}.md`), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把任务清单的打勾改回某个时候（old）的样子：那时就有的步骤按那时打没打勾；那时还没有的步骤（后来加的）取消打勾。
+ * 标题、约定、后来改过的字都不动，只动勾。返回取消了哪些、重新勾上了哪些。
+ */
+export function restoreTaskChecks(root: string, oldRaw: string): { unchecked: string[]; checked: string[] } {
+  const p = path.join(root, TASK_REL);
+  let raw = '';
+  try {
+    raw = fs.readFileSync(p, 'utf8');
+  } catch {
+    return { unchecked: [], checked: [] };
+  }
+  const was = new Map(parseTask(oldRaw.replace(/\r/g, '')).items.map((i) => [i.text, i.done]));
+  const crlf = raw.includes('\r\n');
+  const lines = raw.replace(/\r/g, '').split('\n');
+  const sec = progressLines(lines);
+  const unchecked: string[] = [];
+  const checked: string[] = [];
+  for (const at of sec?.items ?? []) {
+    lines[at] = lines[at].replace(ITEM_LINE, (m, a: string, mark: string, b: string, text: string) => {
+      const done = mark !== ' ';
+      const want = was.get(text.trim()) ?? false;
+      if (done === want) return m;
+      (want ? checked : unchecked).push(text.trim());
+      return `${a}${want ? 'x' : ' '}${b}${text}`;
+    });
+  }
+  if (unchecked.length || checked.length) fs.writeFileSync(p, lines.join(crlf ? '\r\n' : '\n'));
+  return { unchecked, checked };
 }
 
 /** 存档里旧任务的标题（按存档的先后）。 */
@@ -403,12 +469,15 @@ export function reviewDiffFileFor(stintId: number): string {
   return `${REVIEW_DIR}/第${stintId}棒.diff`;
 }
 
+/** 「结论」一行只写这几种之一（接力台按它判断这一棒算不算复核过）。 */
+export const VERDICT_CHOICES = ['没问题', '有问题，已修好', '改坏了，已退回', '有问题，还没修', '证据不足'] as const;
+
 export function reviewTemplate(targetTitle: string): string {
   return [
     `# 复核：${targetTitle}`,
     '',
     '- 复核人：（你的工具和模型）',
-    '- 结论：（没问题 / 有问题，已修好 / 改坏了，已退回 / 有问题，还没修）',
+    `- 结论：（${VERDICT_CHOICES.join(' / ')}）`,
     '',
     '## 它说的和实际对不对得上',
     '',
@@ -421,14 +490,72 @@ export function reviewTemplate(targetTitle: string): string {
   ].join('\n');
 }
 
+// ---- 读懂「结论」：一句一句看，后面的话能盖过前面的（「原先没通过，修复后通过」），但「还有问题」永远算数 ----
+
+const REVERTED = /已退回|退回了|已撤销|撤销了|已回滚|回滚了|已还原|还原了|恢复成.{0,12}之前|\breverted\b/i;
+/** 否定 + 修好 / 通过 / 完成：「没修好」「尚未修好」「未通过」「没跑通」。 */
+const NEG_DONE = /(?:没有?|未|尚未|还没有?|还未|并未|并没有?|不能|无法)(?:能|有)?(?:修|改好|改对|处理好|解决|通过|跑通|完成|做完|搞定)|\bnot (?:yet )?(?:fixed|resolved|passing|passed|done)\b/i;
+/** 明摆着的失败。 */
+const FAILED = /失败|报错|跑不通|跑不起来|不通过|挂了|崩溃|崩了|编译不过|不能用|用不了|\bfail(?:ed|s|ing|ure)?\b|\bbroken\b/i;
+/** 没问题一类的说法：先拿掉，免得「没问题」里的「问题」被当成有问题。 */
+const OK_PHRASE = /没有?(?:发现)?(?:任何)?问题|无问题|未发现(?:任何)?问题|不存在问题|问题都(?:已经?)?解决了?|问题[:：]\s*(?:无|没有)|(?:0|零)\s*个?问题/g;
+/** 只做了一部分、推到以后。 */
+const PARTIAL = /部分|一半|大多数?|剩下|其余|其[他它].{0,6}(?:没|未)|还有.{0,8}(?:问题|没|未|失败|错|bug)|仍然?有|依然有|依旧有|待修|待处理|遗留|留给|下一棒(?:再)?(?:修|改|处理|补|做)|之后再|以后再|回头再|\btodo\b|\bpartial(?:ly)?\b/i;
+/** 没有真的验证过：没跑测试、「应该没问题」、证据不足。 */
+const UNVERIFIED = /(?:没有?|未|并未|还没有?)(?:实际)?(?:运行|跑(?!出)|执行|验证|测试|测(?!出))|无法验证|没法验证|没办法验证|证据不足|依据不足|没有证据|不确定|说不准|应该|可能|大概|估计|似乎|好像|看起来|看上去|理论上|按理|\bnot (?:yet )?(?:run|tested|verified)\b|\buntested\b|\bunverified\b|\bprobably\b|\bshould be\b/i;
+const FIXED = /已修|修好|修复|改好|改对|已改正|改正了|已解决|解决了|处理好|已处理|补上|补好|已补|\bfixed\b|\bresolved\b/i;
+const PROBLEM = /问题|不对|不一致|对不上|错误|错了|改坏|有误|缺陷|漏洞|漏了|少了|缺了|\bbugs?\b|\bwrong\b|\bissues?\b/i;
+const OK = /通过|正确|没错|无误|可以继续|属实|对得上|一致|符合|完成|做完|可用|能用|\bok\b|\blgtm\b|\bpass(?:ed|es)?\b|\bcorrect\b/i;
+/** 后一句在说「现在」：「测试没通过，现在通过了」。 */
+const LATER = /现在|已经|重新|再次|再跑|修复后|修好后|改好后|改完后|之后|最终|最后|\bnow\b/i;
+
+type ClauseVerdict = Verdict | 'neutral';
+
+function clauseVerdict(raw: string): ClauseVerdict {
+  const c = raw.trim();
+  if (!c) return 'neutral';
+  if (REVERTED.test(c)) return 'reverted';
+  if (NEG_DONE.test(c) || FAILED.test(c)) return 'problem';
+  const okPhrase = c.replace(OK_PHRASE, '') !== c;
+  const rest = c.replace(OK_PHRASE, ' ');
+  if (PARTIAL.test(rest)) return 'problem';
+  if (UNVERIFIED.test(c)) return 'insufficient';
+  if (FIXED.test(rest)) return 'fixed';
+  if (PROBLEM.test(rest)) return 'problem';
+  if (okPhrase || OK.test(rest)) return 'ok';
+  return 'neutral';
+}
+
+/**
+ * 「结论」一行写的是哪种。照模板写的五种一定认得；自己组织的话按句子一句一句判断：
+ * - 还有问题、没修好、没通过、失败、只做了一部分、推给下一棒 → 有问题（后面再说「没问题」也盖不过，除非说的是「现在 / 修复后」）；
+ * - 没跑测试、「应该没问题」 → 证据不足；
+ * - 先说有问题、后说已修好 / 修复后通过 → 已修好；改坏的已经退回 → 已退回。
+ * 模板里的占位（带斜杠的选项）不算写了。
+ */
 export function verdictOf(text: string | undefined): Verdict {
   if (!text) return 'unknown';
-  const t = text.replace(/[（(][^）)]*[）)]/g, '');
-  if (/已退回|退回了|撤销了|回滚/.test(t)) return 'reverted';
-  if (/已修|修好|改好|修复了|已改正|已经修/.test(t)) return 'fixed';
-  if (/有问题|不对|错误|没修|未修|需要返工|要改|没通过|不通过/.test(t)) return 'problem';
-  if (/没问题|无问题|通过|正确|可以继续|没发现问题|属实/.test(t)) return 'ok';
-  return 'unknown';
+  const t = text.trim();
+  if (!t || /^[（(][^）)]*[/／][^）)]*[）)]$/.test(t)) return 'unknown';
+  const clauses = t.split(/[，,；;。！!？?\n（）()]|(?<=\S)\.(?:\s|$)/);
+  let state: Verdict | null = null;
+  for (const cl of clauses) {
+    const v = clauseVerdict(cl);
+    if (v === 'neutral') continue;
+    if (state === null) {
+      state = v;
+      continue;
+    }
+    if (v === 'problem') state = 'problem';
+    else if (v === 'insufficient') state = state === 'problem' ? 'problem' : 'insufficient';
+    else if (v === 'reverted') state = 'reverted';
+    else if (v === 'fixed') state = state === 'insufficient' ? 'insufficient' : 'fixed';
+    else if (v === 'ok') {
+      if (state === 'problem') state = LATER.test(cl) ? 'fixed' : 'problem';
+      else if (state !== 'insufficient' && state !== 'fixed' && state !== 'reverted') state = 'ok';
+    }
+  }
+  return state ?? 'unknown';
 }
 
 export function parseReview(raw: string, file = '', mtimeMs = 0): ReviewDoc {

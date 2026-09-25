@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadLedger, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
+import { acceptance, pendingWhy, type Acceptance } from '../core/acceptance';
+import { loadAutoSettings } from '../core/auto-settings';
+import { countedReviews, loadLedger, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
 import { archivedTaskTitles, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
 import { protocolState } from '../core/protocol';
 import { untilText } from '../core/quota';
 import { goLogTail, loadGoState, type GoState } from './go';
-import { projectConfig, relayBusy } from './track';
+import { projectConfigSafe, relayBusy } from './track';
 
 /**
  * 给网页和命令行看的「这个项目现在怎么样」。只读，不改任何东西。
@@ -24,12 +26,20 @@ export interface StintView {
   endedAt?: string;
   summary: string;
   facts?: Stint['facts'];
+  factsError?: string;
   gate?: Stint['gate'];
   protectedHits?: string[];
   review: Stint['review'];
   /** 给人看的复核情况：「待复核」「复核：没问题（Codex）」「不用复核」。 */
   reviewText: string;
-  reviews: { by: number; byLabel: string; file: string; verdict: string; verdictWord: string; weak?: boolean }[];
+  /** 复核结论要人注意（有问题、证据不足、没写清楚）。 */
+  reviewWarn?: boolean;
+  reviews: { by: number; byLabel: string; file: string; verdict: string; verdictWord: string; weak?: boolean; void?: boolean }[];
+  /** 终审棒：结论。 */
+  verdict?: string;
+  verdictWord?: string;
+  reviewFile?: string;
+  stopConfirmed?: boolean;
   handoff?: string;
   ghost?: boolean;
   note?: string;
@@ -63,30 +73,37 @@ export interface ProjectView {
   go: (GoState & { logTail: string }) | null;
   pending: StintView[];
   stints: StintView[];
-  lastRollback: { ts: string; label: string; dropped: number[]; undone: boolean } | null;
-  config: { gate: string; protectedPaths: string[] };
+  lastRollback: { ts: string; label: string; dropped: number[]; undone: boolean; task?: { unchecked: string[]; missing?: boolean } } | null;
+  /** error = 配置文件坏了（这时检查和不许改的文件都没法核对）。 */
+  config: { gate: string; protectedPaths: string[]; error?: string };
+  /** 验收：能不能算做完了（网页顶部、命令行都看它）。 */
+  acceptance: Acceptance;
   /** 按任务分的对话（旧的在前）。 */
   threads: ThreadView[];
 }
 
-function toView(s: Stint): StintView {
-  const last = s.reviews?.at(-1);
-  const counted = [...(s.reviews ?? [])].reverse().find((m) => !m.weak);
+function toView(s: Stint, rolledBack: ReadonlySet<number>): StintView {
+  const counted = countedReviews(s, rolledBack).at(-1);
+  const warn = s.review === 'needed' && s.status !== 'working' && !s.rolledBack && (!!counted || !!s.factsError);
   const reviewText = s.rolledBack
     ? '已退回（作废）'
     : s.review === 'needed'
       ? s.status === 'working'
         ? '进行中'
-        : last?.weak
-          ? `待复核（${last.byLabel} 复核过，但弱模型的复核不算数）`
-          : '待复核'
+        : `待复核${pendingWhy(s, rolledBack) ? ` · ${pendingWhy(s, rolledBack)}` : ''}`
       : s.review === 'done' && counted
         ? `复核：${verdictWord(counted.verdict)}（${counted.byLabel}）`
-        : s.kind === 'work'
-          ? s.facts?.files
-            ? '强模型交接，不用复核'
-            : '没改文件'
-          : '';
+        : s.kind === 'final'
+          ? s.verdict
+            ? `终审：${verdictWord(s.verdict)}`
+            : ''
+          : s.kind === 'work'
+            ? s.factsError
+              ? '读不到改动'
+              : s.facts?.files
+                ? '强模型交接，不用复核'
+                : '没改文件'
+            : '';
   return {
     id: s.id,
     title: stintTitle(s),
@@ -100,11 +117,16 @@ function toView(s: Stint): StintView {
     ...(s.endedAt ? { endedAt: s.endedAt } : {}),
     summary: s.summary ?? '',
     ...(s.facts ? { facts: s.facts } : {}),
+    ...(s.factsError ? { factsError: s.factsError } : {}),
     ...(s.gate ? { gate: s.gate } : {}),
     ...(s.protectedHits?.length ? { protectedHits: s.protectedHits } : {}),
     review: s.review,
     reviewText,
-    reviews: (s.reviews ?? []).map((r) => ({ ...r, verdictWord: verdictWord(r.verdict) })),
+    ...(warn ? { reviewWarn: true } : {}),
+    reviews: (s.reviews ?? []).map((r) => ({ ...r, verdictWord: verdictWord(r.verdict), ...(r.by && rolledBack.has(r.by) ? { void: true } : {}) })),
+    ...(s.verdict ? { verdict: s.verdict, verdictWord: verdictWord(s.verdict) } : {}),
+    ...(s.reviewFile ? { reviewFile: s.reviewFile } : {}),
+    ...(s.stopConfirmed ? { stopConfirmed: true } : {}),
     ...(s.handoff ? { handoff: s.handoff } : {}),
     ...(s.ghost ? { ghost: true } : {}),
     ...(s.note ? { note: s.note } : {}),
@@ -169,7 +191,7 @@ export function projectView(root: string): ProjectView {
   const v = loadLedger(root);
   const t = readTask(root);
   const p = taskProgress(t);
-  const cfg = projectConfig(root);
+  const { cfg, error: configError } = projectConfigSafe(root);
   const go = loadGoState(root);
   const busy = relayBusy(v);
   let now: ProjectView['now'] = { kind: 'idle', text: '空闲：在任何 AI 工具里打开这个文件夹说「接着做」，或者在这里派人。' };
@@ -180,8 +202,15 @@ export function projectView(root: string): ProjectView {
   } else if (v.open) {
     now = { kind: 'native', text: `第 ${v.open.id} 棒进行中：${v.open.who.label === '不知道是谁' ? '有 AI 在改文件（还没写交接，不知道是谁）' : `${v.open.who.label} 在做`}`, stint: v.open.id, since: v.open.startedAt };
   }
-  const views = v.stints.map(toView);
+  const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
+  const views = v.stints.map((x) => toView(x, dropped));
   const lr = v.lastRollback;
+  let finalRequired = true;
+  try {
+    finalRequired = loadAutoSettings().finalReview;
+  } catch {
+    /* 全自动的设置坏了：按要终审算 */
+  }
   const undone = !!lr && v.events.some((e) => e.type === 'rollback' && e.restored?.length && new Date(e.ts).getTime() > new Date(lr.ts).getTime());
   return {
     root,
@@ -193,8 +222,9 @@ export function projectView(root: string): ProjectView {
     go: go ? { ...go, logTail: goLogTail(root, go) } : null,
     pending: views.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack),
     stints: [...views].reverse(),
-    lastRollback: lr && !lr.restored ? { ts: lr.ts, label: lr.label, dropped: lr.dropped, undone } : null,
-    config: { gate: cfg.gate.command, protectedPaths: cfg.protectedPaths },
+    lastRollback: lr && !lr.restored ? { ts: lr.ts, label: lr.label, dropped: lr.dropped, undone, ...(lr.task ? { task: { unchecked: lr.task.unchecked, ...(lr.task.missing ? { missing: true } : {}) } } : {}) } : null,
+    config: { gate: cfg.gate.command, protectedPaths: cfg.protectedPaths, ...(configError ? { error: configError } : {}) },
+    acceptance: acceptance({ ledger: v, task: t, gateCommand: cfg.gate.command.trim(), ...(configError ? { configError } : {}), finalRequired }),
     threads: threadsOf(root, v, t),
   };
 }
@@ -205,8 +235,14 @@ export function stintDetail(root: string, id: number): { stint: StintView; hando
   const s = v.stints.find((x) => x.id === id);
   if (!s) return null;
   const h = s.handoff ? readHandoff(root, s.handoff) : null;
+  const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
   const reviews = (s.reviews ?? []).map((r) => ({ file: r.file, text: readReview(root, r.file)?.raw ?? '', by: r.byLabel, ...(r.weak ? { weak: true } : {}) }));
-  return { stint: toView(s), handoff: h?.raw ?? null, reviews };
+  // 终审：它写的结论也给出来。
+  if (s.kind === 'final' && s.reviewFile) {
+    const r = readReview(root, s.reviewFile);
+    if (r) reviews.push({ file: s.reviewFile, text: r.raw, by: s.who.label });
+  }
+  return { stint: toView(s, dropped), handoff: h?.raw ?? null, reviews };
 }
 
 /** 调度日志（相对项目根目录的 .relay/runs/…）。 */
@@ -226,6 +262,8 @@ export function statusLines(root: string): string[] {
   if (!pv.init) return ['这个文件夹还没接入接力台。执行 relay init，或者在网页里点「接入」。'];
   const out: string[] = [];
   out.push(`任务：${pv.task.empty ? '（还没写）' : pv.task.title}${pv.task.total ? `（${pv.task.done}/${pv.task.total}${pv.task.complete ? '，全部打勾' : ''}）` : ''}`);
+  out.push(`验收：${pv.acceptance.headline}`);
+  if (pv.config.error) out.push(`配置文件坏了：${pv.config.error}`);
   out.push(`现在：${pv.now.text}`);
   if (pv.go?.waitingUntil) out.push(`等额度：${untilText(pv.go.waitingUntil)}`);
   if (pv.pending.length) out.push(`待复核：${pv.pending.map((s) => `第 ${s.id} 棒（${s.who.label}）`).join('、')}`);

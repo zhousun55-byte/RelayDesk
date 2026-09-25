@@ -137,7 +137,7 @@ function fakeScript(name: 'claude' | 'codex'): string {
     `  R=$(sed -n 's/.*结论写到 ${BT}\\([^${BT}]*\\)${BT}.*/\\1/p' "$P" | head -1)`,
     // 真的 Codex 终审时标题写成了「复核：第 5 棒终审」（5 是终审自己这一棒）。
     `  SELF=$(echo "$H" | sed -n 's/.*第\\([0-9]*\\)棒.*/\\1/p')`,
-    `  [ -n "$R" ] && printf '# 复核：第 %s 棒终审\\n\\n- 复核人：%s\\n- 结论：没问题\\n' "$SELF" "$WHO" > "$R"`,
+    `  [ -n "$R" ] && printf '# 复核：第 %s 棒终审\\n\\n- 复核人：%s\\n- 结论：%s\\n' "$SELF" "$WHO" "\${FAKE_FINAL_VERDICT:-没问题}" > "$R"`,
     `  [ -n "$H" ] && printf '# 交接：%s\\n\\n- 状态：全部完成\\n\\n## 做了什么\\n\\n- 终审过了，整件事没问题\\n' "$WHO" > "$H"`,
     '  say "终审完了"',
     '  exit 0',
@@ -157,6 +157,66 @@ function fakeScript(name: 'claude' | 'codex'): string {
     'say "做完一步了"',
     '',
   ].join('\n');
+}
+
+/**
+ * 假的 DeepSeek Harness 无界面模式（dsh --profile headless --patch 文件 --json -）：
+ * 任务从标准输入读，按行吐 JSON 事件（session / tool_call / text / final）；干活方式和别的假工具一样。
+ * FAKE_DSH_MODE=quota 时报「dsh: ACCOUNT_QUOTA」。调用参数、DSH_PERMISSION_MODE、带来的覆盖层都记下来。
+ */
+function fakeDsh(): string {
+  const BT = '`';
+  return [
+    '#!/bin/sh',
+    '[ -n "$FAKE_LOG" ] && echo "dsh $* PERM=$DSH_PERMISSION_MODE" >> "$FAKE_LOG"',
+    '[ "$1" = --version ] && { echo "0.1.7-rc.2"; exit 0; }',
+    'P="$FAKE_DIR/prompt-dsh-$$.txt"',
+    'cat > "$P"',
+    'prev=""; for a in "$@"; do [ "$prev" = "--patch" ] && cp "$a" "$FAKE_DIR/dsh-patch-seen.yml"; prev="$a"; done',
+    `echo '{"type":"session","id":"session-fake"}'`,
+    'if [ "$FAKE_DSH_MODE" = quota ]; then',
+    `  echo '{"type":"error","code":"ACCOUNT_QUOTA","message":"账号余额不足"}'`,
+    '  echo "dsh: ACCOUNT_QUOTA: 账号余额不足" >&2',
+    '  exit 1',
+    'fi',
+    `H=$(sed -n 's/.*交接写在 ${BT}\\([^${BT}]*\\)${BT}.*/\\1/p' "$P" | head -1)`,
+    'echo "dsh 干了一步" >> work.txt',
+    'T=.relay/任务.md',
+    `[ -f "$T" ] && awk '!d && /^- \\[ \\] / {sub(/- \\[ \\] /, "- [x] "); d=1} {print}' "$T" > "$T.tmp" && mv "$T.tmp" "$T"`,
+    `[ -n "$H" ] && mkdir -p "$(dirname "$H")" && printf '# 交接：DeepSeek Harness · deepseek-flash\\n\\n- 状态：已交接\\n\\n## 做了什么\\n\\n- 在 work.txt 里加了一行\\n' > "$H"`,
+    `echo '{"type":"tool_call","name":"write_file","args":{"path":"work.txt"}}'`,
+    `echo '{"type":"text","text":"做完一步了"}'`,
+    `echo '{"type":"final","text":"做完一步了"}'`,
+    '',
+  ].join('\n');
+}
+
+/** 装上假的 DeepSeek Harness：dsh 命令 + ~/.dsh 里桌面版的账号设置（DeepSeek 账号、deepseek-flash）。 */
+export function withFakeDsh(s: Sandbox): void {
+  const bin = path.join(s.base, 'fakebin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'dsh'), fakeDsh());
+  fs.chmodSync(path.join(bin, 'dsh'), 0o755);
+  const prof = path.join(s.home, '.dsh', 'profiles', 'desktop');
+  fs.mkdirSync(prof, { recursive: true });
+  fs.writeFileSync(path.join(s.home, '.dsh', '.credentials.yaml'), '# 假的\n');
+  fs.writeFileSync(
+    path.join(prof, 'cordis.patch.yml'),
+    ['# Your patch layer', '- id: agent-default-model', '  name: "@deepseek-ai/dsh-agent-default-model"', '  config:', '    provider: deepseek-account', '    model: deepseek-flash', '    reasoningEffort: high', '- id: ui-chat', '  config:', '    transcriptView: standard', ''].join('\n')
+  );
+}
+
+/**
+ * 装上假的「Claude 桌面版自带的 Claude Code」：一个新版本目录，里面的 claude 记一笔（带没带 DISABLE_AUTOUPDATER）再转给假 claude。
+ */
+export function withFakeDesktopClaude(s: Sandbox, version = '2.1.281'): string {
+  const dir = path.join(s.base, 'claude-desktop');
+  const exe = path.join(dir, version, 'claude.app', 'Contents', 'MacOS', 'claude');
+  fs.mkdirSync(path.dirname(exe), { recursive: true });
+  fs.writeFileSync(exe, `#!/bin/sh\n[ -n "$FAKE_LOG" ] && [ "$1" != --version ] && echo "desktop-claude DISABLE_AUTOUPDATER=$DISABLE_AUTOUPDATER $*" >> "$FAKE_LOG"\n[ "$1" = --version ] && { echo "${version} (Claude Code)"; exit 0; }\nexec "${path.join(s.base, 'fakebin', 'claude')}" "$@"\n`);
+  fs.chmodSync(exe, 0o755);
+  s.env.RELAY_CLAUDE_DESKTOP_DIR = dir;
+  return exe;
 }
 
 /**

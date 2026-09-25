@@ -1234,6 +1234,79 @@ button.title:hover {
   color: var(--ink);
 }
 
+/* 验收：通过 = 实心；没过 = 描边；没法判断 = 虚线。只用黑白灰，靠文字和形状分开。 */
+.accept {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  margin-left: 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  flex: none;
+  white-space: nowrap;
+}
+
+.accept .i {
+  width: 13px;
+  height: 13px;
+}
+
+.accept .num {
+  font-weight: 700;
+  padding-left: 5px;
+  border-left: 1px solid currentColor;
+}
+
+.accept.accepted {
+  background: var(--solid);
+  color: var(--on-solid);
+}
+
+.accept.blocked {
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
+.accept.unknown {
+  color: var(--ink);
+  outline: 1.5px dashed var(--ink-2);
+  outline-offset: -1.5px;
+}
+
+.accept:hover {
+  filter: brightness(0.92);
+}
+
+.accept-list ul {
+  margin: 10px 0;
+  padding-left: 18px;
+}
+
+.accept-list li {
+  margin: 4px 0;
+}
+
+/* 复核结论要人注意（有问题、证据不足、读不到改动）：实心标签里加警示号，文字写原因。 */
+.chip.warn {
+  max-width: 260px;
+}
+
+.chip.warn .i {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.cfg-bad .ell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .ring {
   --p: 0;
   width: 16px;

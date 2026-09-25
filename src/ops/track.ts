@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildBrief } from '../core/brief';
+import { loadAutoSettings } from '../core/auto-settings';
 import { claudeWorkIn, claudeWriterOf } from '../core/claude-log';
 import { defaultRelayConfig, loadRelayConfig } from '../core/config';
+import { errorMessage, RelayError } from '../core/errors';
 import { runGate } from '../core/gate';
-import { appendLedger, loadLedger, nextStintId, saveStint, type Facts, type LedgerView, type ReviewMark, type Stint, type Who } from '../core/ledger';
+import { appendLedger, countedReviews, loadLedger, nextStintId, reviewStateOf, saveStint, type Facts, type LedgerView, type ReviewMark, type Stint, type Who } from '../core/ledger';
 import { pidAlive } from '../core/proc';
 import { allMembers, type MemberInfo } from '../core/members';
 import {
@@ -19,6 +21,7 @@ import {
   readTask,
   reviewDiffFileFor,
   reviewFilled,
+  saveTaskCopy,
   type HandoffDoc,
 } from '../core/notes';
 import { matchProtected } from '../core/protected';
@@ -44,12 +47,40 @@ export function quietMs(): number {
   return Number.isFinite(v) && v > 0 ? v : QUIET_MS_DEFAULT;
 }
 
+/**
+ * 项目配置。还没有配置文件（没接入）才用默认；配置文件坏了直接报错——
+ * 不能悄悄当成「没配检查、没有不许改的文件」，那等于把约束全去掉了。
+ */
 export function projectConfig(root: string): RelayConfig {
   try {
     return loadRelayConfig(root);
-  } catch {
-    return defaultRelayConfig();
+  } catch (e) {
+    if (e instanceof RelayError && e.code === 'no-config') return defaultRelayConfig();
+    throw e;
   }
+}
+
+/** 读配置，坏了不抛：记账、接力本、网页用它（配置坏了也要能看，但要把原因说出来）。 */
+export function projectConfigSafe(root: string): { cfg: RelayConfig; error?: string } {
+  try {
+    return { cfg: projectConfig(root) };
+  } catch (e) {
+    return { cfg: defaultRelayConfig(), error: errorMessage(e) };
+  }
+}
+
+/** 算一棒的改动；快照仓库出错时不抛，返回原因（这时改没改都不知道，不能当成没改）。 */
+export function factsSafe(root: string, from: string, to: string): { facts?: Facts; error?: string } {
+  try {
+    return { facts: factsOf(root, from, to) };
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
+}
+
+function joinNote(...parts: (string | undefined)[]): string | undefined {
+  const t = parts.filter(Boolean).join(' ');
+  return t || undefined;
 }
 
 export function factsOf(root: string, from: string, to: string): Facts {
@@ -155,12 +186,20 @@ export function writeReviewDiff(root: string, s: Stint): void {
   const rel = reviewDiffFileFor(s.id);
   const abs = path.join(root, rel);
   const MAX = 400_000;
-  let diff = snapDiff(root, s.from, s.to);
+  let diff = '';
+  let line: string;
+  try {
+    diff = snapDiff(root, s.from, s.to);
+    line = changeLine(snapChanges(root, s.from, s.to));
+  } catch (e) {
+    // 读不到改动：写明原因，复核的人自己用命令看（或者先修快照仓库）。
+    line = `读不到改动：${errorMessage(e)}`;
+  }
   const cut = diff.length > MAX;
   if (cut) diff = diff.slice(0, MAX);
   const head = [
     `# 第 ${s.id} 棒（${s.who.label}）的真实改动`,
-    `# ${changeLine(snapChanges(root, s.from, s.to))}`,
+    `# ${line}`,
     `# 快照 ${s.from.slice(0, 10)} → ${s.to.slice(0, 10)}`,
     cut ? `# 太长了，只放了前面一部分。完整的：git --git-dir=.relay/snapshots --work-tree=. diff ${s.from.slice(0, 10)} ${s.to.slice(0, 10)}` : '',
     '',
@@ -207,8 +246,12 @@ export interface CloseInput {
   members?: MemberInfo[];
 }
 
-/** 结束一棒：算事实、没交接就代写、定要不要复核、准备复核材料。返回结束后的样子（已记账）。 */
-export function closeStint(root: string, s: Stint, input: CloseInput, cfg = projectConfig(root)): Stint {
+/**
+ * 结束一棒：算事实、没交接就代写、定要不要复核、准备复核材料。返回结束后的样子（已记账）。
+ * cfg 不给就现读；配置文件坏了照样结束这一棒，但记下「没法核对不许改的文件」。
+ */
+export function closeStint(root: string, s: Stint, input: CloseInput, cfg?: RelayConfig): Stint {
+  const conf = cfg ? { cfg } : projectConfigSafe(root);
   const now = input.now ?? new Date();
   const out: Stint = { ...s, to: input.to, endedAt: nowIso(now), status: input.status };
   delete out.pid;
@@ -216,47 +259,79 @@ export function closeStint(root: string, s: Stint, input: CloseInput, cfg = proj
   if (out.via === 'native' && out.kind === 'work') {
     const cc = crossCheckClaude(root, out, input.members ?? allMembers(), out.endedAt!);
     if (cc?.who) out.who = cc.who;
-    if (cc?.note) out.note = [out.note, cc.note].filter(Boolean).join(' ');
+    if (cc?.note) out.note = joinNote(out.note, cc.note);
     forceReview = !!cc?.review;
   }
-  out.facts = factsOf(root, s.from, input.to);
-  const hits = matchProtected(out.facts.paths, cfg.protectedPaths);
+  const fr = factsSafe(root, s.from, input.to);
+  if (fr.facts) {
+    out.facts = fr.facts;
+    delete out.factsError;
+  } else {
+    // 读不到改动：不能当成「没改文件」（那样弱模型的活就不用复核了）。
+    delete out.facts;
+    out.factsError = fr.error;
+  }
+  const hits = out.facts ? matchProtected(out.facts.paths, conf.cfg.protectedPaths) : [];
   if (hits.length) out.protectedHits = hits;
   else delete out.protectedHits;
   if (input.note) out.note = input.note;
   if (input.quotaUntil) out.quotaUntil = input.quotaUntil;
+  if (out.factsError) out.note = joinNote(out.note, `读不到这一棒的改动（${out.factsError}），按要复核算。`);
+  if (conf.error) out.note = joinNote(out.note, `配置文件坏了，没法核对不许改的文件：${conf.error}`);
   const h = input.handoff ?? (out.handoff && !out.ghost ? readHandoff(root, out.handoff) : null);
   const real = !!h && !out.ghost && handoffFilled(h);
+  const changed = out.facts ? out.facts.files > 0 : true;
   if (real && h) {
     out.handoff = h.file;
     out.summary = h.summary || out.summary;
-  } else if (!out.ghost && (out.facts.files > 0 || input.lastWords?.trim())) {
-    if (h) out.note = [out.note, `它建了交接文件但没写内容：${h.file}`].filter(Boolean).join(' ');
+  } else if (!out.ghost && (changed || input.lastWords?.trim())) {
+    if (h) out.note = joinNote(out.note, `它建了交接文件但没写内容：${h.file}`);
     out.handoff = writeGhostHandoff(root, out, input.lastWords);
     out.ghost = true;
-    out.summary = out.facts.files ? `没留交接：${changeLine(snapChanges(root, s.from, input.to))}` : '没留交接，也没改文件';
+    out.summary = !out.facts ? '没留交接，改动也读不到' : out.facts.files ? `没留交接：${out.facts.files} 个文件，+${out.facts.added} −${out.facts.removed}` : '没留交接，也没改文件';
   }
   if (out.kind !== 'work') out.review = 'skip';
-  else if (out.facts.files === 0) out.review = 'skip';
+  else if (out.facts && out.facts.files === 0) out.review = 'skip';
   else out.review = forceReview || needsReview(out.who, real) ? 'needed' : 'skip';
   if (out.review === 'needed') writeReviewDiff(root, out);
+  const task = saveTaskCopy(root);
+  if (task) out.taskAfter = task;
   saveStint(root, out);
   return out;
 }
 
-/** 跑检查命令，把结果记到这一棒上（没配检查命令就什么都不做）。 */
-export async function gateStint(root: string, id: number, cfg = projectConfig(root)): Promise<void> {
-  if (!cfg.gate.command.trim()) return;
-  const r = await runGate(root, cfg);
-  const v = loadLedger(root);
-  const s = v.stints.find((x) => x.id === id);
-  if (!s) return;
-  saveStint(root, { ...s, gate: { status: r.status, command: r.command, ...(r.status === 'fail' ? { detail: r.detail.slice(-1500) } : {}) } });
+/**
+ * 跑检查命令，把结果记到这一棒上（没配检查命令就什么都不做）。
+ * 配置文件坏了、检查根本跑不起来：记成「没跑成」，不能当成没配检查。
+ */
+export async function gateStint(root: string, id: number, cfg?: RelayConfig): Promise<void> {
+  const record = (gate: Stint['gate']) => {
+    const s = loadLedger(root).stints.find((x) => x.id === id);
+    if (s) saveStint(root, { ...s, gate });
+  };
+  let conf: RelayConfig;
+  try {
+    conf = cfg ?? projectConfig(root);
+  } catch (e) {
+    record({ status: 'error', command: '', detail: `配置文件坏了，检查没法跑：${errorMessage(e)}` });
+    return;
+  }
+  if (!conf.gate.command.trim()) return;
+  try {
+    const r = await runGate(root, conf);
+    record({ status: r.status, command: r.command, ...(r.status === 'fail' ? { detail: r.detail.slice(-1500) } : {}) });
+  } catch (e) {
+    record({ status: 'error', command: conf.gate.command, detail: `检查没跑起来：${errorMessage(e)}` });
+  }
 }
 
-/** 看复核文件：写好了的，把它复核的那几棒标成「复核过了」。by = 做复核的那一棒。 */
+/**
+ * 看复核文件：写好了的，记到它复核的那几棒上。by = 做复核的那一棒。
+ * 算不算「复核过了」看结论：强模型写的没问题 / 已修好 / 已退回才算；有问题、证据不足、没写清楚都还是待复核。
+ */
 export function applyReviews(root: string, by: Stint | null, members: MemberInfo[] = allMembers()): number[] {
   const v = loadLedger(root);
+  const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
   const marked: number[] = [];
   for (const f of listReviewFiles(root)) {
     const r = readReview(root, f.rel);
@@ -283,7 +358,9 @@ export function applyReviews(root: string, by: Stint | null, members: MemberInfo
         ...(judged.byLog ? { byLog: true } : {}),
       };
       const reviews = [...(s.reviews ?? []).filter((m) => m.file !== r.file), mark];
-      saveStint(root, { ...s, review: reviews.some((m) => !m.weak) ? 'done' : 'needed', reviews });
+      // 原来不用复核（强模型做的）又没有算数的复核：还是不用；有算数的复核就按结论算。
+      const review = s.review === 'skip' && !countedReviews({ reviews }, dropped).length ? 'skip' : reviewStateOf({ ...s, review: 'needed', reviews }, dropped);
+      saveStint(root, { ...s, review, reviews });
       marked.push(id);
     }
   }
@@ -319,7 +396,13 @@ function relayRunning(v: LedgerView): { label: string; since: string } | null {
 export function refreshBrief(root: string, now = new Date()): boolean {
   const v = loadLedger(root);
   if (!v.init) return false;
-  const cfg = projectConfig(root);
+  const { cfg, error: configError } = projectConfigSafe(root);
+  let finalRequired = true;
+  try {
+    finalRequired = loadAutoSettings().finalReview;
+  } catch {
+    /* 全自动的设置坏了：按要终审算 */
+  }
   const handoffs = new Map<string, HandoffDoc>();
   for (const s of v.stints) {
     if (s.handoff && !handoffs.has(s.handoff)) {
@@ -335,6 +418,8 @@ export function refreshBrief(root: string, now = new Date()): boolean {
     members,
     gateCommand: cfg.gate.command.trim(),
     protectedPaths: cfg.protectedPaths,
+    ...(configError ? { configError } : {}),
+    finalRequired,
     nextId: v.open?.id ?? nextStintId(v),
     now,
     running: relayRunning(v),
@@ -388,12 +473,22 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
   const now = opts.now ?? new Date();
   const snap = opts.snapshot === false ? headSnap(root) : takeSnapshot(root, '接力台看到了改动').sha;
   if (!snap) return res;
-  const cfg = projectConfig(root);
   const members = allMembers();
+
+  // 以前读不到改动的棒（快照仓库一时出错）：再读一次，读到了就补上。
+  for (const s of v.stints.filter((x) => x.factsError && x.to && x.status !== 'working')) {
+    const fr = factsSafe(root, s.from, s.to!);
+    if (!fr.facts) continue;
+    const fixed: Stint = { ...s, facts: fr.facts };
+    delete fixed.factsError;
+    saveStint(root, fixed);
+    res.changed = true;
+  }
+  if (res.changed) v = loadLedger(root);
 
   // 接力台调度到一半被关了。
   if (v.open && v.open.via === 'relay') {
-    closeStint(root, v.open, { status: 'stopped', to: snap, note: '接力台中途被关掉了，这一棒没跑完。', now }, cfg);
+    closeStint(root, v.open, { status: 'stopped', to: snap, note: '接力台中途被关掉了，这一棒没跑完。', now });
     res.closed.push(v.open.id);
     res.changed = true;
     v = loadLedger(root);
@@ -414,7 +509,9 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
     let cur: Stint = open;
     let dirty = false;
     if (cur.to !== snap) {
-      cur = { ...cur, to: snap, activeAt: nowIso(now), facts: factsOf(root, cur.from, snap) };
+      const fr = factsSafe(root, cur.from, snap);
+      cur = { ...cur, to: snap, activeAt: nowIso(now), ...(fr.facts ? { facts: fr.facts } : {}), ...(fr.error ? { factsError: fr.error } : {}) };
+      if (fr.facts) delete cur.factsError;
       dirty = true;
     }
     if (!cur.handoff && unlinked.length) {
@@ -425,7 +522,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
     } else if (cur.handoff && unlinked.length) {
       // 另一个 AI 开始写它的交接了：前一棒到此为止。
       const h = readHandoff(root, cur.handoff);
-      closeStint(root, cur, { status: h ? 'handed' : 'unfinished', to: snap, handoff: h, now, members }, cfg);
+      closeStint(root, cur, { status: h ? 'handed' : 'unfinished', to: snap, handoff: h, now, members });
       res.closed.push(cur.id);
       res.changed = true;
       open = null;
@@ -444,7 +541,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
       }
       const end = shouldClose(cur, h);
       if (end) {
-        closeStint(root, cur, { status: end, to: snap, handoff: h, now, members }, cfg);
+        closeStint(root, cur, { status: end, to: snap, handoff: h, now, members });
         res.closed.push(cur.id);
         res.changed = true;
         open = null;
@@ -456,6 +553,9 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
   // 没有进行中的棒：有新改动、或者有新交接，就开一棒。
   if (!open) {
     const base = v.base ?? snap;
+    // 这一棒开始前的任务清单：上一棒结束时存的那份（没有就现存一份）。退回时按它恢复打勾。
+    const lastAfter = [...v.stints].reverse().find((x) => !x.rolledBack && x.taskAfter)?.taskAfter;
+    const taskBefore = lastAfter ?? saveTaskCopy(root);
     if (unlinked.length > 1) {
       // 接力台没开着的时候，好几个 AI 先后写了交接：改动分不清是谁的，都记在最后一棒里，按其中最弱的算。
       const docs = unlinked.map((f) => readHandoff(root, f.rel));
@@ -477,6 +577,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
           status: 'working',
           review: 'needed',
           handoff: f.rel,
+          ...(taskBefore ? { taskBefore } : {}),
           note: last
             ? `接力台没开着的时候，第 ${nextStintId(v)}–${lastId} 棒的改动混在一起了，都记在这一棒里（按其中最弱的算）。`
             : `接力台没开着，这一棒的改动和后面几棒混在一起，记在第 ${lastId} 棒里。`,
@@ -484,7 +585,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
         };
         saveStint(root, s);
         res.opened.push(s.id);
-        closeStint(root, s, { status: h && h.state !== 'working' ? 'handed' : last ? 'unfinished' : 'handed', to: s.to!, handoff: h, now, members }, cfg);
+        closeStint(root, s, { status: h && h.state !== 'working' ? 'handed' : last ? 'unfinished' : 'handed', to: s.to!, handoff: h, now, members });
         res.closed.push(s.id);
       });
       unlinked.length = 0;
@@ -503,7 +604,11 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
         to: snap,
         status: 'working',
         review: 'needed',
-        facts: factsOf(root, base, snap),
+        ...(() => {
+          const fr = factsSafe(root, base, snap);
+          return fr.facts ? { facts: fr.facts } : { factsError: fr.error };
+        })(),
+        ...(taskBefore ? { taskBefore } : {}),
         ...(f ? { handoff: f.rel } : {}),
         ...(h?.summary ? { summary: h.summary } : {}),
       };
@@ -512,7 +617,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
       res.changed = true;
       // 接力台没开着的时候就写好的交接：已经写完了就直接结束。
       if (h && (h.state === 'handed' || h.state === 'finished' || h.state === 'stuck')) {
-        closeStint(root, s, { status: 'handed', to: snap, handoff: h, now, members }, cfg);
+        closeStint(root, s, { status: 'handed', to: snap, handoff: h, now, members });
         res.closed.push(s.id);
       }
     }

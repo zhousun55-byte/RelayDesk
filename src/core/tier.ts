@@ -35,6 +35,7 @@ const TOOL_WORDS: { id: string; re: RegExp; label: string }[] = [
   { id: 'cursor-agent', re: /cursor/i, label: 'Cursor' },
   { id: 'zcode', re: /z\s*code|智谱/i, label: 'ZCode' },
   { id: 'mimo', re: /mimo|小米/i, label: 'MiMo' },
+  { id: 'dsh', re: /deepseek[\s-]*harness|\bdsh\b/i, label: 'DeepSeek Harness' },
   { id: 'gemini', re: /gemini[\s-]*cli/i, label: 'Gemini CLI' },
   { id: 'qwen', re: /qwen[\s-]*code/i, label: 'Qwen Code' },
   { id: 'opencode', re: /opencode/i, label: 'OpenCode' },

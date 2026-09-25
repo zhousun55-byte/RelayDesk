@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { BRIEF_REL, HANDOFF_DIR, TASK_REL } from './notes';
+import { BRIEF_REL, HANDOFF_DIR, TASK_REL, VERDICT_CHOICES } from './notes';
 
 /**
  * 接力规矩：写进项目的 AGENTS.md（Codex、Cursor、ZCode、MiMo、OpenCode……开工都会读）
@@ -20,7 +20,7 @@ export function protocolBlock(): string {
     '这个项目由好几个 AI 轮流接着做（谁的额度用完了就换下一个），「接力台」在旁边记账。你是其中一棒，请照做：',
     '',
     `1. **开工先读 \`${BRIEF_REL}\`**：任务、进度、上一棒留的话、待复核的改动、这一棒要做什么，都在里面。`,
-    '2. **先复核**：接力本里有「待复核」、而你是接力本里列出的强模型时，先按里面的步骤复核，再干新活。',
+    `2. **先复核**：接力本里有「待复核」、而你是接力本里列出的强模型时，先按里面的步骤复核，再干新活。复核结论的「结论」一行只写：${VERDICT_CHOICES.join(' / ')}（没实际验证过就写「证据不足」）。`,
     `3. **开工就建交接文件**：在 \`${HANDOFF_DIR}/\` 新建一个文件（文件名和格式见接力本），开头写清楚你是谁：工具 + 你实际用的模型（比如「Claude Code · claude-opus-5-5」「Claude Code · deepseek-flash」，不要只写 Claude；接力台会对照工具自己的记录）。边做边记，额度随时可能用完，没记下的等于没做。`,
     `4. **进度写进 \`${TASK_REL}\`**：做完一步就打勾；用户直接交给你的新要求，也先写进去再做。`,
     '5. **收工前把交接写完整**：做了什么、没做完的、不确定的地方、怎么验证；状态改成「已交接」（整个任务都做完了写「全部完成」）。',

@@ -237,6 +237,63 @@ function agyParser(): StreamParser {
   };
 }
 
+/**
+ * DeepSeek Harness 无界面模式（dsh --profile headless --json）：一行一个事件，
+ * session 开头、final 结尾，中间 status / text / thinking / tool_call / tool_result；出错时是 error 事件。
+ * 字段名按说明书写得宽一点（text / answer / content 都认）。
+ */
+function dshParser(): StreamParser {
+  let last = '';
+  let final = '';
+  let model: string | undefined;
+  const firstStr = (j: J, keys: string[]) => {
+    for (const k of keys) {
+      const v = j[k];
+      if (typeof v === 'string' && v.trim()) return v;
+    }
+    return '';
+  };
+  return {
+    line(raw) {
+      const j = tryJson(raw);
+      if (!j) return raw.trim() ? [clip(raw)] : [];
+      const type = s(j.type);
+      const m = firstStr(j, ['model']) || firstStr(o(j.data), ['model']);
+      const out: string[] = [];
+      if (m && m !== model) {
+        model = m;
+        out.push(`模型：${m}`);
+      }
+      if (type === 'session') return [...out, `会话：${firstStr(j, ['id', 'sessionId', 'session'])}`];
+      if (type === 'text') {
+        const t = firstStr(j, ['text', 'content', 'delta']);
+        if (t.trim()) {
+          last = t;
+          out.push(`说：${clip(t)}`);
+        }
+        return out;
+      }
+      if (type === 'tool_call') return [...out, `工具 ${firstStr(j, ['name', 'tool', 'toolName']) || '工具'}：${toolSummary(j.args ?? j.input ?? j.arguments ?? j.params)}`];
+      if (type === 'tool_result') {
+        const err = j.isError === true || j.is_error === true || j.error !== undefined;
+        return err ? [...out, `工具出错：${clip(firstStr(j, ['error', 'content', 'text', 'result']) || JSON.stringify(j.error ?? ''), 200)}`] : out;
+      }
+      if (type === 'final') {
+        final = firstStr(j, ['text', 'answer', 'content', 'result', 'final']) || last;
+        return [...out, `结束（${firstStr(j, ['reason']) || '完成'}）`];
+      }
+      if (type === 'error') return [...out, `出错：${clip([firstStr(j, ['code']), firstStr(j, ['message', 'error'])].filter(Boolean).join(' '), 300)}`];
+      if (type === 'status' || type === 'turn_end') {
+        const t = firstStr(j, ['message', 'status', 'reason', 'state']);
+        return t ? [...out, `状态：${clip(t, 160)}`] : out;
+      }
+      return out;
+    },
+    final: () => final || last,
+    model: () => model,
+  };
+}
+
 /** 不认识格式的工具：能解析成 JSON 就挑文字字段，否则原样记下。 */
 function linesParser(): StreamParser {
   let last = '';
@@ -278,6 +335,8 @@ export function makeParser(format: StreamFormat): StreamParser {
       return cursorParser();
     case 'agy':
       return agyParser();
+    case 'dsh':
+      return dshParser();
     default:
       return linesParser();
   }

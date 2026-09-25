@@ -12,7 +12,7 @@ import { relayHome } from '../core/paths';
 import { protocolState } from '../core/protocol';
 import { untilText } from '../core/quota';
 import { agentKind, agentLabel, loadRegistry } from '../core/registry';
-import { projectConfig } from '../ops/track';
+import { projectConfigSafe } from '../ops/track';
 import { findRoot } from './relay';
 
 export interface DoctorLine {
@@ -82,8 +82,9 @@ export function doctor(dir: string): DoctorLine[] {
       const st = protocolState(root);
       if (st === 'ok') add('ok', 'AGENTS.md / CLAUDE.md 里的接力规矩是最新的');
       else add('warn', st === 'old' ? '接力规矩是旧版的：relay init 更新一下' : 'AGENTS.md / CLAUDE.md 里没有接力规矩了：relay init 补上');
-      const cfg = projectConfig(root);
-      add('ok', `检查命令：${cfg.gate.command || '没配置（每一棒结束时不跑检查）'}`);
+      const { cfg, error } = projectConfigSafe(root);
+      if (error) add('warn', `配置文件坏了（检查命令、不许改的文件都没法用，全自动不会开工）：${error}`);
+      else add('ok', `检查命令：${cfg.gate.command || '没配置（每一棒结束时不跑检查）'}`);
     }
   } catch (e) {
     add('warn', errorMessage(e));

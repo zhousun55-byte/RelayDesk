@@ -176,14 +176,19 @@ export function takeSnapshot(root: string, message: string): SnapResult {
   return { sha: sgOk(root, ['rev-parse', 'HEAD'], '读快照'), changed: true };
 }
 
-/** 两张快照之间改了哪些文件。 */
+/** 看改动时一律不跑快照仓库配置里的外部 diff 和转换程序（那些配置可能被改过）。 */
+const DIFF_SAFE = ['--no-ext-diff', '--no-textconv'];
+
+/**
+ * 两张快照之间改了哪些文件。git 出错（快照找不到、仓库坏了）就报错——
+ * 不能返回空列表，那会被当成「这一棒没改文件」，弱模型的活就不用复核了。
+ */
 export function snapChanges(root: string, from: string, to: string): FileChange[] {
   if (from === to) return [];
-  const ns = sg(root, ['diff', '-z', '--name-status', '--find-renames', from, to], { raw: true });
-  if (ns.code !== 0) return [];
-  const num = sg(root, ['diff', '-z', '--numstat', '--find-renames', from, to], { raw: true });
+  const ns = sgOk(root, ['diff', ...DIFF_SAFE, '-z', '--name-status', '--find-renames', from, to], '读改动', { raw: true });
+  const num = sg(root, ['diff', ...DIFF_SAFE, '-z', '--numstat', '--find-renames', from, to], { raw: true });
   const stats = num.code === 0 ? parseNumstatZ(num.stdout) : new Map();
-  return parseNameStatusZ(ns.stdout).map((f) => ({
+  return parseNameStatusZ(ns).map((f) => ({
     path: f.path,
     status: f.status,
     ...(f.orig ? { orig: f.orig } : {}),
@@ -194,16 +199,23 @@ export function snapChanges(root: string, from: string, to: string): FileChange[
 
 export { sumChanges };
 
-/** 两张快照之间的完整改动（统一 diff 格式）。file 给了就只看这一个文件。 */
+/** 两张快照之间的完整改动（统一 diff 格式）。file 给了就只看这一个文件。git 出错就报错（不能当成没改动）。 */
 export function snapDiff(root: string, from: string, to: string, file?: string): string {
-  const r = sg(root, ['diff', '--find-renames', from, to, ...(file ? ['--', file] : [])], { raw: true });
-  return r.code === 0 ? r.stdout : '';
+  if (from === to) return '';
+  return sgOk(root, ['diff', ...DIFF_SAFE, '--find-renames', from, to, ...(file ? ['--', file] : [])], '读改动', { raw: true });
 }
 
-/** 某张快照里的一个文件；不存在返回 null。 */
+/** 某张快照里有没有这个文件。快照本身找不到、仓库出错就报错（不能当成「没有这个文件」）。 */
+export function snapHas(root: string, sha: string, file: string): boolean {
+  const rel = file.replace(/^\.\//, '');
+  const out = sgOk(root, ['ls-tree', '-z', '--name-only', sha, '--', rel], '读快照', { raw: true });
+  return out.split('\0').includes(rel);
+}
+
+/** 某张快照里的一个文件；快照里没有它返回 null；读不了（快照找不到、仓库出错）报错。 */
 export function snapFile(root: string, sha: string, file: string): string | null {
-  const r = sg(root, ['show', `${sha}:${file.replace(/^\.\//, '')}`], { raw: true });
-  return r.code === 0 ? r.stdout : null;
+  if (!snapHas(root, sha, file)) return null;
+  return sgOk(root, ['show', `${sha}:${file.replace(/^\.\//, '')}`], '读快照里的文件', { raw: true });
 }
 
 /** 文件夹里现在的文件（按快照的规则：.gitignore 和默认排除的都不算）；还没建快照仓库返回 null。 */
@@ -215,10 +227,9 @@ export function workFiles(root: string): string[] | null {
   return [...new Set(r.stdout.split('\0').filter(Boolean))].filter((f) => fs.existsSync(path.join(root, f)));
 }
 
-/** 快照里的文件列表。 */
+/** 快照里的文件列表。读不了就报错（退回时不能因为读不到就当成空快照、什么都不恢复）。 */
 export function snapFiles(root: string, sha: string): string[] {
-  const r = sg(root, ['ls-tree', '-r', '-z', '--name-only', sha], { raw: true });
-  return r.code === 0 ? r.stdout.split('\0').filter(Boolean) : [];
+  return sgOk(root, ['ls-tree', '-r', '-z', '--name-only', sha], '读快照', { raw: true }).split('\0').filter(Boolean);
 }
 
 function removeEmptyDirs(root: string, rel: string): void {
@@ -248,8 +259,8 @@ export function restoreSnapshot(root: string, sha: string, message = '退回'): 
   const safety = takeSnapshot(root, `${message}之前`).sha;
   const changed = snapChanges(root, sha, safety);
   // 后来新加的文件（快照里没有）删掉。
-  const added = sg(root, ['diff', '-z', '--name-only', '--no-renames', '--diff-filter=A', sha, safety], { raw: true });
-  for (const f of added.stdout.split('\0').filter(Boolean)) {
+  const added = sgOk(root, ['diff', ...DIFF_SAFE, '-z', '--name-only', '--no-renames', '--diff-filter=A', sha, safety], '读改动', { raw: true });
+  for (const f of added.split('\0').filter(Boolean)) {
     const abs = path.join(root, f);
     if (!abs.startsWith(root + path.sep) || f.startsWith('.relay/')) continue;
     try {

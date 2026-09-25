@@ -1,6 +1,7 @@
+import { acceptance } from './acceptance';
 import type { LedgerView, Stint } from './ledger';
-import { statusWord, stintTitle, tierWord, verdictWord } from './ledger';
-import { BRIEF_REL, HANDOFF_DIR, handoffTemplate, reviewDiffFileFor, reviewFileFor, reviewTemplate, TASK_REL, type HandoffDoc, type TaskDoc } from './notes';
+import { countedReviews, statusWord, stintTitle, tierWord, verdictWord } from './ledger';
+import { BRIEF_REL, HANDOFF_DIR, handoffTemplate, reviewDiffFileFor, reviewFileFor, reviewTemplate, TASK_REL, VERDICT_CHOICES, type HandoffDoc, type TaskDoc } from './notes';
 import { snapGit } from './snap';
 import { stampLocal } from './time';
 
@@ -23,6 +24,10 @@ export interface BriefInput {
   members: BriefMember[];
   gateCommand: string;
   protectedPaths: string[];
+  /** 配置文件坏了的原因（这时检查和不许改的文件都没法核对）。 */
+  configError?: string;
+  /** 全自动开着终审（验收要终审）。 */
+  finalRequired?: boolean;
   /** 下一棒的编号（有进行中的就是它）。 */
   nextId: number;
   now: Date;
@@ -60,7 +65,7 @@ function quote(text: string, max = 600): string {
     .join('\n');
 }
 
-function reviewBlock(s: Stint, h: HandoffDoc | undefined, gate: string): string[] {
+function reviewBlock(s: Stint, h: HandoffDoc | undefined, gate: string, dropped: ReadonlySet<number>): string[] {
   const out = [`### ${stintTitle(s)}（${tierWord(s.who.tier)}）`, `- ${when(s.endedAt ?? s.startedAt)} · ${statusWord(s.status)} · ${factsLine(s)}`];
   if (h && !s.ghost) out.push(`- 它的交接：\`${s.handoff}\`（它自己说的，不一定对）`);
   else out.push('- 它没留交接（多半是额度用完被打断了），只能看改动本身。');
@@ -71,6 +76,9 @@ function reviewBlock(s: Stint, h: HandoffDoc | undefined, gate: string): string[
     );
   }
   for (const m of (s.reviews ?? []).filter((x) => x.weak)) out.push(`- ${m.byLabel} 复核过（\`${m.file}\`），但它是弱模型、或者是自己复核自己，不算数；可以参考，要你再核一遍。`);
+  const last = countedReviews(s, dropped).at(-1);
+  if (last) out.push(`- 上一次复核（${last.byLabel}）的结论是「${verdictWord(last.verdict)}」，见 \`${last.file}\`：这次要把里面的问题修好（或者补上验证），再重写结论。`);
+  if (s.factsError) out.push(`- 接力台读不到这一棒的改动（${s.factsError}）：自己用上面的 diff 命令看，看不了就在结论里写「证据不足」。`);
   out.push(`- 结论写到：\`${reviewFileFor(s.id)}\``);
   if (gate) out.push(`- 检查命令：\`${gate}\``);
   return out;
@@ -96,8 +104,14 @@ export function buildBrief(input: BriefInput): string {
     if (task.rules) s.push('约定（必须遵守）：', task.rules.length > 1200 ? `${task.rules.slice(0, 1200)}……` : task.rules, '');
   }
 
+  // 验收：清单打勾不等于做完了
+  const acc = acceptance({ ledger, task, gateCommand: input.gateCommand, ...(input.configError ? { configError: input.configError } : {}), finalRequired: input.finalRequired ?? true });
+  s.push(`> 验收：${acc.headline}${acc.state === 'accepted' ? '' : '。清单打勾只说明「说做完了」，复核、终审、检查都过了才算做完。'}`, '');
+  if (input.configError) s.push(`> 接力台的配置文件坏了（\`.relay/config.json\`）：${input.configError}。检查命令没法跑、不许改的文件也没法核对——别动它，也别在这个时候收工。`, '');
+
   // 现在
   const live = ledger.stints.filter((x) => !x.rolledBack);
+  const dropped = new Set(ledger.stints.filter((x) => x.rolledBack).map((x) => x.id));
   const open = ledger.open;
   if (input.running) s.push(`> 现在：接力台正在调度 ${input.running.label}（从 ${when(input.running.since)} 开始）。`, '');
   else if (open && open.via === 'native') s.push(`> 现在：第 ${open.id} 棒还没交接（${open.who.label}，${when(open.startedAt)} 开始有改动）。如果那就是你，接着写你的交接就行。`, '');
@@ -113,14 +127,14 @@ export function buildBrief(input: BriefInput): string {
         : '现在名单里没有强模型；能复核的请先复核，不能的跳过。',
       ''
     );
-    for (const p of pending.slice(-6)) s.push(...reviewBlock(p, p.handoff ? handoffs.get(p.handoff) : undefined, input.gateCommand), '');
+    for (const p of pending.slice(-6)) s.push(...reviewBlock(p, p.handoff ? handoffs.get(p.handoff) : undefined, input.gateCommand, dropped), '');
     if (pending.length > 6) s.push(`（还有更早的 ${pending.length - 6} 棒，见 \`.relay/journal.jsonl\`）`, '');
     s.push(
       '复核怎么做：',
       '1. 先读它的交接，再逐个文件看真实改动：说做了的真做了吗？有没有没说的改动？有没有改错、改坏、偷工减料？',
       '2. 跑一遍检查（有检查命令的话），看看功能是不是真的能用。',
       '3. 发现问题直接改好（就在这个文件夹里改）；改得太乱的文件可以恢复成它改之前的样子（用上面的 show 命令）。',
-      '4. 每一棒写一份结论，格式：',
+      `4. 每一棒写一份结论。「结论」一行只写这几种之一：${VERDICT_CHOICES.join(' / ')}。没实际跑过检查、验证不了的写「证据不足」；问题没修完写「有问题，还没修」。接力台按这一行判断这一棒算不算复核过，只有「没问题 / 有问题，已修好 / 改坏了，已退回」算。格式：`,
       '',
       '```markdown',
       reviewTemplate('第 N 棒（它的工具 · 模型）').trim(),
@@ -130,10 +144,12 @@ export function buildBrief(input: BriefInput): string {
   }
 
   // 复核发现但还没修的问题
-  const unresolved = live.flatMap((x) => (x.reviews ?? []).filter((r) => r.verdict === 'problem').map((r) => ({ s: x, r })));
+  const unresolved = live
+    .map((x) => ({ s: x, r: countedReviews(x, dropped).at(-1) }))
+    .filter((x): x is { s: Stint; r: NonNullable<typeof x.r> } => !!x.r && (x.r.verdict === 'problem' || x.r.verdict === 'insufficient' || x.r.verdict === 'unknown'));
   if (unresolved.length) {
-    s.push('## 复核发现、还没修的问题', '');
-    for (const { s: x, r } of unresolved.slice(-5)) s.push(`- 第 ${x.id} 棒：见 \`${r.file}\`（${r.byLabel} 复核）`);
+    s.push('## 复核发现、还没解决的问题', '');
+    for (const { s: x, r } of unresolved.slice(-5)) s.push(`- 第 ${x.id} 棒：复核结论是「${verdictWord(r.verdict)}」，见 \`${r.file}\`（${r.byLabel} 复核）`);
     s.push('');
   }
 
@@ -159,7 +175,18 @@ export function buildBrief(input: BriefInput): string {
     s.push('## 最近几棒', '');
     for (const x of recent) {
       const h = x.handoff ? handoffs.get(x.handoff) : undefined;
-      const rv = x.rolledBack ? '已退回（作废）' : x.review === 'needed' ? '待复核' : x.review === 'done' ? `复核：${verdictWord(x.reviews?.at(-1)?.verdict ?? 'unknown')}` : '';
+      const counted = countedReviews(x, dropped).at(-1);
+      const rv = x.rolledBack
+        ? '已退回（作废）'
+        : x.review === 'needed'
+          ? counted
+            ? `待复核（上次结论：${verdictWord(counted.verdict)}）`
+            : '待复核'
+          : x.review === 'done' && counted
+            ? `复核：${verdictWord(counted.verdict)}`
+            : x.kind === 'final' && x.verdict
+              ? `终审结论：${verdictWord(x.verdict)}`
+              : '';
       const what = x.summary || h?.summary || '';
       s.push(`- ${stintTitle(x)}（${tierWord(x.who.tier)}）· ${when(x.endedAt)} · ${statusWord(x.status)}${rv ? ` · ${rv}` : ''}${what ? ` · ${what}` : ''}`);
     }
@@ -167,7 +194,12 @@ export function buildBrief(input: BriefInput): string {
   }
   if (ledger.lastRollback) {
     const r = ledger.lastRollback;
-    s.push(`> ${when(r.ts)} 退回到了「${r.label}」：第 ${r.dropped.join('、')} 棒的改动已经不在了，别再按它们的交接往下做。`, '');
+    const tk = r.task?.missing
+      ? '任务清单是旧账本、没法跟着退回，先对照代码看看哪些步骤其实没做完，把勾去掉。'
+      : r.task?.unchecked.length
+        ? `任务清单里这几步的勾也去掉了，要重新做：${r.task.unchecked.slice(0, 6).join('、')}${r.task.unchecked.length > 6 ? ' ……' : ''}。`
+        : '';
+    if (r.dropped.length) s.push(`> ${when(r.ts)} 退回到了「${r.label}」：第 ${r.dropped.join('、')} 棒的改动已经不在了，别再按它们的交接往下做。${tk}`, '');
   }
 
   // 强弱名单

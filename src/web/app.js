@@ -317,6 +317,10 @@ const S = {
   onlyChanged: false,
   treeSel: '',
   offline: false,
+  /** 切换项目一次加一；请求回来时代数不对就丢掉（不然 A 项目的东西会显示在 B 项目里）。 */
+  gen: 0,
+  /** 每类请求发到第几次了：回来的不是最新那次就丢掉。 */
+  seq: {},
   editingTitle: false,
   dismissed: store.get('dismissed') || '',
 };
@@ -346,6 +350,17 @@ async function api(path, body) {
   return j;
 }
 
+/** 发请求前领一张凭据：记下是哪个项目、这类请求的第几次。 */
+function ticket(kind) {
+  S.seq[kind] = (S.seq[kind] || 0) + 1;
+  return { gen: S.gen, dir: S.dir, kind, n: S.seq[kind] };
+}
+
+/** 回来时对一下：项目换了、或者后面又发了同一类的新请求，这次的结果就不要了。 */
+function stale(t) {
+  return t.gen !== S.gen || t.dir !== S.dir || S.seq[t.kind] !== t.n;
+}
+
 /** GET 地址带上当前项目。 */
 function q(path) {
   return S.dir ? `${path}${path.includes('?') ? '&' : '?'}dir=${encodeURIComponent(S.dir)}` : path;
@@ -367,7 +382,7 @@ async function act(btn, fn, okText) {
     schedule();
     return r;
   } catch (e) {
-    toast(e.message, { bad: true });
+    if (e.code !== 'cancelled') toast(e.message, { bad: true });
     return null;
   } finally {
     if (btn && btn.isConnected) {
@@ -796,13 +811,16 @@ function setOffline(v) {
 }
 
 async function refresh() {
+  const t = ticket('state');
   try {
     const st = await api(q('/api/state'));
+    if (stale(t)) return;
     S.st = st;
     if (!S.dir) S.dir = st.project.root;
     setOffline(false);
     renderAll();
   } catch (e) {
+    if (stale(t)) return;
     if (e instanceof TypeError) setOffline(true);
     else toast(e.message, { bad: true });
   }
@@ -810,11 +828,14 @@ async function refresh() {
 
 async function loadTalk() {
   if (!S.dir) return;
+  const t = ticket('talk');
   try {
-    S.talk = await api(q('/api/talk'));
+    const talk = await api(q('/api/talk'));
+    if (stale(t)) return;
+    S.talk = talk;
     if (S.st) renderCenter();
   } catch (e) {
-    if (!(e instanceof TypeError)) toast(e.message, { bad: true });
+    if (!stale(t) && !(e instanceof TypeError)) toast(e.message, { bad: true });
   }
 }
 
@@ -822,8 +843,10 @@ let treeKey = '';
 
 async function loadTree() {
   if (!S.dir) return;
+  const tk = ticket('tree');
   try {
     const t = await api(q('/api/tree'));
+    if (stale(tk)) return;
     const k = t.files.join('\0');
     if (k !== treeKey) {
       treeKey = k;
@@ -832,6 +855,7 @@ async function loadTree() {
     S.tree = t;
     renderRight();
   } catch (e) {
+    if (stale(tk)) return;
     if (!(e instanceof TypeError)) S.tree = { files: [], truncated: false, error: e.message };
     renderRight();
   }
@@ -1088,7 +1112,9 @@ async function forget(pr) {
 }
 
 function switchProject(root) {
+  S.gen++;
   S.dir = root;
+  S.st = null;
   S.thread = null;
   S.draft = false;
   S.fold = false;
@@ -1107,6 +1133,14 @@ function switchProject(root) {
   treeKey = '';
   stintsKey = '';
   streamThread = null;
+  barSig = '';
+  heroSig = '';
+  tabsSig = '';
+  docSig = '';
+  // 上一个项目的卡片、顶栏先清掉：新项目的状态回来之前，不能再点到旧项目的按钮。
+  CE.bar.replaceChildren();
+  CE.stream.replaceChildren();
+  CE.hero.replaceChildren();
   S.treeOpen = new Set(store.json(`open:${root}`, []));
   closeDrawers();
   history.replaceState(null, '', `/?dir=${encodeURIComponent(root)}`);
@@ -1145,6 +1179,7 @@ let stick = true;
 
 function buildCenter() {
   CE.offline = h('div', { class: 'offline', hidden: true }, icon('warn'), '接力台已停止运行，在桌面双击「接力台」重新打开', h('button', { class: 'btn small', onclick: () => refresh() }, '重试'));
+  CE.cfgBad = h('div', { class: 'offline cfg-bad', hidden: true });
   CE.bar = h('header', { class: 'bar' });
   CE.tabs = h('div', { class: 'tabs', role: 'tablist', hidden: true });
   CE.stream = h('div', { class: 'stream' });
@@ -1153,7 +1188,7 @@ function buildCenter() {
   CE.chat = h('section', { class: 'pane', 'aria-label': '对话' }, CE.scroll, CE.toBottom);
   CE.doc = h('section', { class: 'pane', hidden: true });
   CE.hero = h('section', { class: 'hero', hidden: true });
-  $('#center').append(CE.offline, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
+  $('#center').append(CE.offline, CE.cfgBad, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
 }
 
 function onScroll() {
@@ -1171,6 +1206,12 @@ function scrollBottom(smooth) {
 function renderCenter() {
   if (!S.st) return;
   CE.offline.hidden = !S.offline;
+  const cfgErr = S.st.project.config && S.st.project.config.error;
+  CE.cfgBad.hidden = !cfgErr;
+  if (cfgErr && CE.cfgBad.dataset.err !== cfgErr) {
+    CE.cfgBad.dataset.err = cfgErr;
+    CE.cfgBad.replaceChildren(icon('warn'), h('span', { class: 'ell', 'data-tip': cfgErr }, '配置文件坏了：检查命令、不许改的文件都没法用，全自动不会开工'), h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, '打开'));
+  }
   const mode = centerMode();
   const hero = mode !== 'thread';
   const t = hero ? null : selectedThread();
@@ -1257,6 +1298,7 @@ function renderBar(t) {
     p.now.stint,
     g && [g.id, g.status, g.mode, g.current && g.current.stint, g.current && g.current.kind, g.waitingUntil],
     p.pending.map((s) => s.id),
+    p.acceptance && [p.acceptance.state, p.acceptance.headline],
     members().map((m) => [m.name, m.cooling, m.canWork, m.tier, m.label]),
     UI.noLeft,
     UI.noRight,
@@ -1286,7 +1328,7 @@ function renderBar(t) {
             const b = e.currentTarget;
             b.setAttribute('aria-checked', String(!autoOn));
             if (autoOn) act(b, () => api('/api/stop', {}), '已停止');
-            else act(b, () => api('/api/auto', {}), '全自动已开始');
+            else act(b, () => startWork('/api/auto', {}), '全自动已开始');
           },
         },
         h('span', { class: 'track' }),
@@ -1317,7 +1359,7 @@ function renderBar(t) {
   if (UI.noRight || narrow()) ctl.push(sideBtn('right'));
   CE.bar.replaceChildren(
     h('div', { class: 'bar-top' }, h('div', { class: 'bar-title' }, UI.noLeft || narrow() ? sideBtn('left') : null, title), h('div', { class: 'bar-ctl' }, ctl)),
-    h('div', { class: 'strip-row' }, stripEl(t), latest ? statusEl(run) : null, latest ? progressEl(p.task) : null)
+    h('div', { class: 'strip-row' }, stripEl(t), latest ? statusEl(run) : null, latest ? progressEl(p.task) : null, latest ? acceptEl(p.acceptance) : null)
   );
 }
 
@@ -1389,6 +1431,69 @@ function progressEl(task) {
     task.total ? h('span', { class: 'ring', style: `--p:${pct}` }) : icon('plus'),
     task.total ? h('span', { class: 'num' }, `${task.done}/${task.total}`) : '步骤'
   );
+}
+
+/**
+ * 验收：清单打勾只说明「说做完了」，这里说能不能算做完。清单还没打完时不显示（进度旁边已经有了）。
+ * 通过、没过、没法判断用文字和形状分开（实心 / 描边 / 虚线），不只靠颜色深浅。
+ */
+function acceptEl(a) {
+  if (!a || a.state === 'working') return null;
+  const word = { accepted: '验收通过', blocked: '验收没过', unknown: '没法验收' }[a.state];
+  return h(
+    'button',
+    { class: `accept ${a.state}`, 'aria-haspopup': 'dialog', 'data-tip': a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('\n'), onclick: acceptPanel },
+    icon(a.state === 'accepted' ? 'check' : 'warn'),
+    word,
+    a.state !== 'accepted' && a.items.length ? h('span', { class: 'num' }, String(a.items.length)) : null
+  );
+}
+
+function acceptPanel() {
+  if (!S.st) return;
+  const a = S.st.project.acceptance;
+  let close = () => {};
+  const list = (items) =>
+    h(
+      'ul',
+      null,
+      items.map((i) =>
+        h(
+          'li',
+          null,
+          i.stint
+            ? h(
+                'button',
+                {
+                  class: 'link',
+                  onclick: () => {
+                    close();
+                    jumpTo(i.stint);
+                  },
+                },
+                i.text
+              )
+            : i.text
+        )
+      )
+    );
+  // 读不到的（配置文件坏了、改动读不到）和还差的（没复核、没终审、检查没过）分开说。
+  const unread = a.items.filter((i) => i.kind === 'config' || i.kind === 'evidence');
+  const missing = a.items.filter((i) => i.kind !== 'config' && i.kind !== 'evidence');
+  close = sheet({
+    title: { accepted: '验收通过', blocked: '验收没过', unknown: '没法验收' }[a.state] || '验收',
+    body: h(
+      'div',
+      { class: 'accept-list' },
+      a.state === 'accepted' ? h('p', null, a.headline) : null,
+      unread.length ? h('p', null, '这些读不到，没法判断做没做完：') : null,
+      unread.length ? list(unread) : null,
+      missing.length ? h('p', null, a.state === 'blocked' ? '清单都打勾了，还差这几项：' : '还差这几项：') : null,
+      missing.length ? list(missing) : null,
+      h('p', { class: 'aside' }, '清单打勾只说明「说做完了」。弱模型的活要强模型复核通过，开着终审要强模型终审通过，配了检查要检查通过，才算验收通过。')
+    ),
+    foot: [h('button', { class: 'btn primary', autofocus: true, onclick: () => close() }, '知道了')],
+  });
 }
 
 function editTitle() {
@@ -1568,9 +1673,23 @@ function barMenu(anchor) {
   );
 }
 
+/**
+ * 派人 / 开全自动。有 AI 在别的工具里干到一半、刚才还在改文件时，接力台会先问：确认它停了再换人
+ * （不然两个 AI 同时改一个文件夹）。你确认了就带上 force 再发一次。
+ */
+async function startWork(path, body) {
+  try {
+    return await api(path, body);
+  } catch (e) {
+    if (e.code !== 'native-active') throw e;
+    if (!(await confirmSheet('它还在改文件吗？', e.message, '它已经停了，换人'))) throw Object.assign(new Error('没有换人。'), { code: 'cancelled' });
+    return api(path, { ...body, force: true });
+  }
+}
+
 function goWith(btn, m, kind) {
   if (!m) return;
-  return act(btn, () => api('/api/go', { who: m.name, ...(kind ? { kind } : {}) }), `${splitLabel(m.label)[0]} 已开始${kind === 'review' ? '复核' : ''}`);
+  return act(btn, () => startWork('/api/go', { who: m.name, ...(kind ? { kind } : {}) }), `${splitLabel(m.label)[0]} 已开始${kind === 'review' ? '复核' : ''}`);
 }
 
 function goDefault() {
@@ -1619,11 +1738,13 @@ async function clearTalk() {
 
 async function editTaskRaw() {
   let raw = '';
+  const t = ticket('task-raw');
   try {
     raw = (await api(q('/api/task'))).raw;
   } catch (e) {
-    return toast(e.message, { bad: true });
+    return stale(t) ? undefined : toast(e.message, { bad: true });
   }
+  if (stale(t)) return;
   const ta = h('textarea', { class: 'raw', spellcheck: 'false', value: raw, 'aria-label': '任务' });
   const close = sheet({
     title: '编辑任务',
@@ -1869,7 +1990,7 @@ function protocolLine() {
 // ----- 一棒：卡片 -----
 
 function countedReview(s) {
-  return [...(s.reviews || [])].reverse().find((r) => !r.weak) || null;
+  return [...(s.reviews || [])].reverse().find((r) => !r.weak && !r.void) || null;
 }
 
 function summaryOf(s) {
@@ -1946,12 +2067,17 @@ function cardFoot(s) {
   else if (s.status === 'stopped') bits.push(stateEl('', '已停止'));
   if (s.rolledBack) bits.push(h('span', { class: 'chip line' }, '作废'));
   else if (s.review === 'needed' && s.status !== 'working') {
-    const last = (s.reviews || [])[s.reviews.length - 1];
-    bits.push(h('span', { class: 'chip solid', 'data-tip': last && last.weak ? `${splitLabel(last.byLabel)[0]} 的复核不算数` : null }, '待复核'));
+    // 为什么还待复核：复核写了「有问题」「证据不足」、只有弱模型复核过、读不到改动……
+    const why = s.reviewText.replace(/^待复核( · )?/, '');
+    bits.push(h('span', { class: `chip solid${s.reviewWarn ? ' warn' : ''}`, 'data-tip': why || null }, s.reviewWarn ? icon('warn') : null, s.reviewWarn && why ? why.replace(/（[^）]*）$/, '') : '待复核'));
   } else if (s.review === 'done') {
     const c = countedReview(s);
     if (c) bits.push(h('span', { class: 'chip line' }, icon('check'), `${splitLabel(c.byLabel)[0]} · ${c.verdictWord}`));
+  } else if (s.kind === 'final' && s.verdictWord) {
+    const pass = s.verdict === 'ok' || s.verdict === 'fixed';
+    bits.push(h('span', { class: `chip ${pass ? 'line' : 'solid warn'}` }, icon(pass ? 'check' : 'warn'), `终审 · ${s.verdictWord}`));
   }
+  if (s.factsError) bits.push(h('span', { class: 'chip line', 'data-tip': s.factsError }, icon('warn'), '读不到改动'));
   if (s.kind === 'review' && s.targets) {
     for (const id of s.targets) {
       const tg = stintById(id);
@@ -1960,6 +2086,7 @@ function cardFoot(s) {
     }
   }
   if (s.gate && s.gate.status === 'fail') bits.push(h('span', { class: 'chip line' }, icon('warn'), '检查没过'));
+  if (s.gate && s.gate.status === 'error') bits.push(h('span', { class: 'chip line', 'data-tip': s.gate.detail || null }, icon('warn'), '检查没跑成'));
   if (s.protectedHits) bits.push(h('span', { class: 'chip line', 'data-tip': s.protectedHits.join('\n') }, icon('warn'), '改了保护的文件'));
   const f = s.facts;
   if (f && f.files) {
@@ -2018,13 +2145,16 @@ function toggleCard(id) {
 }
 
 async function loadDetail(id) {
+  const t = ticket(`detail:${id}`);
   try {
-    S.detail.set(id, await api(q(`/api/stint?id=${id}`)));
+    const d = await api(q(`/api/stint?id=${id}`));
+    if (stale(t)) return;
+    S.detail.set(id, d);
     const el = CE.stream.querySelector(`.card[data-stint="${id}"]`);
     const s = stintById(id);
     if (el && s) fillDetail(el, s);
   } catch (e) {
-    toast(e.message, { bad: true });
+    if (!stale(t)) toast(e.message, { bad: true });
   }
 }
 
@@ -2052,7 +2182,7 @@ function detailBox(s) {
       )
     );
   }
-  if (s.gate) box.append(h('section', null, h('h5', null, '检查'), h('div', { class: 'pre' }, `${s.gate.status === 'pass' ? '通过' : '没通过'} · ${s.gate.command}${s.gate.detail ? `\n\n${s.gate.detail}` : ''}`)));
+  if (s.gate) box.append(h('section', null, h('h5', null, '检查'), h('div', { class: 'pre' }, `${{ pass: '通过', fail: '没通过', error: '没跑成' }[s.gate.status] || s.gate.status}${s.gate.command ? ` · ${s.gate.command}` : ''}${s.gate.detail ? `\n\n${s.gate.detail}` : ''}`)));
   if (s.note) box.append(h('section', null, h('h5', null, '说明'), h('p', { class: 'aside' }, s.note)));
   const acts = [];
   const pending = s.review === 'needed' && s.status !== 'working' && !s.rolledBack;
@@ -2071,25 +2201,33 @@ function detailBox(s) {
 async function copyHandoff(s) {
   let d = S.detail.get(s.id);
   if (!d) {
+    const t = ticket(`detail:${s.id}`);
     try {
       d = await api(q(`/api/stint?id=${s.id}`));
+      if (stale(t)) return;
       S.detail.set(s.id, d);
     } catch (e) {
-      return toast(e.message, { bad: true });
+      return stale(t) ? undefined : toast(e.message, { bad: true });
     }
   }
   toast((await copyText(d.handoff || '')) ? '已复制' : '没能复制', { bad: false });
 }
 
 function skipReview(btn, s) {
-  act(btn, () => api('/api/mark', { stint: s.id }), `第 ${s.id} 棒已跳过复核`);
+  if (!S.st) return;
+  const root = S.st.project.root;
+  act(btn, () => api('/api/mark', { dir: root, stint: s.id }), `第 ${s.id} 棒已跳过复核`);
 }
 
 async function rollbackTo(btn, s) {
-  if (!(await confirmSheet(`退回到第 ${s.id} 棒之前？`, `第 ${s.id} 棒和之后的改动会作废，可以撤销。`, '退回'))) return;
-  const r = await act(btn, () => api('/api/rollback', { stint: s.id }));
+  if (!S.st) return;
+  const { root, name } = S.st.project;
+  if (!(await confirmSheet(`退回到第 ${s.id} 棒之前？`, `项目「${name}」：第 ${s.id} 棒和之后的改动会作废，任务清单里它们打的勾也会去掉。可以撤销。`, '退回'))) return;
+  if (!S.st || S.st.project.root !== root) return toast('项目已经换了，没有退回。', { bad: true });
+  const r = await act(btn, () => api('/api/rollback', { dir: root, stint: s.id }));
   if (r) {
-    toast(`已退回 · ${r.files} 个文件`, { action: { label: '撤销', run: () => undoRollback(null) } });
+    const tk = r.task && r.task.missing ? ' · 清单没跟着退回（旧账本）' : r.task && r.task.unchecked.length ? ` · 清单去掉 ${r.task.unchecked.length} 个勾` : '';
+    toast(`已退回 · ${r.files} 个文件${tk}`, { action: { label: '撤销', run: () => undoRollback(null) } });
     loadTree();
   }
 }
@@ -2303,14 +2441,17 @@ function openLog(s) {
 
 async function loadDoc(t) {
   const key = tabKey(t);
+  const tk = ticket(`doc:${key}`);
   try {
     let data;
     if (t.type === 'file') data = await api(q(`/api/file?path=${encodeURIComponent(t.path)}`));
     else if (t.type === 'diff') data = await api(q(`/api/diff?id=${t.id}${t.path ? `&path=${encodeURIComponent(t.path)}` : ''}`));
     else if (t.type === 'log') data = await api(q(`/api/log?path=${encodeURIComponent(t.path)}`));
     else data = await api(q('/api/brief'));
+    if (stale(tk)) return;
     S.docs.set(key, { data });
   } catch (e) {
+    if (stale(tk)) return;
     S.docs.set(key, { error: e.message });
   }
   docSig = '';
@@ -2319,10 +2460,13 @@ async function loadDoc(t) {
 
 async function loadFileDiff(t, id) {
   const key = `${tabKey(t)}#${id}`;
+  const tk = ticket(`doc:${key}`);
   try {
     const d = await api(q(`/api/diff?id=${id}&path=${encodeURIComponent(t.path)}`));
+    if (stale(tk)) return;
     S.docs.set(key, { data: d });
   } catch (e) {
+    if (stale(tk)) return;
     S.docs.set(key, { error: e.message });
   }
   docSig = '';
@@ -2787,7 +2931,7 @@ const idleNow = () => !runState().running && !runState().waiting;
 const SLASH = [
   { key: 'step', label: '加一步', icon: 'plus', needsText: true, placeholder: '这一步要做什么', run: (text) => act(null, () => api('/api/task/edit', { op: 'add', text }), '已加入清单') },
   { key: 'go', label: '接着做', icon: 'play', when: () => idleNow() && !!defaultWorker(), run: goDefault },
-  { key: 'auto', label: '全自动', icon: 'bolt', when: () => idleNow() && ready().length > 0, run: () => act(null, () => api('/api/auto', {}), '全自动已开始') },
+  { key: 'auto', label: '全自动', icon: 'bolt', when: () => idleNow() && ready().length > 0, run: () => act(null, () => startWork('/api/auto', {}), '全自动已开始') },
   { key: 'review', label: '复核', icon: 'review', when: () => idleNow() && S.st.project.pending.length > 0 && !!reviewer(), run: reviewNow },
   { key: 'stop', label: '停止', icon: 'stop', when: () => !idleNow(), run: stopNow },
   { key: 'task', label: '新任务', icon: 'plus', run: newThread },
@@ -2958,7 +3102,7 @@ async function createTask(text) {
   const p = S.st.project;
   if (!p.init) await api('/api/init', {});
   await api('/api/task', { text: [lines[0].trim(), ...body].join('\n'), steps });
-  if (S.autoAfter) await api('/api/auto', {}).catch((e) => toast(e.message, { bad: true }));
+  if (S.autoAfter) await startWork('/api/auto', {}).catch((e) => e.code !== 'cancelled' && toast(e.message, { bad: true }));
   S.draft = false;
   S.thread = null;
   S.autoAfter = false;
@@ -3869,7 +4013,7 @@ function paletteItems(query, scope) {
     const cmds = [
       { label: '新任务', icon: 'plus', run: newThread },
       p.init && !p.task.empty && !run.running && ready().length ? { label: '接着做', icon: 'play', run: goDefault } : null,
-      p.init && !p.task.empty && !run.running && ready().length ? { label: '全自动', icon: 'bolt', run: () => act(null, () => api('/api/auto', {}), '全自动已开始') } : null,
+      p.init && !p.task.empty && !run.running && ready().length ? { label: '全自动', icon: 'bolt', run: () => act(null, () => startWork('/api/auto', {}), '全自动已开始') } : null,
       p.pending.length && reviewer() ? { label: '复核', icon: 'review', run: reviewNow } : null,
       run.running || run.waiting ? { label: '停止', icon: 'stop', kbd: '⌘.', run: stopNow } : null,
       p.init ? { label: '编辑任务', icon: 'pencil', run: editTaskRaw } : null,

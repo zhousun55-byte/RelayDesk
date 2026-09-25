@@ -341,7 +341,7 @@ export function createServer(opts: ServerOptions): http.Server {
       const root = dirOf(q, b);
       requireProject(root);
       const kind = b.kind === 'review' ? 'review' : 'work';
-      const r = startGo(root, { mode: 'once', kind, ...(str(b.who) ? { who: str(b.who) } : {}) });
+      const r = startGo(root, { mode: 'once', kind, ...(str(b.who) ? { who: str(b.who) } : {}), ...(b.force === true ? { force: true } : {}) });
       r.done.catch(() => undefined);
       return { state: r.state };
     },
@@ -349,7 +349,7 @@ export function createServer(opts: ServerOptions): http.Server {
       const root = dirOf(q, b);
       requireProject(root);
       if (str(b.task)?.trim()) newTask(root, str(b.task)!);
-      const r = startGo(root, { mode: 'auto' });
+      const r = startGo(root, { mode: 'auto', ...(b.force === true ? { force: true } : {}) });
       r.done.catch(() => undefined);
       return { state: r.state };
     },

@@ -31,7 +31,8 @@ export interface Facts {
 }
 
 export interface GateInfo {
-  status: 'pass' | 'fail';
+  /** error = 检查根本没跑成（比如配置文件坏了），不等于通过。 */
+  status: 'pass' | 'fail' | 'error';
   command: string;
   detail?: string;
 }
@@ -45,8 +46,14 @@ export type StintStatus = 'working' | 'handed' | 'unfinished' | 'quota' | 'faile
 /** needed 待复核 / done 复核过了 / skip 不用复核（强模型做的，或你标记过） */
 export type ReviewState = 'needed' | 'done' | 'skip';
 
-/** 复核结论：ok 没问题 / fixed 有问题已修好 / reverted 改坏了已退回 / problem 有问题还没修 / unknown 没写清楚 */
-export type Verdict = 'ok' | 'fixed' | 'reverted' | 'problem' | 'unknown';
+/**
+ * 复核结论：ok 没问题 / fixed 有问题已修好 / reverted 改坏了已退回 / problem 有问题还没修 /
+ * insufficient 证据不足（没跑测试、「应该没问题」这种）/ unknown 没写清楚
+ */
+export type Verdict = 'ok' | 'fixed' | 'reverted' | 'problem' | 'insufficient' | 'unknown';
+
+/** 算「复核过了」的结论：只有这三种。有问题、证据不足、没写清楚都还要再核。 */
+export const PASSING: ReadonlySet<Verdict> = new Set<Verdict>(['ok', 'fixed', 'reverted']);
 
 export interface ReviewMark {
   /** 哪一棒复核的。 */
@@ -83,6 +90,8 @@ export interface Stint {
   /** 一句话：做了什么。 */
   summary?: string;
   facts?: Facts;
+  /** 读不到这一棒的改动（快照仓库出错）：改没改、改了什么都不知道，按要复核算。 */
+  factsError?: string;
   gate?: GateInfo;
   protectedHits?: string[];
   review: ReviewState;
@@ -101,6 +110,15 @@ export interface Stint {
   activeAt?: string;
   /** 接力台调度的棒：跑它的接力台进程（进程没了还显示进行中，就是接力台中途被关了）。 */
   pid?: number;
+  /** 终审棒：结论写在哪（.relay/复核/终审-….md）、写的是什么。 */
+  reviewFile?: string;
+  verdict?: Verdict;
+  verdictText?: string;
+  /** 这一棒开始前 / 结束时的任务清单（.relay/runs/tasks/ 里的副本编号）：退回时按它恢复打勾。 */
+  taskBefore?: string;
+  taskAfter?: string;
+  /** 自己在工具里干的棒被接力台换人时：你确认过它已经停下（没确认就只是账面上结束）。 */
+  stopConfirmed?: boolean;
 }
 
 export interface InitEvent {
@@ -132,6 +150,11 @@ export interface RollbackEvent {
   dropped: number[];
   /** 撤销退回：这几棒的改动又回来了。 */
   restored?: number[];
+  /**
+   * 任务清单跟着退回：按「第 N 棒开始前」的清单改回打勾（unchecked 取消的勾、checked 重新勾上的）；
+   * before = 退回前清单的副本（撤销退回时恢复）；missing = 找不到那时的清单（旧账本），清单没动。
+   */
+  task?: { from?: string; before?: string; unchecked: string[]; checked: string[]; missing?: boolean };
 }
 
 export interface TaskEvent {
@@ -217,8 +240,6 @@ export function viewLedger(events: LedgerEvent[]): LedgerView {
       const prev = byId.get(ev.stint.id);
       const s = { ...ev.stint };
       if (prev?.rolledBack) s.rolledBack = true;
-      // 只有干活的棒要复核。复核、终审的棒就算账上记成了「待复核」（2.0 早期把终审结论里的「第 N 棒」当成了复核自己），也按不用复核算。
-      if (s.kind !== 'work' && s.review === 'needed') s.review = 'skip';
       byId.set(s.id, s);
       // 只在这一棒结束（或结束的快照变了）时往前推。后来给旧棒补记复核、标记不用复核，是把旧棒原样重存一遍，
       // 不能把起点拉回到它结束的地方——不然下一棒会把中间别人的改动再算一遍。
@@ -241,8 +262,30 @@ export function viewLedger(events: LedgerEvent[]): LedgerView {
     }
   }
   const stints = [...byId.values()].sort((a, b) => a.id - b.id);
+  const dropped = new Set(stints.filter((s) => s.rolledBack).map((s) => s.id));
+  for (const s of stints) s.review = reviewStateOf(s, dropped);
   const open = [...stints].reverse().find((s) => s.status === 'working') ?? null;
   return { events, init, stints, open, base, lastRollback, task };
+}
+
+/**
+ * 一棒现在算不算复核过。账上存的只当起点：你标记过「不用复核」（skip）就不用；
+ * 否则看最近一次算数的复核——强模型写的、不是自己复核自己、写复核的那一棒没被退回——
+ * 结论是没问题 / 已修好 / 已退回才算复核过。结论写了「有问题」「证据不足」、或者算数的复核作废了，都回到待复核。
+ * 复核、终审的棒本身不用复核（2.0 早期把终审结论里的「第 N 棒」当成了复核自己，账上可能记成了待复核）。
+ */
+export function reviewStateOf(s: Stint, rolledBack: ReadonlySet<number> = new Set()): ReviewState {
+  if (s.kind !== 'work') return s.review === 'needed' ? 'skip' : s.review;
+  if (s.review === 'skip') return 'skip';
+  // 没有任何复核记录：按账上记的（旧账本、你直接标的）。
+  if (!(s.reviews ?? []).length) return s.review;
+  const last = countedReviews(s, rolledBack).at(-1);
+  return last && PASSING.has(last.verdict) ? 'done' : 'needed';
+}
+
+/** 算数的复核（按时间先后）：强模型写的、写复核的那一棒没被退回。 */
+export function countedReviews(s: Pick<Stint, 'reviews'>, rolledBack: ReadonlySet<number> = new Set()): ReviewMark[] {
+  return (s.reviews ?? []).filter((m) => !m.weak && !(m.by && rolledBack.has(m.by)));
 }
 
 export function loadLedger(root: string): LedgerView {
@@ -309,7 +352,9 @@ export function verdictWord(v: Verdict): string {
       return '改坏了，已退回';
     case 'problem':
       return '有问题，还没修';
+    case 'insufficient':
+      return '证据不足';
     default:
-      return '看过了（结论没写清楚）';
+      return '结论没写清楚';
   }
 }

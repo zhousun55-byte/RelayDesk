@@ -24,8 +24,10 @@ export function loadMemory(): UiMemory {
   }
 }
 
+/** 记住最近打开的项目。已经是最近的那一个就不写（网页每隔一两秒问一次状态，不能每次都写盘）。 */
 export function rememberProject(root: string): void {
   const cur = loadMemory();
+  if (cur.root === root && cur.recents?.[0] === root) return;
   const recents = [root, ...(cur.recents ?? []).filter((r) => r !== root)].slice(0, 12);
   fs.mkdirSync(relayHome(), { recursive: true });
   fs.writeFileSync(memoryPath(), JSON.stringify({ root, recents }, null, 2) + '\n');

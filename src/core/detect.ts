@@ -59,6 +59,7 @@ const APPS: { name: string; id: string; label: string; tier: 'strong' | 'weak'; 
   { name: 'Qoder', id: 'qoder', label: 'Qoder', tier: 'weak', hint: '你自己打开它接着做。' },
   { name: 'CodeBuddy', id: 'codebuddy', label: 'CodeBuddy', tier: 'weak', hint: '你自己打开它接着做。' },
   { name: 'Antigravity', id: 'antigravity', label: 'Antigravity', tier: 'weak', hint: '你自己打开它接着做；接力台调度时用 agy 命令行。' },
+  { name: 'DeepSeek Harness', id: 'deepseek-harness-app', label: 'DeepSeek Harness 桌面版', tier: 'weak', hint: '你自己打开它接着做；接力台调度时用它自带的无界面模式（同一个登录、同一个模型）。' },
 ];
 
 function findApps(): AppReport[] {
@@ -156,7 +157,7 @@ export function detectAll(opts: { network?: boolean } = {}): Promise<DetectRepor
 // ---- 把识别结果并进工人名单 ----
 
 /** 工具 → 名单里的默认名字（和桌面 App 的名字错开）。 */
-const DEFAULT_NAMES: Record<string, string> = { claude: 'claude', 'claude-official': 'claude-official', codex: 'codex', 'cursor-agent': 'cursor-agent', zcode: 'zcode-cli', agy: 'agy', gemini: 'gemini', qwen: 'qwen', opencode: 'opencode', droid: 'droid', copilot: 'copilot', grok: 'grok' };
+const DEFAULT_NAMES: Record<string, string> = { claude: 'claude', 'claude-official': 'claude-official', codex: 'codex', 'cursor-agent': 'cursor-agent', dsh: 'deepseek-harness', zcode: 'zcode-cli', agy: 'agy', gemini: 'gemini', qwen: 'qwen', opencode: 'opencode', droid: 'droid', copilot: 'copilot', grok: 'grok' };
 
 const LABELS: Record<string, string> = { zcode: 'ZCode 命令行' };
 

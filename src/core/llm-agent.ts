@@ -109,20 +109,65 @@ class ToolError extends Error {}
 /** .relay/ 里 AI 可以写的：交接、复核结论、任务清单。 */
 const RELAY_WRITABLE = /^\.relay\/(交接\/[^/]+\.md|复核\/[^/]+\.md|任务\.md)$/;
 
-function resolveIn(root: string, rel: unknown): { abs: string; rel: string } {
+/** 真实位置：解开链接；macOS 上顺便把大小写换成磁盘上的写法（.GIT → .git）。 */
+function realOrSelf(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return p;
+    }
+  }
+}
+
+function inside(root: string, p: string): boolean {
+  const r = path.relative(root, p);
+  return r === '' || (r !== '..' && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r));
+}
+
+/**
+ * 把 AI 给的路径落到项目里。只看字符串不够：
+ * - 项目里的链接可能指到外面（比如指向家目录），要按真实路径判断——最近一层已经存在的目录的真实位置必须在项目里；
+ * - 写文件时目标本身是链接也不行（写进去就改到链接指的地方了）。
+ * 返回的 rel 是按真实位置算的（「.Relay/x」在不分大小写的磁盘上就是「.relay/x」）。
+ */
+function resolveIn(root: string, rel: unknown, forWrite = false): { abs: string; rel: string } {
   if (typeof rel !== 'string' || !rel.trim()) throw new ToolError('缺少 path。');
   const abs = path.resolve(root, rel.trim());
-  const r = path.relative(root, abs);
-  if (r.startsWith('..') || path.isAbsolute(r)) throw new ToolError('只能访问项目文件夹里面的文件。');
-  return { abs, rel: r.split(path.sep).join('/') || '.' };
+  if (!inside(root, abs)) throw new ToolError('只能访问项目文件夹里面的文件。');
+  const realRoot = realOrSelf(root);
+  let probe = abs;
+  while (!fs.existsSync(probe) && inside(root, path.dirname(probe)) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+  const realProbe = realOrSelf(probe);
+  if (!inside(realRoot, realProbe)) throw new ToolError('这个路径经过链接指到了项目外面，不能访问。');
+  if (forWrite) {
+    try {
+      if (fs.lstatSync(abs).isSymbolicLink()) throw new ToolError('这个文件是个链接，不能通过它写文件（会改到链接指的地方）。');
+    } catch (e) {
+      if (e instanceof ToolError) throw e;
+      /* 还不存在：新建 */
+    }
+  }
+  // 真实位置 + 还不存在的那几层，算出相对项目的路径（磁盘不分大小写时，大小写以磁盘上已有的为准）。
+  const rest = path.relative(probe, abs);
+  const realRel = path.relative(realRoot, path.join(realProbe, rest));
+  return { abs, rel: realRel.split(path.sep).join('/') || '.' };
+}
+
+/** 比较规则用：统一成小写、Unicode 规范化（macOS 默认的磁盘不分大小写，.GIT 就是 .git）。 */
+function fold(p: string): string {
+  return p.normalize('NFC').toLowerCase();
 }
 
 function assertWritable(rel: string, protectedPaths: string[]): void {
-  if (rel === '.git' || rel.startsWith('.git/')) throw new ToolError('不能改 .git。');
-  if ((rel === '.relay' || rel.startsWith('.relay/')) && !RELAY_WRITABLE.test(rel)) {
-    throw new ToolError('.relay/ 里只能写交接（.relay/交接/）、复核结论（.relay/复核/*.md）和任务清单（.relay/任务.md）。');
+  const low = fold(rel);
+  if (low === '.git' || low.startsWith('.git/')) throw new ToolError('不能改 .git。');
+  if ((low === '.relay' || low.startsWith('.relay/')) && !RELAY_WRITABLE.test(`.relay${rel.slice(6).normalize('NFC')}`)) {
+    throw new ToolError('.relay/ 里只能写交接（.relay/交接/）、复核结论（.relay/复核/ 里的 .md）和任务清单（.relay/任务.md）。');
   }
-  if (matchProtected([rel], protectedPaths).length) throw new ToolError(`${rel} 是不许改的文件。`);
+  if (matchProtected([rel, low], [...protectedPaths, ...protectedPaths.map(fold)]).length) throw new ToolError(`${rel} 是不许改的文件。`);
 }
 
 function listFiles(root: string, relDir: string): string {
@@ -167,7 +212,7 @@ function readFile(root: string, args: Record<string, unknown>): string {
 }
 
 function writeFile(root: string, args: Record<string, unknown>, protectedPaths: string[]): string {
-  const { abs, rel } = resolveIn(root, args.path);
+  const { abs, rel } = resolveIn(root, args.path, true);
   assertWritable(rel, protectedPaths);
   if (typeof args.content !== 'string') throw new ToolError('缺少 content。');
   fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -177,7 +222,7 @@ function writeFile(root: string, args: Record<string, unknown>, protectedPaths: 
 }
 
 function editFile(root: string, args: Record<string, unknown>, protectedPaths: string[]): string {
-  const { abs, rel } = resolveIn(root, args.path);
+  const { abs, rel } = resolveIn(root, args.path, true);
   assertWritable(rel, protectedPaths);
   if (!fs.existsSync(abs)) throw new ToolError(`没有这个文件：${rel}（新文件用 write_file）`);
   const oldS = args.old_string;

@@ -138,7 +138,7 @@ test('全自动：弱模型干一棒 → 强模型复核 → 再干 → 再复�
   s.relay(['init']);
   s.relay(['task', '做两件事', '--step', '第一件', '第二件']);
   const out = s.relay(['auto']);
-  assert.match(out, /完成：任务清单 2\/2 全部打勾，Codex · gpt-6 终审过了/);
+  assert.match(out, /完成：验收通过：清单 2\/2 全部打勾，Codex · gpt-6 终审过了/);
   const st = s.stints();
   assert.deepEqual(
     st.map((x) => [x.kind, x.who.member]),
