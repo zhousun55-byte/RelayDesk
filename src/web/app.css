@@ -1,5 +1,6 @@
 /* 接力台网页。三栏：左右两边浅灰（项目和对话、项目文件），中间白（对话）。
-   只有黑、白、灰：大块面只用白和灰，黑色只留给按钮、标签、方块这些小地方。每个 AI 是一种深浅不同的方块。 */
+   只有黑、白、灰：大块面只用白和灰，黑色只留给主按钮和强模型的图标。平时只露一句话，细节悬停或点开再看。
+   每家 AI 一个单色图标：强模型实心，弱模型浅灰，身份不明是虚线框。 */
 
 :root {
   --ink: #0a0a0a;
@@ -17,31 +18,6 @@
   --solid: #0a0a0a;
   --on-solid: #ffffff;
   --pulse: rgba(10, 10, 10, 0.4);
-  /* 每个 AI 的方块：底色 / 字 / 描边 */
-  --m0: #0a0a0a;
-  --m0t: #fff;
-  --m0r: transparent;
-  --m1: #ffffff;
-  --m1t: #0a0a0a;
-  --m1r: #0a0a0a;
-  --m2: #6b6b6b;
-  --m2t: #fff;
-  --m2r: transparent;
-  --m3: #d6d6d6;
-  --m3t: #0a0a0a;
-  --m3r: transparent;
-  --m4: #333333;
-  --m4t: #fff;
-  --m4r: transparent;
-  --m5: #a8a8a8;
-  --m5t: #0a0a0a;
-  --m5r: transparent;
-  --m6: #0a0a0a;
-  --m6t: #fff;
-  --m6r: #ffffff;
-  --m7: #f0f0f0;
-  --m7t: #0a0a0a;
-  --m7r: #a8a8a8;
   --shadow: 0 14px 36px -12px rgba(0, 0, 0, 0.3), 0 2px 6px -2px rgba(0, 0, 0, 0.12);
   --shadow-soft: 0 10px 28px -16px rgba(0, 0, 0, 0.24);
   --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
@@ -67,25 +43,6 @@
     --solid: #f2f2f2;
     --on-solid: #0a0a0a;
     --pulse: rgba(242, 242, 242, 0.45);
-    --m0: #f2f2f2;
-    --m0t: #0a0a0a;
-    --m1: #0e0e0e;
-    --m1t: #f2f2f2;
-    --m1r: #f2f2f2;
-    --m2: #9a9a9a;
-    --m2t: #0a0a0a;
-    --m3: #3a3a3a;
-    --m3t: #f2f2f2;
-    --m4: #d0d0d0;
-    --m4t: #0a0a0a;
-    --m5: #5e5e5e;
-    --m5t: #f2f2f2;
-    --m6: #f2f2f2;
-    --m6t: #0a0a0a;
-    --m6r: #0e0e0e;
-    --m7: #1e1e1e;
-    --m7t: #f2f2f2;
-    --m7r: #6a6a6a;
     --shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
     --shadow-soft: 0 10px 28px -16px rgba(0, 0, 0, 0.6);
     color-scheme: dark;
@@ -106,25 +63,6 @@
   --solid: #f2f2f2;
   --on-solid: #0a0a0a;
   --pulse: rgba(242, 242, 242, 0.45);
-  --m0: #f2f2f2;
-  --m0t: #0a0a0a;
-  --m1: #0e0e0e;
-  --m1t: #f2f2f2;
-  --m1r: #f2f2f2;
-  --m2: #9a9a9a;
-  --m2t: #0a0a0a;
-  --m3: #3a3a3a;
-  --m3t: #f2f2f2;
-  --m4: #d0d0d0;
-  --m4t: #0a0a0a;
-  --m5: #5e5e5e;
-  --m5t: #f2f2f2;
-  --m6: #f2f2f2;
-  --m6t: #0a0a0a;
-  --m6r: #0e0e0e;
-  --m7: #1e1e1e;
-  --m7t: #f2f2f2;
-  --m7r: #6a6a6a;
   --shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.5);
   --shadow-soft: 0 10px 28px -16px rgba(0, 0, 0, 0.6);
   color-scheme: dark;
@@ -538,17 +476,23 @@ kbd {
 }
 
 .count {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 5px;
-  background: var(--solid);
-  color: var(--on-solid);
-  font-size: 11px;
-  font-weight: 700;
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.count::before,
+.ring-dot {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+  flex: none;
 }
 
 .dock {
@@ -576,13 +520,21 @@ kbd {
 
 .team .tile {
   margin-right: -5px;
-  box-shadow: 0 0 0 2px var(--fog), inset 0 0 0 1.5px var(--r);
+  box-shadow: 0 0 0 2px var(--fog), inset 0 0 0 1px var(--fog-3);
   transition: transform 0.18s var(--ease), margin 0.18s var(--ease);
+}
+
+.team .tile.strong {
+  box-shadow: 0 0 0 2px var(--fog);
 }
 
 .team:hover .tile {
   margin-right: 2px;
-  box-shadow: 0 0 0 2px var(--fog-2), inset 0 0 0 1.5px var(--r);
+  box-shadow: 0 0 0 2px var(--fog-2), inset 0 0 0 1px var(--fog-3);
+}
+
+.team:hover .tile.strong {
+  box-shadow: 0 0 0 2px var(--fog-2);
 }
 
 .team .more-n {
@@ -591,109 +543,81 @@ kbd {
   color: var(--ink-2);
 }
 
-/* ---------- 每个 AI 的方块 ---------- */
+/* ---------- 每家 AI 的图标 ---------- */
 
 .tile {
-  --c: var(--fog-3);
-  --t: var(--ink);
-  --r: transparent;
   width: 24px;
   height: 24px;
-  border-radius: 6px;
-  background: var(--c);
-  color: var(--t);
-  box-shadow: inset 0 0 0 1.5px var(--r);
+  border-radius: 7px;
+  background: var(--fog-2);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--fog-3);
   display: inline-grid;
   place-items: center;
   flex: none;
-  font: 700 10.5px/1 var(--sans);
-  letter-spacing: -0.02em;
   position: relative;
   user-select: none;
 }
 
-.m0 {
-  --c: var(--m0);
-  --t: var(--m0t);
-  --r: var(--m0r);
-  --s: var(--m0);
+.tile > svg {
+  width: 68%;
+  height: 68%;
+  display: block;
 }
 
-.m1 {
-  --c: var(--m1);
-  --t: var(--m1t);
-  --r: var(--m1r);
-  --s: var(--m1r);
+/* 强模型：实心 */
+.tile.strong {
+  background: var(--solid);
+  color: var(--on-solid);
+  box-shadow: none;
 }
 
-.m2 {
-  --c: var(--m2);
-  --t: var(--m2t);
-  --r: var(--m2r);
-  --s: var(--m2);
-}
-
-.m3 {
-  --c: var(--m3);
-  --t: var(--m3t);
-  --r: var(--m3r);
-  --s: var(--m5);
-}
-
-.m4 {
-  --c: var(--m4);
-  --t: var(--m4t);
-  --r: var(--m4r);
-  --s: var(--m4);
-}
-
-.m5 {
-  --c: var(--m5);
-  --t: var(--m5t);
-  --r: var(--m5r);
-  --s: var(--m5);
-}
-
-.m6 {
-  --c: var(--m6);
-  --t: var(--m6t);
-  --r: var(--m6r);
-  --s: var(--m6);
-}
-
-.m7 {
-  --c: var(--m7);
-  --t: var(--m7t);
-  --r: var(--m7r);
-  --s: var(--m7r);
+/* 身份不明：虚线框 */
+.tile.unknown {
+  background: transparent;
+  color: var(--ink-3);
+  box-shadow: none;
+  outline: 1.5px dashed var(--ink-3);
+  outline-offset: -1.5px;
 }
 
 .tile.s16 {
   width: 16px;
   height: 16px;
-  border-radius: 4px;
-  font-size: 7.5px;
+  border-radius: 4.5px;
+}
+
+.tile.s16 > svg {
+  width: 76%;
+  height: 76%;
 }
 
 .tile.s20 {
   width: 20px;
   height: 20px;
-  border-radius: 5px;
-  font-size: 9.5px;
+  border-radius: 6px;
+}
+
+.tile.s20 > svg {
+  width: 72%;
+  height: 72%;
 }
 
 .tile.s28 {
   width: 28px;
   height: 28px;
-  border-radius: 7px;
-  font-size: 11.5px;
+  border-radius: 8px;
 }
 
 .tile.s44 {
   width: 44px;
   height: 44px;
-  border-radius: 10px;
-  font-size: 15px;
+  border-radius: 12px;
+}
+
+.tile.s44 > svg {
+  width: 60%;
+  height: 60%;
 }
 
 .tile.cooling {
@@ -717,15 +641,20 @@ kbd {
   box-shadow: 0 0 0 2px var(--fog);
 }
 
-.tile.unknown {
-  --t: var(--ink);
-  --r: var(--ink-3);
-  background: repeating-linear-gradient(135deg, var(--fog-3) 0 2px, var(--paper) 2px 5px);
+.tile.human {
+  background: var(--solid);
+  color: var(--on-solid);
+  box-shadow: none;
 }
 
-.tile.human {
-  --c: var(--solid);
-  --t: var(--on-solid);
+.tile.human > svg {
+  width: 72%;
+  height: 72%;
+}
+
+.who-tile {
+  display: inline-flex;
+  align-self: start;
 }
 
 /* ---------- 按钮、开关、分段 ---------- */
@@ -852,7 +781,7 @@ kbd {
 
 .split > .btn:first-child {
   border-radius: 8px 0 0 8px;
-  padding-left: 5px;
+  padding: 0 10px 0 9px;
 }
 
 .split > .btn:last-child {
@@ -1001,32 +930,6 @@ button.chip:hover .dim {
   opacity: 0.7;
 }
 
-.tier {
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  display: inline-grid;
-  place-items: center;
-  font-size: 10.5px;
-  font-weight: 700;
-  flex: none;
-}
-
-.tier.strong {
-  background: var(--solid);
-  color: var(--on-solid);
-}
-
-.tier.weak {
-  background: var(--fog-2);
-  color: var(--ink-2);
-}
-
-.tier.unknown {
-  box-shadow: inset 0 0 0 1.5px var(--ink-3);
-  color: var(--ink-3);
-}
-
 /* ---------- 中间 ---------- */
 
 .center {
@@ -1039,17 +942,30 @@ button.chip:hover .dim {
 }
 
 .bar {
-  padding: 12px 20px 0;
+  padding: 10px 20px 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
   flex: none;
   container-type: inline-size;
+  box-shadow: inset 0 -1px 0 var(--line);
 }
 
-@container (max-width: 560px) {
-  .bar .switch .lbl,
-  .bar .split .lbl {
+@container (max-width: 460px) {
+  .bar-meta .status {
+    display: none;
+  }
+}
+
+@container (max-width: 520px) {
+  .bar-meta .meta-btn {
+    display: none;
+  }
+}
+
+@container (max-width: 340px) {
+  .bar .split .lbl,
+  .bar-meta .accept .w {
     display: none;
   }
 
@@ -1067,7 +983,7 @@ button.chip:hover .dim {
 
 .bar-title {
   flex: 1;
-  min-width: 0;
+  min-width: 112px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1103,6 +1019,29 @@ button.title:hover {
   min-width: 0;
 }
 
+.bar-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.bar-meta > * {
+  flex: none;
+}
+
+.bar-meta > .status {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.status .w {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .bar-ctl {
   display: flex;
   align-items: center;
@@ -1110,12 +1049,29 @@ button.title:hover {
   flex: none;
 }
 
+/* 顶栏里的淡字按钮：待复核几棒 */
+.meta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.meta-btn:hover {
+  background: var(--fog);
+}
+
 .status {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   height: 26px;
-  padding: 0 2px;
+  padding: 0 8px;
   flex: none;
   border-radius: 8px;
   font-size: 12.5px;
@@ -1142,73 +1098,71 @@ button.title:hover {
   box-shadow: inset 0 0 0 1.5px var(--ink);
 }
 
-/* 接力条：一棒一块，深浅是做这一棒的 AI。 */
-.strip-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--line);
-}
-
+/* 接力条：压在顶栏底边的一条细线，一棒一段。深的是强模型，浅的是弱模型，断开的是待复核。 */
 .strip {
-  flex: 1;
   display: flex;
-  gap: 3px;
-  height: 8px;
+  gap: 2px;
+  height: 3px;
+  margin: 0 -20px;
   min-width: 0;
-  border-radius: 3px;
-  background: var(--fog);
-}
-
-.strip:empty::before {
-  content: '';
-  flex: 1;
-  border-radius: 3px;
-  background: var(--fog);
 }
 
 .strip i {
   flex: var(--g, 1) 1 0;
   min-width: 8px;
   max-width: 18%;
-  border-radius: 3px;
-  background: var(--c, var(--fog-3));
-  box-shadow: inset 0 0 0 1.5px var(--r, transparent);
+  background: var(--fog-3);
   cursor: pointer;
   position: relative;
+  transform-origin: bottom;
   transition: transform 0.16s var(--ease), opacity 0.16s;
 }
 
-.strip i:hover {
-  transform: scaleY(1.75);
+/* 细线好点：上下各多出一截可点的地方 */
+.strip i::before {
+  content: '';
+  position: absolute;
+  inset: -6px 0 0;
+}
+
+.strip i:hover,
+.strip i.lit {
+  transform: scaleY(2.4);
+}
+
+.strip i.strong {
+  background: var(--ink);
+}
+
+.strip i.weak {
+  background: var(--ink-3);
+}
+
+.strip i.unknown {
+  background: repeating-linear-gradient(90deg, var(--ink-3) 0 3px, transparent 3px 5px);
 }
 
 .strip i.review,
 .strip i.final {
-  background: transparent;
-  box-shadow: inset 0 0 0 2px var(--s, var(--ink-3));
+  opacity: 0.45;
 }
 
-.strip i.pending::after,
-.strip i.live::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: repeating-linear-gradient(135deg, transparent 0 3px, #fff 3px 5px);
-  mix-blend-mode: difference;
+.strip i.pending {
+  background-image: repeating-linear-gradient(90deg, transparent 0 4px, var(--paper) 4px 6px);
 }
 
-.strip i.live::after {
-  background-image: repeating-linear-gradient(135deg, #fff 0 4px, transparent 4px 9px);
-  background-size: 25.46px 100%;
-  animation: stripe 0.9s linear infinite;
+.strip i.live {
+  background-image: linear-gradient(90deg, transparent 0, var(--paper) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: sweep 1.2s linear infinite;
 }
 
-@keyframes stripe {
+@keyframes sweep {
+  from {
+    background-position: 100% 0;
+  }
   to {
-    background-position: 25.46px 0;
+    background-position: -100% 0;
   }
 }
 
@@ -1219,10 +1173,9 @@ button.title:hover {
 .progress {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   height: 26px;
   padding: 0 8px;
-  margin-right: -8px;
   border-radius: 7px;
   font-size: 12.5px;
   color: var(--ink-2);
@@ -1234,14 +1187,14 @@ button.title:hover {
   color: var(--ink);
 }
 
-/* 验收：通过 = 实心；没过 = 描边；没法判断 = 虚线。只用黑白灰，靠文字和形状分开。 */
+/* 验收：通过 = 浅灰实底；没过 = 描边；没法判断 = 虚线。只用黑白灰，靠文字和形状分开（黑色留给主按钮）。 */
 .accept {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 22px;
   padding: 0 8px;
-  margin-left: 6px;
+  margin: 0 4px;
   border-radius: 6px;
   font-size: 12px;
   font-weight: 600;
@@ -1261,8 +1214,8 @@ button.title:hover {
 }
 
 .accept.accepted {
-  background: var(--solid);
-  color: var(--on-solid);
+  background: var(--fog-2);
+  color: var(--ink);
 }
 
 .accept.blocked {
@@ -1640,15 +1593,14 @@ button.title:hover {
 }
 
 .round-cols {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-left: 14px;
+  box-shadow: inset 2px 0 0 var(--fog-2);
 }
 
 .round-cols .ai {
-  background: var(--fog);
-  border-radius: 12px;
-  padding: 12px;
   grid-template-columns: 20px minmax(0, 1fr);
   column-gap: 10px;
 }
@@ -1704,9 +1656,27 @@ button.title:hover {
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  flex-wrap: wrap;
+  min-width: 0;
   font-size: 12.5px;
   color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.card .head > * {
+  flex: none;
+}
+
+/* 挤不下时模型先收起来，名字再收 */
+.card .head b,
+.card .head .model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+
+.card .head .model {
+  flex-shrink: 100;
 }
 
 .card .head b {
@@ -1721,15 +1691,24 @@ button.title:hover {
 }
 
 .kind {
-  font-size: 11.5px;
-  font-weight: 650;
-  color: var(--ink);
-  box-shadow: inset 0 0 0 1.5px var(--ink);
-  border-radius: 5px;
-  padding: 0 5px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+/* 模型、时间：悬停才出来 */
+.card .head .model,
+.ai .who .model,
+.ai .who .time {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.card:hover .head .model,
+.card:focus-within .head .model,
+.card.open .head .model,
+.ai:hover .who .model,
+.ai:hover .who .time {
+  opacity: 1;
 }
 
 .card .sum {
@@ -1746,45 +1725,68 @@ button.title:hover {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  gap: 2px 14px;
+  margin-top: 5px;
   font-size: 12px;
   color: var(--ink-3);
-  margin-right: 4px;
 }
 
-.state .dot {
-  width: 6px;
-  height: 6px;
-  background: var(--ink-3);
+/* 卡片底下的一句句淡字：正常的不写，要注意的加深 */
+.st {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
 }
 
-.state.ok {
+.st .i {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.st .ell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.st .num {
+  font-variant-numeric: tabular-nums;
+}
+
+.st.ok {
   color: var(--ink-2);
 }
 
-.state.ok .dot {
-  background: var(--solid);
+.st.pend,
+.st.live {
+  color: var(--ink);
 }
 
-.state.bad {
+.st.bad {
   color: var(--ink);
   font-weight: 600;
 }
 
-.state.live {
-  color: var(--ink);
+.st .dot {
+  width: 6px;
+  height: 6px;
+  animation: pulse 1.6s ease-in-out infinite;
 }
 
-.state.live .dot {
-  background: var(--solid);
-  animation: pulse 1.6s ease-in-out infinite;
+.link-st {
+  border-radius: 5px;
+  padding: 1px 5px;
+  margin: -1px -5px;
+  transition: background 0.12s, color 0.12s;
+}
+
+.link-st:hover {
+  background: var(--fog-2);
+  color: var(--ink);
 }
 
 .card .hover-acts {
@@ -1813,47 +1815,19 @@ button.title:hover {
   visibility: hidden;
 }
 
-.runbar {
-  height: 3px;
-  border-radius: 2px;
-  margin-top: 10px;
-  background: var(--fog-3);
-  overflow: hidden;
-  position: relative;
-}
-
-.runbar::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  width: 40%;
-  border-radius: 2px;
-  background: var(--solid);
-  animation: run 1.3s var(--ease) infinite;
-}
-
-@keyframes run {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(260%);
-  }
-}
-
+/* 正在干活的那一棒：日志最后几行，淡字，能往上翻；完整的在「日志」里 */
 .tail {
-  margin-top: 10px;
-  background: var(--paper);
-  color: var(--ink-2);
-  box-shadow: inset 0 0 0 1px var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
-  font: 11.5px/1.55 var(--mono);
-  max-height: 176px;
+  margin: 8px 0 0;
+  padding: 0 0 0 10px;
+  box-shadow: inset 2px 0 0 var(--fog-2);
+  color: var(--ink-3);
+  font: 11px/1.6 var(--mono);
+  max-height: calc(3 * 1.6 * 11px);
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-all;
   cursor: text;
+  scrollbar-width: none;
 }
 
 .more-body {
@@ -2014,7 +1988,16 @@ code {
 }
 
 .sys.strong {
-  color: var(--ink);
+  color: var(--ink-2);
+}
+
+.sys .x {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.sys:hover .x {
+  opacity: 1;
 }
 
 /* 投票 */
@@ -2040,15 +2023,8 @@ code {
 }
 
 .vote-head .label {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--on-solid);
-  background: var(--solid);
-  border-radius: 5px;
-  padding: 0 6px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
+  font-size: 12px;
+  color: var(--ink-3);
   flex: none;
 }
 
@@ -2068,7 +2044,7 @@ code {
 
 .opt {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   gap: 4px 12px;
   align-items: start;
   padding: 10px;
@@ -2085,20 +2061,21 @@ button.opt:hover {
 }
 
 .opt .key {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: var(--fog-2);
-  color: var(--ink);
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--fog-3);
+  color: var(--ink-2);
   display: grid;
   place-items: center;
-  font-weight: 700;
-  font-size: 12.5px;
+  font-weight: 650;
+  font-size: 12px;
 }
 
 .opt.lead .key {
   background: var(--solid);
   color: var(--on-solid);
+  box-shadow: none;
 }
 
 .opt .otext {
@@ -2829,19 +2806,21 @@ button.opt:hover {
 }
 
 .tree-row .mk i {
-  width: 9px;
-  height: 9px;
-  border-radius: 2.5px;
-  background: var(--c);
-  box-shadow: inset 0 0 0 1.5px var(--s, var(--r));
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.tree-row .mk i.strong {
+  background: var(--ink);
 }
 
 .tree-row .mk .pend {
-  width: 9px;
-  height: 9px;
-  border-radius: 2.5px;
-  background: repeating-linear-gradient(135deg, var(--ink) 0 1.5px, transparent 1.5px 3.5px);
-  box-shadow: inset 0 0 0 1px var(--ink);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--ink);
 }
 
 .tree-row.touched .nm {
@@ -3760,6 +3739,11 @@ button.opt:hover {
     padding: 10px 14px 0;
   }
 
+  .strip {
+    margin: 0 -14px;
+  }
+
+  /* 窄的时候两行：标题一行，下面左边淡字、右边按钮 */
   .bar-top {
     flex-wrap: wrap;
     row-gap: 6px;
@@ -3769,13 +3753,17 @@ button.opt:hover {
     flex-basis: 100%;
   }
 
-  .bar-ctl {
-    width: 100%;
+  .bar-meta {
+    flex: 1 1 auto;
+    margin-left: -8px;
   }
 
-  .bar-ctl .status {
-    margin-right: auto;
-    padding-left: 0;
+  .bar-meta .status {
+    display: inline-flex;
+  }
+
+  .bar-ctl {
+    margin-left: auto;
   }
 
   .stream {
@@ -3845,17 +3833,8 @@ button.opt:hover {
   margin-bottom: 0;
 }
 
-.strip i.unknown {
-  background: repeating-linear-gradient(135deg, var(--ink-3) 0 2px, transparent 2px 4.5px);
-  box-shadow: inset 0 0 0 1px var(--ink-3);
-}
-
-.strip i.lit {
-  transform: scaleY(1.75);
-}
-
 .tree-row .mk i.unknown {
-  background: repeating-linear-gradient(135deg, var(--ink-3) 0 1.5px, transparent 1.5px 3.5px);
+  background: transparent;
   box-shadow: inset 0 0 0 1px var(--ink-3);
 }
 

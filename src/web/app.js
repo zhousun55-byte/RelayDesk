@@ -392,7 +392,7 @@ async function act(btn, fn, okText) {
   }
 }
 
-// ---------- 成员：每人一种深浅的方块 ----------
+// ---------- 成员：每家 AI 一个图标 ----------
 
 function members() {
   return (S.st && S.st.members) || [];
@@ -410,77 +410,149 @@ function memberByName(n) {
   return members().find((m) => m.name === n) || null;
 }
 
-let looks = { key: '', style: new Map(), mono: new Map() };
+/*
+ * 每家 AI 一个单色小图形（24×24），照各家标志的样子简化画的，只用黑白灰。
+ * 图标跟着在干活的那家模型走：Claude Code 接的是 DeepSeek，就画鲸鱼；Cursor、OpenCode 这类能换模型的工具画它自己的。
+ * 认不出来的给一个几何图形，同一份名单里不重样。强弱看底色：强模型实心，弱模型浅灰，身份不明是虚线框。
+ */
+const line = (d, w = 2.2) => `<path d="${d}" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+const solid = (d) => `<path d="${d}" fill="currentColor" fill-rule="evenodd"/>`;
 
-function monoCandidates(label) {
-  const base = String(label || '?').split(' · ')[0].trim();
-  const ascii = base.split(/\s+/).filter((w) => /^[A-Za-z0-9]/.test(w));
-  const cjk = base.replace(/[\x00-\x7f]/g, '').trim();
-  if (!ascii.length) return [base.slice(0, 1) || '?', base.slice(0, 2)];
-  const w = ascii[0];
-  const caps = w.replace(/[^A-Z]/g, '');
-  const out = [];
-  if (ascii.length >= 2) out.push((w[0] + ascii[1][0]).toUpperCase());
-  else if (caps.length >= 2) out.push(caps.slice(0, 2));
-  else out.push(w[0].toUpperCase() + (w[1] || '').toLowerCase());
-  if (cjk) out.push(w[0].toUpperCase() + cjk[0]);
-  out.push(w[0].toUpperCase() + (w[w.length - 1] || '').toLowerCase());
-  for (let i = 2; i < 10; i++) out.push(w[0].toUpperCase() + i);
-  return out;
+function knot() {
+  let rings = '';
+  for (let a = 0; a < 360; a += 60) rings += `<rect x="12.3" y="3.8" width="5" height="10.4" rx="2.5" transform="rotate(${a} 12 12)"/>`;
+  return `<g fill="none" stroke="currentColor" stroke-width="1.9">${rings}</g>`;
 }
 
-/** 给每个成员定一种方块和两个字母；名单不变就不重算（不会跳来跳去）。 */
+const GLYPHS = {
+  // 做模型的几家
+  anthropic: line('M12 10.8V2.4M12.67 11.01l3.47-5.14M13.11 11.55l7.42-3M13.18 12.23l5.69 1.11M12.82 12.88l5.73 6.14M12.19 13.19l1 6.32M11.49 13.09l-3.29 7.07M10.97 12.62l-5.14 3.09M10.8 11.92l-8.38-.59M11.05 11.26 6.17 7.44', 2.3),
+  openai: knot(),
+  deepseek: solid('M3 11.6C3 8.9 5.4 7.4 8.6 7.6c3.2.2 5.2 1.6 6.8 3 1.2 1 2.2.2 2.8-1.2.4-1.1 1.1-2.8 3-3.5 0 1.9-.6 3.7-1.6 5.3-1 1.7-2.4 3-4.2 3.9-2.4 1.3-5.1 1.8-7.5 1.5C5.1 16.2 3 14.6 3 11.6zM5.95 11a.95.95 0 1 0 1.9 0 .95.95 0 1 0-1.9 0z'),
+  google: solid('M12 2.5c.55 5.1 4.4 8.95 9.5 9.5-5.1.55-8.95 4.4-9.5 9.5-.55-5.1-4.4-8.95-9.5-9.5 5.1-.55 8.95-4.4 9.5-9.5z'),
+  xai: line('M16.8 5.9A7.5 7.5 0 0 0 5.9 16.8M8.3 18.6A7.5 7.5 0 0 0 18.6 8.3M3.8 20.2 20.2 3.8'),
+  zhipu: `${line('M5 6.5h11L5.5 17.5H16', 2.6)}<circle cx="19.4" cy="17.5" r="1.6" fill="currentColor"/>`,
+  xiaomi: line('M5 17.5V8h7.2a3.3 3.3 0 0 1 3.3 3.3v6.2M9.4 12v5.5M19.2 8v9.5', 2.3),
+  qwen: line('M12 3.8 19 7.9v4.3M19.1 16.1 12 20.2l-3.7-2.1M4.9 16.1V7.9l3.7-2.2', 2.4),
+  moonshot: solid('M15.2 3.9a8.6 8.6 0 1 0 4.9 12.4A7.1 7.1 0 0 1 15.2 3.9z'),
+  meta: line('M12 12c-2-3-3.6-4.5-5.5-4.5a4.5 4.5 0 0 0 0 9c1.9 0 3.5-1.5 5.5-4.5s3.6-4.5 5.5-4.5a4.5 4.5 0 0 1 0 9c-1.9 0-3.5-1.5-5.5-4.5z'),
+  // 能换模型的工具
+  cursor: '<path d="M12 3 19.79 7.5 12 12 4.21 7.5z" fill="currentColor"/><path d="M4.21 7.5 12 12v9l-7.79-4.5z" fill="currentColor" opacity=".55"/><path d="M19.79 7.5v9L12 21v-9z" fill="currentColor" opacity=".28"/>',
+  opencode: `<rect x="3.5" y="4.5" width="17" height="15" rx="3.2" fill="none" stroke="currentColor" stroke-width="2"/>${line('m7.6 9.8 2.6 2.3-2.6 2.3M12.6 14.6h3.8', 2)}`,
+  antigravity: line('M4.5 19.5C5 12.2 8 5.5 12 5.5s7 6.7 7.5 14', 3.2),
+  copilot: '<g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M3.8 11.8c0-3.6 2.4-6.3 8.2-6.3s8.2 2.7 8.2 6.3v3.3c0 2-3.7 4.1-8.2 4.1s-8.2-2.1-8.2-4.1z"/><rect x="6.2" y="9.3" width="4.9" height="4.1" rx="2.05"/><rect x="12.9" y="9.3" width="4.9" height="4.1" rx="2.05"/></g>',
+  kiro: solid('M5.5 20.2V11a6.5 6.5 0 0 1 13 0v9.2l-2.2-1.5-2.1 1.5-2.2-1.5-2.2 1.5-2.1-1.5zM9 10.6a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0zM12.6 10.6a1.2 1.2 0 1 0 2.4 0 1.2 1.2 0 1 0-2.4 0z'),
+  unknown: line('M9.3 9.3a2.8 2.8 0 1 1 4.1 2.5c-.9.5-1.4 1.1-1.4 2.1v.6M12 17.5v.1', 2.1),
+  // 认不出来的：几何图形
+  ring: '<circle cx="12" cy="12" r="6.6" fill="none" stroke="currentColor" stroke-width="2.6"/>',
+  tri: line('M12 5.2 19.2 18H4.8z', 2.3),
+  diamond: solid('M12 4.2 19.8 12 12 19.8 4.2 12z'),
+  hex: line('M12 4.5 18.5 8.25v7.5L12 19.5l-6.5-3.75v-7.5z'),
+  plus: line('M12 5.2v13.6M5.2 12h13.6', 3),
+  dots: '<g fill="currentColor"><circle cx="8.3" cy="8.3" r="2.6"/><circle cx="15.7" cy="8.3" r="2.6"/><circle cx="8.3" cy="15.7" r="2.6"/><circle cx="15.7" cy="15.7" r="2.6"/></g>',
+  half: '<path d="M5 12a7 7 0 0 1 14 0z" fill="currentColor"/><path d="M5 12a7 7 0 0 0 14 0" fill="none" stroke="currentColor" stroke-width="2"/>',
+  square: '<rect x="5" y="5" width="14" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2.3"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="currentColor"/>',
+};
+const SHAPES = ['ring', 'tri', 'diamond', 'hex', 'plus', 'dots', 'half', 'square'];
+
+/** 能换模型的工具：画工具自己的。 */
+const TOOL_OWN = [
+  [/cursor/i, 'cursor'],
+  [/opencode/i, 'opencode'],
+  [/antigravity|\bagy\b/i, 'antigravity'],
+  [/copilot/i, 'copilot'],
+  [/kiro/i, 'kiro'],
+];
+/** 模型名是哪一家的。 */
+const MODEL_MAKER = [
+  [/claude|opus|sonnet|haiku/i, 'anthropic'],
+  [/deepseek/i, 'deepseek'],
+  [/gpt|codex|\bo[1-9](?:-|$)/i, 'openai'],
+  [/gemini|gemma/i, 'google'],
+  [/grok/i, 'xai'],
+  [/glm/i, 'zhipu'],
+  [/mimo/i, 'xiaomi'],
+  [/qwen|qwq/i, 'qwen'],
+  [/kimi|moonshot/i, 'moonshot'],
+  [/llama/i, 'meta'],
+];
+/** 不知道模型时：工具是哪一家的。 */
+const TOOL_MAKER = [
+  [/claude/i, 'anthropic'],
+  [/codex|chatgpt|openai|\bgpt\b/i, 'openai'],
+  [/deepseek|\bdsh\b/i, 'deepseek'],
+  [/gemini/i, 'google'],
+  [/grok/i, 'xai'],
+  [/zcode|glm|zhipu|智谱/i, 'zhipu'],
+  [/mimo|xiaomi|小米/i, 'xiaomi'],
+  [/qwen|通义/i, 'qwen'],
+  [/kimi|moonshot/i, 'moonshot'],
+];
+
+function brandOf(tool, model) {
+  const pick = (rules, text) => (text && (rules.find(([re]) => re.test(text)) || [])[1]) || null;
+  return pick(TOOL_OWN, tool) || pick(MODEL_MAKER, model) || pick(TOOL_MAKER, tool);
+}
+
+function toolText(name, label, agent) {
+  return [agent && agent.harness, name, splitLabel(label)[0]].filter(Boolean).join(' ');
+}
+
+let looks = { key: '', shape: new Map() };
+
+/** 名单变了才重算：认不出来的成员各给一个几何图形，不重样、不跳来跳去。 */
 function refreshLooks() {
   const ms = members();
-  const extra = new Map();
-  for (const s of (S.st && S.st.project.stints) || []) if (s.who.member && !ms.some((m) => m.name === s.who.member)) extra.set(s.who.member, s.who.label);
-  const labels = new Map([...ms.map((m) => [m.name, m.label]), ...extra]);
-  const names = [...labels.keys()].sort();
-  const key = names.map((n) => `${n}=${labels.get(n)}`).join('|');
+  const key = ms.map((m) => `${m.name}=${m.label}=${m.model || ''}=${m.tier}`).join('|');
   if (key === looks.key) return;
-  const style = new Map();
-  let used = new Set();
-  for (const n of names) {
-    let k = hashStr(n) % 8;
-    for (let i = 0; i < 8 && used.has(k); i++) k = (k + 1) % 8;
-    used.add(k);
-    if (used.size >= 8) used = new Set();
-    style.set(n, k);
+  const shape = new Map();
+  const used = new Set();
+  for (const m of [...ms].sort((a, b) => a.name.localeCompare(b.name))) {
+    if (brandOf(toolText(m.name, m.label, m.agent), m.model)) continue;
+    let k = hashStr(m.name) % SHAPES.length;
+    for (let i = 0; i < SHAPES.length && used.has(SHAPES[k]); i++) k = (k + 1) % SHAPES.length;
+    used.add(SHAPES[k]);
+    shape.set(m.name, SHAPES[k]);
   }
-  const plain = (n) => !/[^\x00-\x7f]/.test(String(labels.get(n)).split(' · ')[0]);
-  const order = [...names].sort((a, b) => Number(!plain(a)) - Number(!plain(b)) || a.localeCompare(b));
-  const mono = new Map();
-  const taken = new Set();
-  for (const n of order) {
-    const cands = monoCandidates(labels.get(n));
-    const pick = cands.find((c) => !taken.has(c)) || cands[0];
-    taken.add(pick);
-    mono.set(n, pick);
-  }
-  looks = { key, style, mono };
+  looks = { key, shape };
 }
 
-/** who 可以是成员、一棒的 who、群聊的一行（agent + who）。 */
+/** who 可以是成员、一棒的 who、群聊的一行（agent + label）。模型以这一棒自己记下的为准。 */
 function lookOf(who) {
-  const name = who.name || who.member || who.agent || null;
+  const name = who.name || who.member || (typeof who.agent === 'string' ? who.agent : null) || null;
   const label = who.label || who.who || '';
-  if (name && looks.style.has(name)) return { cls: `m${looks.style.get(name)}`, text: looks.mono.get(name) };
-  if (!name && (!label || label === '不知道是谁')) return { cls: 'unknown', text: '?' };
-  return { cls: `m${hashStr(label) % 8}`, text: monoCandidates(label)[0] };
+  const m = name ? memberByName(name) : null;
+  const tier = who.tier || (m && m.tier) || 'unknown';
+  if (!name && (!label || label === '不知道是谁')) return { brand: 'unknown', tier: 'unknown' };
+  const model = who.model || splitLabel(label)[1] || (m && m.model) || '';
+  const brand = brandOf([who.tool, toolText(name, label, m && m.agent)].filter(Boolean).join(' '), model);
+  return { brand: brand || (name && looks.shape.get(name)) || SHAPES[hashStr(name || label) % SHAPES.length], tier };
+}
+
+function glyph(key) {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('viewBox', '0 0 24 24');
+  s.setAttribute('class', 'g');
+  s.setAttribute('aria-hidden', 'true');
+  s.innerHTML = GLYPHS[key] || GLYPHS.unknown;
+  return s;
 }
 
 function tile(who, sz = '', extra = '') {
   const l = lookOf(who);
-  return h('span', { class: `tile ${l.cls} ${sz} ${extra}`.trim(), 'aria-hidden': 'true' }, l.text);
+  return h('span', { class: `tile ${l.tier} ${sz} ${extra}`.trim(), 'data-brand': l.brand, 'aria-hidden': 'true' }, glyph(l.brand));
 }
 
-function tierEl(t) {
-  const w = t === 'strong' ? '强' : t === 'weak' ? '弱' : '?';
-  return h('span', { class: `tier ${t || 'unknown'}`, 'data-tip': t === 'strong' ? '强模型' : t === 'weak' ? '弱模型' : '身份不明' }, w);
-}
+const TIER_WORD = { strong: '强模型', weak: '弱模型' };
 
 function memberTip(m) {
-  return [m.label, m.model, m.cooling ? `额度用完 · ${m.coolingText}` : ''].filter(Boolean).join('\n');
+  return [m.label, [m.model, TIER_WORD[m.tier]].filter(Boolean).join(' · '), m.cooling ? `额度用完 · ${m.coolingText}` : ''].filter(Boolean).join('\n');
+}
+
+/** 一棒是谁做的：名字 · 模型，强弱。 */
+function whoTip(who) {
+  if (!who.label || who.label === '不知道是谁') return '身份不明';
+  return [who.label, TIER_WORD[who.tier]].filter(Boolean).join('\n');
 }
 
 function busyMember() {
@@ -1313,44 +1385,31 @@ function renderBar(t) {
   const title = latest
     ? h('button', { class: 'title', 'data-tip': '改标题', onclick: editTitle }, p.task.title || t.title || '未命名')
     : h('span', { class: 'title' }, t.title || '未命名');
+  const meta = [];
   const ctl = [];
   if (latest) {
-    const autoOn = !!g && g.mode === 'auto' && (g.status === 'running' || g.status === 'waiting');
-    ctl.push(
-      h(
-        'button',
-        {
-          class: 'switch',
-          role: 'switch',
-          'aria-checked': String(autoOn),
-          disabled: !autoOn && (p.task.empty || !ready().length || run.running),
-          onclick: (e) => {
-            const b = e.currentTarget;
-            b.setAttribute('aria-checked', String(!autoOn));
-            if (autoOn) act(b, () => api('/api/stop', {}), '已停止');
-            else act(b, () => startWork('/api/auto', {}), '全自动已开始');
-          },
-        },
-        h('span', { class: 'track' }),
-        h('span', { class: 'lbl' }, '全自动')
-      )
-    );
-    if (p.pending.length) ctl.push(h('button', { class: 'chip solid', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget) }, `待复核 ${p.pending.length}`));
+    meta.push(statusEl(run));
+    if (p.pending.length) {
+      meta.push(h('button', { class: 'meta-btn', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget) }, h('span', { class: 'ring-dot' }), `待复核 ${p.pending.length}`));
+    }
+    // 验收通过 / 没过时清单一定全打勾了，只留验收那一个
+    const a = p.acceptance;
+    meta.push(a && (a.state === 'accepted' || a.state === 'blocked') ? null : progressEl(p.task), acceptEl(a));
     if (run.running || run.waiting) {
-      ctl.push(h('button', { class: 'btn primary', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), '停止'));
+      ctl.push(h('button', { class: 'btn primary', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), h('span', { class: 'lbl' }, '停止')));
     } else {
-      const w = defaultWorker();
+      const why = p.task.empty ? '先写好要做什么' : !ready().length ? '没有可用的成员' : '';
       ctl.push(
         h(
           'span',
           { class: 'split' },
           h(
             'button',
-            { class: 'btn primary', disabled: !w || p.task.empty, 'data-tip': w ? [w.label, w.model].filter(Boolean).join(' · ') : '没有可用的成员', onclick: (e) => goWith(e.currentTarget, w) },
-            w ? tile(w, 's16') : icon('play'),
-            h('span', { class: 'lbl' }, '接着做')
+            { class: 'btn primary', disabled: !!why, 'data-tip': why || '换谁接着做都行，做到验收通过为止', onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), '全自动已开始') },
+            icon('play'),
+            h('span', { class: 'lbl' }, '全自动')
           ),
-          h('button', { class: 'btn primary', 'aria-label': '选择成员', 'aria-haspopup': 'menu', onclick: (e) => whoMenu(e.currentTarget) }, icon('down'))
+          h('button', { class: 'btn primary', 'aria-label': '只做一棒', 'data-tip': '只做一棒', 'aria-haspopup': 'menu', onclick: (e) => whoMenu(e.currentTarget) }, icon('down'))
         )
       );
     }
@@ -1358,32 +1417,42 @@ function renderBar(t) {
   }
   if (UI.noRight || narrow()) ctl.push(sideBtn('right'));
   CE.bar.replaceChildren(
-    h('div', { class: 'bar-top' }, h('div', { class: 'bar-title' }, UI.noLeft || narrow() ? sideBtn('left') : null, title), h('div', { class: 'bar-ctl' }, ctl)),
-    h('div', { class: 'strip-row' }, stripEl(t), latest ? statusEl(run) : null, latest ? progressEl(p.task) : null, latest ? acceptEl(p.acceptance) : null)
+    h(
+      'div',
+      { class: 'bar-top' },
+      h('div', { class: 'bar-title' }, UI.noLeft || narrow() ? sideBtn('left') : null, title),
+      h('div', { class: 'bar-meta' }, meta),
+      h('div', { class: 'bar-ctl' }, ctl)
+    ),
+    stripEl(t)
   );
 }
 
+/** 顶栏上一句现在在干什么：谁用小图标表示（全名悬停看），空闲时不写。 */
 function statusEl(run) {
   if (run.running) {
     const c = run.cur;
+    const auto = run.g && run.g.mode === 'auto';
     return h(
       'span',
-      { class: 'status live' },
+      { class: 'status live', 'data-tip': c ? `${auto ? '全自动 · ' : ''}${c.label}` : null },
       h('span', { class: 'dot' }),
-      c ? `${splitLabel(c.label)[0]} · ${KIND_WORD[c.kind] || '干活中'} · ` : '进行中',
+      auto ? h('span', { class: 'w' }, '全自动') : null,
+      c ? tile({ name: c.member, label: c.label }, 's16') : null,
+      h('span', { class: 'w' }, c ? KIND_WORD[c.kind] || '干活中' : '进行中'),
       c ? h('span', { class: 'num', 'data-since': c.since }, elapsed(c.since)) : null
     );
   }
   if (run.waiting) {
     const g = run.g;
-    return h('span', { class: 'status wait', 'data-tip': g && g.phase }, h('span', { class: 'dot' }), `等额度${g && g.waitingUntil ? ` · ${clock(g.waitingUntil)}` : ''}`);
+    return h('span', { class: 'status wait', 'data-tip': g && g.phase }, h('span', { class: 'dot' }), h('span', { class: 'w' }, `等额度${g && g.waitingUntil ? ` · ${clock(g.waitingUntil)}` : ''}`));
   }
   if (run.native) {
     const s = S.st.project.stints.find((x) => x.status === 'working');
-    const who = s && s.who.label !== '不知道是谁' ? splitLabel(s.who.label)[0] : '';
-    return h('span', { class: 'status live' }, h('span', { class: 'dot' }), `${who ? `${who} · ` : ''}进行中`);
+    const known = s && s.who.label !== '不知道是谁';
+    return h('span', { class: 'status live', 'data-tip': known ? s.who.label : null }, h('span', { class: 'dot' }), known ? tile(s.who, 's16') : null, h('span', { class: 'w' }, '进行中'));
   }
-  return h('span', { class: 'status' }, h('span', { class: 'dot' }), '空闲');
+  return null;
 }
 
 function stintMinutes(s) {
@@ -1404,12 +1473,11 @@ function stripEl(t) {
   const list = threadStints(t);
   const strip = h('div', { class: 'strip', role: 'list', 'aria-label': '接力' });
   for (const s of list) {
-    const l = lookOf(s.who);
     const pending = s.review === 'needed' && s.status !== 'working' && !s.rolledBack;
     strip.append(
       h('i', {
         role: 'listitem',
-        class: [l.cls, s.kind !== 'work' ? s.kind : '', s.status === 'working' ? 'live' : '', pending ? 'pending' : '', s.rolledBack ? 'void' : ''].filter(Boolean).join(' '),
+        class: [lookOf(s.who).tier, s.kind !== 'work' ? s.kind : '', s.status === 'working' ? 'live' : '', pending ? 'pending' : '', s.rolledBack ? 'void' : ''].filter(Boolean).join(' '),
         style: `--g:${Math.min(6, Math.sqrt(stintMinutes(s))).toFixed(2)}`,
         'data-stint': String(s.id),
         'data-tip': `第 ${s.id} 棒 · ${s.who.label === '不知道是谁' ? '身份不明' : s.who.label}\n${stintWord(s)}${s.status !== 'working' ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}`,
@@ -1444,7 +1512,7 @@ function acceptEl(a) {
     'button',
     { class: `accept ${a.state}`, 'aria-haspopup': 'dialog', 'data-tip': a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('\n'), onclick: acceptPanel },
     icon(a.state === 'accepted' ? 'check' : 'warn'),
-    word,
+    h('span', { class: 'w' }, word),
     a.state !== 'accepted' && a.items.length ? h('span', { class: 'num' }, String(a.items.length)) : null
   );
 }
@@ -1633,7 +1701,7 @@ function whoMenu(anchor) {
   const self = members().filter((m) => m.kind === 'app' || (m.kind === 'harness' && m.agent && m.agent.cmd));
   const items = [];
   if (drive.length) {
-    items.push({ head: '接着做' });
+    items.push({ head: '只做一棒' });
     for (const m of drive) {
       items.push({ label: m.label, sub: m.cooling ? `额度用完 · ${m.coolingText}` : m.model || '', tile: tile(m, 's20'), right: m.tier === 'strong' ? '强' : m.tier === 'weak' ? '弱' : '', disabled: !!m.cooling, run: () => goWith(null, m) });
     }
@@ -1918,11 +1986,11 @@ function aiRow(r, compact) {
   return h(
     'div',
     { class: 'ai' },
-    tile({ agent: r.agent, label: r.who }, compact ? 's20' : ''),
+    h('span', { class: 'who-tile', 'data-tip': memberByName(r.agent) ? memberTip(memberByName(r.agent)) : r.who }, tile({ agent: r.agent, label: r.who }, compact ? 's20' : '')),
     h(
       'div',
       null,
-      h('div', { class: 'who' }, h('b', null, name), model ? h('span', null, model) : null, compact ? null : h('span', null, clock(r.ts))),
+      h('div', { class: 'who' }, h('b', null, name), model ? h('span', { class: 'model' }, model) : null, compact ? null : h('span', { class: 'time' }, clock(r.ts))),
       h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) })
     ),
     compact ? null : h('div', { class: 'hover-acts' }, h('button', { class: 'icon-btn', 'aria-label': '复制', 'data-tip': '复制', onclick: () => copyText(r.text).then((ok) => ok && toast('已复制')) }, icon('copy')))
@@ -1955,7 +2023,7 @@ function rollbackLine(rb) {
     { class: 'sys' },
     icon('undo'),
     `${clock(rb.ts)} 退回到${rb.label} · 第 ${rb.dropped.join('、')} 棒作废`,
-    rb.undone ? '· 已撤销' : h('button', { class: 'btn small', onclick: (e) => undoRollback(e.currentTarget) }, '撤销')
+    rb.undone ? '· 已撤销' : h('button', { class: 'link', onclick: (e) => undoRollback(e.currentTarget) }, '撤销')
   );
 }
 
@@ -1984,7 +2052,7 @@ function resultLine(g) {
 
 function protocolLine() {
   const p = S.st.project;
-  return h('div', { class: 'sys' }, icon('warn'), p.protocol === 'old' ? '接力规矩有新版本' : '接力规矩不见了', h('button', { class: 'btn small', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已更新') }, '更新'));
+  return h('div', { class: 'sys' }, icon('warn'), p.protocol === 'old' ? '接力规矩有新版本' : '接力规矩不见了', h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已更新') }, '更新'));
 }
 
 // ----- 一棒：卡片 -----
@@ -2026,7 +2094,7 @@ function stintCard(s) {
       onmouseleave: unlight,
       oncontextmenu: (e) => ctx(e, stintMenuItems(s)),
     },
-    tile(s.who),
+    h('span', { class: 'who-tile', 'data-tip': whoTip(s.who) }, tile(s.who)),
     h(
       'div',
       { class: 'cbody' },
@@ -2034,14 +2102,13 @@ function stintCard(s) {
         'div',
         { class: 'head' },
         h('b', null, name === '不知道是谁' ? '身份不明' : name),
-        model ? h('span', null, model) : null,
-        tierEl(s.who.tier),
         s.kind !== 'work' ? h('span', { class: 'kind' }, s.kind === 'review' ? '复核' : '终审') : null,
+        model ? h('span', { class: 'model' }, model) : null,
         h('span', { class: 'time' }, live ? h('span', { class: 'num', 'data-since': s.startedAt }, elapsed(s.startedAt)) : stamp(s.endedAt || s.startedAt))
       ),
       h('div', { class: `sum${sum.faint ? ' faint' : ''}`, html: inline(esc(sum.text)) }),
       cardFoot(s),
-      live && s.via === 'relay' ? [h('div', { class: 'runbar' }), h('pre', { class: 'tail', 'data-stint': String(s.id), hidden: true })] : null,
+      live && s.via === 'relay' ? h('pre', { class: 'tail', 'data-stint': String(s.id), hidden: true }) : null,
       h('div', { class: 'more-body' }, h('div', null))
     ),
     h(
@@ -2053,61 +2120,65 @@ function stintCard(s) {
   );
 }
 
-function stateEl(cls, text) {
-  return h('span', { class: `state ${cls}` }, cls === 'bad' ? icon('warn') : h('span', { class: 'dot' }), text);
-}
-
+/** 卡片底下一行淡字：只写要注意的（正常交接了就不写），改了哪些文件合成一句，点开看改动。 */
 function cardFoot(s) {
   const bits = [];
-  if (s.status === 'working') bits.push(stateEl('live', s.via === 'relay' ? KIND_WORD[s.kind] : '进行中'));
-  else if (s.status === 'handed') bits.push(stateEl('ok', '已交接'));
-  else if (s.status === 'unfinished') bits.push(stateEl('', '没留交接'));
-  else if (s.status === 'quota') bits.push(stateEl('', `额度用完${s.quotaUntil ? ` · ${clock(s.quotaUntil)} 恢复` : ''}`));
-  else if (s.status === 'failed') bits.push(stateEl('bad', '出错'));
-  else if (s.status === 'stopped') bits.push(stateEl('', '已停止'));
-  if (s.rolledBack) bits.push(h('span', { class: 'chip line' }, '作废'));
+  const st = (cls, ...kids) => h('span', { class: `st ${cls}`.trim() }, ...kids);
+  if (s.status === 'working') bits.push(st('live', h('span', { class: 'dot' }), s.via === 'relay' ? KIND_WORD[s.kind] : '进行中'));
+  else if (s.status === 'unfinished') bits.push(st('', '没留交接'));
+  else if (s.status === 'quota') bits.push(st('', `额度用完${s.quotaUntil ? ` · ${clock(s.quotaUntil)} 恢复` : ''}`));
+  else if (s.status === 'failed') bits.push(st('bad', icon('warn'), '出错'));
+  else if (s.status === 'stopped') bits.push(st('', '已停止'));
+  if (s.rolledBack) bits.push(st('', '作废'));
   else if (s.review === 'needed' && s.status !== 'working') {
     // 为什么还待复核：复核写了「有问题」「证据不足」、只有弱模型复核过、读不到改动……
     const why = s.reviewText.replace(/^待复核( · )?/, '');
-    bits.push(h('span', { class: `chip solid${s.reviewWarn ? ' warn' : ''}`, 'data-tip': why || null }, s.reviewWarn ? icon('warn') : null, s.reviewWarn && why ? why.replace(/（[^）]*）$/, '') : '待复核'));
+    const el = st(s.reviewWarn ? 'bad' : 'pend', s.reviewWarn ? icon('warn') : h('span', { class: 'ring-dot' }), h('span', { class: 'ell' }, s.reviewWarn && why ? why.replace(/（[^）]*）$/, '') : '待复核'));
+    if (why) el.dataset.tip = why;
+    bits.push(el);
   } else if (s.review === 'done') {
+    // 谁复核的看小图标（复核算数的都是强模型），悬停看全名，点一下跳过去
     const c = countedReview(s);
-    if (c) bits.push(h('span', { class: 'chip line' }, icon('check'), `${splitLabel(c.byLabel)[0]} · ${c.verdictWord}`));
+    const by = c && stintById(c.by);
+    const who = by ? by.who : c && { label: c.byLabel, tier: 'strong' };
+    if (c) bits.push(h('button', { class: 'st ok link-st', 'data-tip': whoTip(who), onclick: () => by && jumpTo(by.id) }, tile(who, 's16'), `复核 · ${c.verdictWord}`));
   } else if (s.kind === 'final' && s.verdictWord) {
     const pass = s.verdict === 'ok' || s.verdict === 'fixed';
-    bits.push(h('span', { class: `chip ${pass ? 'line' : 'solid warn'}` }, icon(pass ? 'check' : 'warn'), `终审 · ${s.verdictWord}`));
+    bits.push(st(pass ? 'ok' : 'bad', icon(pass ? 'check' : 'warn'), `终审 · ${s.verdictWord}`));
   }
-  if (s.factsError) bits.push(h('span', { class: 'chip line', 'data-tip': s.factsError }, icon('warn'), '读不到改动'));
+  const warn = (text, tip) => {
+    const el = st('bad', icon('warn'), text);
+    if (tip) el.dataset.tip = tip;
+    bits.push(el);
+  };
+  if (s.factsError) warn('读不到改动', s.factsError);
+  if (s.gate && s.gate.status === 'fail') warn('检查没过');
+  if (s.gate && s.gate.status === 'error') warn('检查没跑成', s.gate.detail);
+  if (s.protectedHits) warn('改了保护的文件', s.protectedHits.join('\n'));
   if (s.kind === 'review' && s.targets) {
     for (const id of s.targets) {
       const tg = stintById(id);
       const r = tg && (tg.reviews || []).find((x) => x.by === s.id);
-      bits.push(h('button', { class: 'chip', onclick: () => jumpTo(id) }, `第 ${id} 棒${r ? ` · ${r.verdictWord}` : ''}${r && r.weak ? ' · 不算数' : ''}`));
+      bits.push(h('button', { class: 'st link-st', onclick: () => jumpTo(id) }, `第 ${id} 棒${r ? ` · ${r.verdictWord}` : ''}${r && r.weak ? ' · 不算数' : ''}`));
     }
   }
-  if (s.gate && s.gate.status === 'fail') bits.push(h('span', { class: 'chip line' }, icon('warn'), '检查没过'));
-  if (s.gate && s.gate.status === 'error') bits.push(h('span', { class: 'chip line', 'data-tip': s.gate.detail || null }, icon('warn'), '检查没跑成'));
-  if (s.protectedHits) bits.push(h('span', { class: 'chip line', 'data-tip': s.protectedHits.join('\n') }, icon('warn'), '改了保护的文件'));
   const f = s.facts;
   if (f && f.files) {
-    const shown = f.paths.slice(0, 3);
-    for (const path of shown) {
-      bits.push(
-        h(
-          'button',
-          {
-            class: 'chip',
-            'data-tip': path,
-            onclick: () => openDiff(s.id, path),
-            onmouseenter: () => lightPaths([path]),
-            onmouseleave: () => lightStint(s),
-          },
-          h('span', { class: 'ell' }, basename(path))
-        )
-      );
-    }
-    if (f.files > shown.length) bits.push(h('button', { class: 'chip', onclick: () => openDiff(s.id) }, `+${f.files - shown.length}`));
-    bits.push(h('span', { class: 'chip line num' }, `+${f.added} −${f.removed}`));
+    const shown = f.paths.slice(0, 12);
+    bits.push(
+      h(
+        'button',
+        {
+          class: 'st link-st',
+          'data-tip': shown.join('\n') + (f.files > shown.length ? `\n… 一共 ${f.files} 个` : ''),
+          onclick: () => openDiff(s.id, f.files === 1 ? f.paths[0] : undefined),
+          onmouseenter: () => lightPaths(f.paths),
+          onmouseleave: () => lightStint(s),
+        },
+        h('span', { class: 'ell' }, f.files === 1 ? basename(f.paths[0]) : `${f.files} 个文件`),
+        h('span', { class: 'num' }, `+${f.added} −${f.removed}`)
+      )
+    );
   }
   return bits.length ? h('div', { class: 'foot' }, bits) : null;
 }
@@ -2173,11 +2244,16 @@ function detailBox(s) {
   if (d.handoff) box.append(h('section', null, h('h5', null, s.ghost ? '交接 · 接力台代写' : '交接'), h('div', { class: 'doc-md', html: md(d.handoff.replace(/^#\s+.*\n+/, '')) })));
   if (s.who.claimed && s.who.claimed !== s.who.label) box.append(h('p', { class: 'aside' }, `交接里写的是「${s.who.claimed}」`));
   for (const r of d.reviews) {
+    // 复核人：按复核文件找到那一棒，用它记下的身份（名字、模型、强弱）；终审自己写的就是这一棒
+    const mark = (s.reviews || []).find((x) => x.file === r.file);
+    const by = mark && stintById(mark.by);
+    const who = by ? by.who : r.file === s.reviewFile ? s.who : { label: r.by, tier: r.weak ? 'weak' : 'strong' };
+    const [byName, byModel] = splitLabel(who.label);
     box.append(
       h(
         'div',
         { class: `review-box${r.weak ? ' weak' : ''}` },
-        h('div', { class: 'rb-head' }, icon('review'), h('b', null, splitLabel(r.by)[0]), r.weak ? h('span', null, '不算数') : null),
+        h('div', { class: 'rb-head' }, tile(who, 's16'), h('b', null, byName === '不知道是谁' ? '身份不明' : byName), byModel ? h('span', null, byModel) : null, r.weak ? h('span', null, '不算数') : null),
         h('div', { class: 'doc-md', html: md(r.text.replace(/^#\s+.*\n+/, '')) })
       )
     );
@@ -3208,11 +3284,11 @@ function touchedMap() {
   if (!t) return map;
   for (const s of threadStints(t)) {
     if (s.rolledBack || !s.facts) continue;
-    const l = lookOf(s.who);
+    const tier = lookOf(s.who).tier;
     const pending = s.review === 'needed' && s.status !== 'working';
     for (const p of s.facts.paths) {
       const cur = map.get(p) || { looks: [], ids: [], pending: false };
-      cur.looks = [...cur.looks.filter((x) => x !== l.cls), l.cls];
+      cur.looks = [...cur.looks.filter((x) => x !== tier), tier];
       cur.ids.push(s.id);
       cur.pending = cur.pending || pending;
       map.set(p, cur);
