@@ -81,6 +81,14 @@ function iconBtn(label, name, onclick, kbd, cls = '') {
 }
 
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** 缓动，和 app.css 的 --snap / --exit / --spring 同一套（弹簧是 CSS 的 linear()，不支持的浏览器退回贝塞尔）。 */
+const EASE = (() => {
+  const css = getComputedStyle(document.documentElement);
+  const v = (k, d) => css.getPropertyValue(k).trim() || d;
+  return { snap: v('--snap', 'cubic-bezier(.16,1,.3,1)'), exit: v('--exit', 'cubic-bezier(.4,0,1,1)'), spring: v('--spring', 'cubic-bezier(.2,.7,.2,1)') };
+})();
+/** 一批一起进场的第 i 个晚多少毫秒：前几个拉开，后面的挤在一起到（不像节拍器一样等距），最多 110。 */
+const stagger = (i) => Math.round(110 * (1 - 0.82 ** i));
 
 /** 退场：先放完淡出的动画再拿掉，不是一下子消失。 */
 function leave(el) {
@@ -88,7 +96,7 @@ function leave(el) {
   if (still()) return el.remove();
   el.classList.add('leave');
   el.addEventListener('animationend', () => el.remove(), { once: true });
-  setTimeout(() => el.remove(), 260);
+  setTimeout(() => el.remove(), 200);
 }
 
 /** 一组元素重排（删掉一行、换了顺序）：还在的从原来的位置滑过去，不是一下子跳过去。 */
@@ -99,7 +107,7 @@ function flip(box, mutate) {
   for (const el of box.children) {
     const was = before.get(el);
     const d = was === undefined ? 0 : was - el.getBoundingClientRect().top;
-    if (Math.abs(d) > 0.5) el.animate([{ transform: `translateY(${d}px)` }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.7,.2,1)' });
+    if (Math.abs(d) > 0.5) el.animate([{ transform: `translateY(${d}px)` }, { transform: 'none' }], { duration: 490, easing: EASE.spring });
   }
 }
 
@@ -832,9 +840,23 @@ function ctx(e, items) {
 let sheetStack = [];
 
 /** 弹窗。返回 close()；不管怎么关的（按钮、点外面、Esc），都会调 onClose。 */
+/** 把框 box 收到 r 那里的变换：中心对中心，等比缩到 r 的大小（最小 .2）。弹窗从按下的按钮长出来、缩回去都用它。 */
+function toward(box, r) {
+  const b = box.getBoundingClientRect();
+  const s = Math.max(0.2, Math.min(1, Math.max(r.width / b.width, r.height / b.height)));
+  return `translate(${r.left + r.width / 2 - (b.left + b.width / 2)}px, ${r.top + r.height / 2 - (b.top + b.height / 2)}px) scale(${s})`;
+}
+
+// 最近一次按下的按钮：Safari 点按钮不给焦点，弹窗靠它知道从哪长出来（一秒内的才算）
+let pressed = { el: null, at: 0 };
+document.addEventListener('pointerdown', (e) => (pressed = { el: e.target.closest?.('button, a, [role="button"]') ?? null, at: Date.now() }), true);
+
 function sheet({ title, body, foot, wide, bare, onClose }) {
+  const focused = document.activeElement;
+  const prev = focused && focused !== document.body ? focused : Date.now() - pressed.at < 1000 ? pressed.el : null;
+  // 按下的东西变成结果：弹窗从那个按钮（或菜单里那一项）长出来，所以在收起菜单之前记下它在哪
+  const from = prev ? prev.getBoundingClientRect() : null;
   closeMenus();
-  const prev = document.activeElement;
   const scrim = h('div', { class: 'scrim' });
   const box = h('div', { class: `sheet${wide ? ' wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': title || '' });
   let closed = false;
@@ -842,7 +864,11 @@ function sheet({ title, body, foot, wide, bare, onClose }) {
     if (closed) return;
     closed = true;
     leave(scrim);
-    leave(box);
+    const to = prev && prev.isConnected ? prev.getBoundingClientRect() : null;
+    if (to && to.width && !still()) {
+      box.style.pointerEvents = 'none';
+      box.animate([{ transform: 'none', opacity: 1 }, { transform: toward(box, to), opacity: 0 }], { duration: 180, easing: EASE.exit, fill: 'forwards' }).finished.then(() => box.remove(), () => box.remove());
+    } else leave(box);
     sheetStack = sheetStack.filter((x) => x !== close);
     if (prev && prev.isConnected) prev.focus({ preventScroll: true });
     onClose && onClose();
@@ -860,6 +886,10 @@ function sheet({ title, body, foot, wide, bare, onClose }) {
     }
   });
   layer.append(scrim, box);
+  if (!still()) {
+    const r = from && from.width ? from : null;
+    box.animate([{ transform: r ? toward(box, r) : 'scale(0.96)', opacity: 0 }, { opacity: 1, offset: 0.3 }, { transform: 'none', opacity: 1 }], { duration: r ? 340 : 220, easing: EASE.snap });
+  }
   sheetStack.push(close);
   const f = box.querySelector('[autofocus], textarea, input:not([type=checkbox]), .sheet-foot .primary');
   (f || box.querySelector('button'))?.focus();
@@ -1183,7 +1213,7 @@ function showView(v) {
 function swapIn(dir) {
   if (still()) return;
   for (const el of [CE.bar, CE.chat, CE.hero, CE.doc]) {
-    if (!el.hidden) el.animate([{ opacity: 0, transform: `translateX(${dir * 22}px)` }, { opacity: 1, transform: 'none' }], { duration: 340, easing: 'cubic-bezier(.2,.7,.2,1)' });
+    if (!el.hidden) el.animate([{ opacity: 0, transform: `translateX(${dir * 22}px)` }, { opacity: 1, transform: 'none' }], { duration: 490, easing: EASE.spring });
   }
 }
 
@@ -2001,12 +2031,12 @@ function streamItems(t) {
 /** 新来的一项：从下面浮上来；一批一起来的，一个接一个。放完就把动画拿掉（切回对话时不再重放）。 */
 function enterAnim(el, i) {
   if (still()) return;
-  el.style.setProperty('--i', String(i));
+  el.style.setProperty('--d', `${stagger(i)}ms`);
   el.classList.add('enter');
   const done = (e) => {
     if (e.target !== el) return;
     el.classList.remove('enter');
-    el.style.removeProperty('--i');
+    el.style.removeProperty('--d');
     el.removeEventListener('animationend', done);
   };
   el.addEventListener('animationend', done);
@@ -3922,8 +3952,8 @@ function glide(before) {
     const top = el.getBoundingClientRect().top;
     if (top > box.bottom) break;
     const was = before.get(p);
-    if (was === undefined) el.animate([{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], { duration: 220, delay: Math.min(k++, 12) * 14, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'backwards' });
-    else if (Math.abs(was - top) > 0.5) el.animate([{ transform: `translateY(${was - top}px)` }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.7,.2,1)' });
+    if (was === undefined) el.animate([{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], { duration: 220, delay: stagger(k++), easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'backwards' });
+    else if (Math.abs(was - top) > 0.5) el.animate([{ transform: `translateY(${was - top}px)` }, { transform: 'none' }], { duration: 490, easing: EASE.spring });
   }
 }
 
