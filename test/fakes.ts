@@ -253,7 +253,7 @@ export function setOrder(s: Sandbox, order: string[], extra: Record<string, unkn
   fs.writeFileSync(path.join(s.home, '.relay', 'auto.json'), JSON.stringify({ order, ...extra }));
 }
 
-/** 假的 OpenAI 接口：带工具时先写一个文件、再写交接、再 finish；不带工具时按群聊 / 投票回答。 */
+/** 假的 OpenAI 接口：带全套工具时先写一个文件、再写交接、再 finish；只带看的工具时（群聊）读 README 再回答；不带工具时按群聊 / 投票回答。 */
 export function mockLlm(): Promise<{ url: string; calls: { tools: boolean }[]; toolResults: string[]; close: () => void }> {
   return new Promise((resolve) => {
     const calls: { tools: boolean }[] = [];
@@ -268,7 +268,7 @@ export function mockLlm(): Promise<{ url: string; calls: { tools: boolean }[]; t
           res.end(JSON.stringify({ data: [{ id: 'mock-coder' }] }));
           return;
         }
-        const j = JSON.parse(body) as { tools?: unknown[]; messages: { role: string; content?: string }[] };
+        const j = JSON.parse(body) as { tools?: { function?: { name?: string } }[]; messages: { role: string; content?: string }[] };
         calls.push({ tools: !!j.tools });
         if (j.tools) {
           const first = String(j.messages.find((m) => m.role === 'user')?.content ?? '');
@@ -276,6 +276,17 @@ export function mockLlm(): Promise<{ url: string; calls: { tools: boolean }[]; t
           const results = j.messages.filter((m) => m.role === 'tool').map((m) => String(m.content ?? ''));
           toolResults.splice(0, toolResults.length, ...results);
           const turns = results.length;
+          if (!j.tools.some((x) => x.function?.name === 'write_file')) {
+            // 群聊：只给了看的工具。先硬要写一个文件（该被拒），再读 README.md，最后照读到的回答。
+            const look =
+              turns === 0
+                ? { id: 'r0', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'hack.txt', content: 'x' }) } }
+                : turns === 1
+                  ? { id: 'r1', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) } }
+                  : null;
+            res.end(JSON.stringify({ choices: [{ message: look ? { role: 'assistant', content: '', tool_calls: [look] } : { role: 'assistant', content: `接口读到：${results[1]}` } }] }));
+            return;
+          }
           const call =
             turns === 0
               ? { id: 'c0', type: 'function', function: { name: 'search', arguments: JSON.stringify({ pattern: 'demo|笔记' }) } }

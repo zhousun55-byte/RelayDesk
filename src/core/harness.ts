@@ -768,8 +768,8 @@ const antigravity: HarnessSpec = {
   },
   invoke(loc, i) {
     const a = [...loc.exec, '-p', i.prompt, '--output-format', 'stream-json'];
-    if (i.readOnly) a.push('--mode', 'plan');
-    else a.push(...(i.level === 'full' ? ['--dangerously-skip-permissions'] : ['--mode', 'accept-edits']), '--sandbox');
+    // 群聊也要带 --sandbox：不带的话读文件的命令（textutil 转 rtf）也要人点头，无界面模式下直接被拒、这一轮什么都不说就结束了。
+    a.push(...(i.readOnly ? ['--mode', 'plan'] : i.level === 'full' ? ['--dangerously-skip-permissions'] : ['--mode', 'accept-edits']), '--sandbox');
     if (i.model) a.push('--model', i.model);
     if (i.effort) a.push('--effort', i.effort);
     return { argv: a, format: 'agy' };

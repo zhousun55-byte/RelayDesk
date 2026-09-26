@@ -47,7 +47,7 @@ test('工具调用参数：安全档 / 完全放开 / 只读，各家都按无�
   const agy = (level: 'safe' | 'full', readOnly = false) => findHarness('agy')!.invoke(loc, { ...base, level, readOnly }).argv.slice(1);
   assert.deepEqual(agy('safe'), ['-p', 'P', '--output-format', 'stream-json', '--mode', 'accept-edits', '--sandbox']);
   assert.deepEqual(agy('full'), ['-p', 'P', '--output-format', 'stream-json', '--dangerously-skip-permissions', '--sandbox']);
-  assert.deepEqual(agy('safe', true), ['-p', 'P', '--output-format', 'stream-json', '--mode', 'plan']);
+  assert.deepEqual(agy('safe', true), ['-p', 'P', '--output-format', 'stream-json', '--mode', 'plan', '--sandbox'], '群聊也进沙箱：沙箱里的命令才会自动跑');
   assert.equal(harnessForCommand('claude --foo')!.id, 'claude');
   assert.equal(harnessForCommand('/Users/x/.npm-global/bin/codex')!.id, 'codex');
   assert.equal(harnessForCommand('open -a Cursor {{worktree}}'), null);
@@ -80,6 +80,10 @@ test('解析各家的输出：Claude / Codex / Cursor / Antigravity 的事件翻
   assert.deepEqual(a.line('{"event":"step_update","step_update":{"step_type":"tool","state":"ACTIVE","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"ls"}}}}'), ['工具 run_command：ls']);
   a.line('{"event":"result","result":{"status":"SUCCESS","response":"done","denied_actions":[]}}');
   assert.equal(a.final(), 'done');
+  assert.deepEqual(
+    a.line('{"event":"step_update","step_update":{"step_type":"tool","state":"ERROR","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"textutil -convert txt -stdout a.rtf"},"error":{"type":"TOOL_ERROR","message":"permission check failed for unsandboxed \\"textutil\\": user denied permission"}}}}'),
+    ['被拒绝：textutil -convert txt -stdout a.rtf']
+  );
 
   const l = makeParser('lines');
   l.line('\u001b[32m普通输出\u001b[0m');

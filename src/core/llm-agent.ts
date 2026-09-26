@@ -28,6 +28,8 @@ export interface LlmAgentInput {
   /** 截止时间（毫秒时间戳）。 */
   deadline: number;
   maxSteps?: number;
+  /** 群聊、投票：只给读的工具，最后说的话就是回答，不用 finish。 */
+  readOnly?: boolean;
 }
 
 export interface LlmAgentResult {
@@ -51,6 +53,9 @@ const SYSTEM = [
   '- 做完后必须调用 finish，summary 写三行：做了什么 / 下一步 / 不确定的地方。',
   '- 说明文字用中文。',
 ].join('\n');
+
+const TALK_SYSTEM = '你在「接力台」的多 AI 讨论里发言。可以用 list_files / read_file / search 看当前项目文件夹里的文件，不能改任何东西。看够了就直接回答。';
+const READ_TOOLS = new Set(['list_files', 'read_file', 'search']);
 
 function tools(level: Level, hasGate: boolean): ToolDef[] {
   const t: ToolDef[] = [
@@ -287,8 +292,9 @@ function shell(root: string, cmd: string, timeoutMs: number, shouldStop: () => b
 export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult> {
   const root = input.cwd;
   const hasGate = !!input.gateCommand.trim();
-  const chat = new ToolChat(input.spec, SYSTEM, tools(input.level, hasGate));
-  chat.user(`${input.brief}\n\n---\n现在开始工作。记住：做完调用 finish。`);
+  const ro = !!input.readOnly;
+  const chat = new ToolChat(input.spec, ro ? TALK_SYSTEM : SYSTEM, tools(input.level, hasGate).filter((t) => !ro || READ_TOOLS.has(t.name)));
+  chat.user(ro ? input.brief : `${input.brief}\n\n---\n现在开始工作。记住：做完调用 finish。`);
   const maxSteps = input.maxSteps ?? 60;
   let finalText = '';
   let steps = 0;
@@ -296,6 +302,7 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
 
   const exec = async (c: ToolCall): Promise<string> => {
     if (c.badArgs !== undefined) throw new ToolError(`参数不是合法的 JSON：${c.badArgs}`);
+    if (ro && !READ_TOOLS.has(c.name)) throw new ToolError('这里只能看文件，不能改。');
     switch (c.name) {
       case 'list_files':
         return listFiles(root, typeof c.args.path === 'string' ? c.args.path : '.');

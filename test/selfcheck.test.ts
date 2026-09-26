@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { mockLlm } from './fakes';
 
 /**
  * 2026-09-25 全项目自查找出的问题（每一条都是当时在临时目录里复现过的反例）：
@@ -452,4 +453,63 @@ test('接力本只在内容变了时才重写：过几分钟再刷新（接力�
   write('.relay/任务.md', '# 任务\n\n换一个标题\n\n## 进度\n\n- [ ] 第一步\n');
   assert.equal(track.refreshBrief(root, new Date(t0.getTime() + 9 * 60_000)), true, '任务变了：照写');
   assert.match(fs.readFileSync(brief, 'utf8'), /换一个标题/);
+});
+
+test('群聊：一直出声的不按时间掐；一点动静都没有的到点就停，说清楚是没动静；回的是调用工具的原文不算回答', async () => {
+  const dir = tmpDir('idle');
+  const run = (tool: string) =>
+    runner.startRun({ invocation: { argv: [process.execPath, '-e', tool], format: 'lines' }, cwd: dir, timeoutMs: 20_000, idleMs: 1000, logPath: path.join(dir, 'run.log'), title: '测试' }).done;
+  const busy = await run(`let i=0;const t=setInterval(()=>{console.log('第'+ ++i +'句');if(i===6)clearInterval(t)},250)`);
+  assert.equal(busy.timedOut, false, '说了 1.5 秒，比「没动静」的上限长，但一直在出声');
+  assert.match(busy.finalText, /第6句$/);
+  const stuck = await run(`console.log('开个头');setTimeout(()=>console.log('太晚了'),8000)`);
+  assert.ok(stuck.timedOut && stuck.idle, JSON.stringify(stuck));
+  assert.ok(stuck.durationMs < 4000, `${stuck.durationMs} 毫秒`);
+  assert.match(fs.readFileSync(path.join(dir, 'run.log'), 'utf8'), /1 秒没有动静，停掉它。/);
+
+  const ask = (cmd: string) => talk.askAgent({ name: 'mine', kind: 'cli', cmd: 'x', tier: 'weak', ask: cmd }, 'hi', dir, 20_000, 1000);
+  await assert.rejects(ask('sleep 5'), /1 秒没有动静，停掉了/);
+  await assert.rejects(ask(`printf '<tool_call><function=bash><parameter=command>ls</parameter></function></tool_call>'`), /调用工具的原文/);
+});
+
+test('群聊里的 Gemini 带沙箱；要跑的命令被拒、一句话没说就结束时，说清楚拒的是哪条', async () => {
+  const dir = tmpDir('fake-agy');
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  const args = path.join(dir, 'args.txt');
+  const params = { CommandLine: 'textutil -convert txt -stdout a.rtf' };
+  const ev = (o: unknown) => `echo '${JSON.stringify(o)}'`;
+  const script = [
+    '#!/bin/sh',
+    `printf '%s\\n' "$@" > '${args}'`,
+    ev({ event: 'step_update', step_update: { state: 'ACTIVE', step_type: 'tool', tool_name: 'run_command', tool_info: { parameters: params } } }),
+    ev({ event: 'step_update', step_update: { state: 'ERROR', step_type: 'tool', tool_name: 'run_command', tool_info: { parameters: params, error: { type: 'TOOL_ERROR', message: 'permission check failed for unsandboxed command: user denied permission' } } } }),
+    ev({ event: 'result', result: { status: 'SUCCESS', response: '', denied_actions: [{ action: 'command', display_name: 'RunCommand' }] } }),
+  ];
+  fs.writeFileSync(path.join(bin, 'agy'), `${script.join('\n')}\n`, { mode: 0o755 });
+  const keep = process.env.PATH;
+  process.env.PATH = `${bin}:${keep}`;
+  harness.clearLocateCache();
+  try {
+    await assert.rejects(talk.askAgent({ name: 'agy', kind: 'cli', cmd: 'agy', tier: 'weak', harness: 'agy' }, 'hi', dir), /「textutil -convert txt -stdout a\.rtf」没被放行/);
+    const argv = fs.readFileSync(args, 'utf8').split('\n');
+    assert.ok(argv.includes('plan') && argv.includes('--sandbox'), argv.join(' '));
+  } finally {
+    process.env.PATH = keep;
+    harness.clearLocateCache();
+  }
+});
+
+test('群聊里的接口成员：能看项目里的文件、不能改，照看到的回答', async () => {
+  const dir = tmpDir('api-talk');
+  fs.writeFileSync(path.join(dir, 'README.md'), 'demo\n');
+  const mock = await mockLlm();
+  try {
+    const reply = await talk.askAgent({ name: 'mimo', kind: 'api', tier: 'weak', api: { baseUrl: mock.url, model: 'mock-coder', apiKeyEnv: '' } }, '大家看看 README', dir);
+    assert.match(reply, /^接口读到：\s*1\s+demo/);
+    assert.match(mock.toolResults[0], /只能看文件，不能改/);
+    assert.equal(fs.existsSync(path.join(dir, 'hack.txt')), false);
+  } finally {
+    mock.close();
+  }
 });

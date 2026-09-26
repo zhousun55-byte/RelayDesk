@@ -222,6 +222,8 @@ function agyParser(): StreamParser {
         if (st.step_type === 'tool') {
           const info = o(st.tool_info);
           if (st.state === 'ACTIVE') return [`工具 ${s(st.tool_name)}：${toolSummary(info.parameters)}`];
+          // 要人点头的操作在无界面模式下直接被拒，这一轮随即结束、没有回答：记下拒的是什么。
+          if (st.state === 'ERROR' && /permission check failed/i.test(s(o(info.error).message))) return [`被拒绝：${toolSummary(info.parameters) || s(st.tool_name)}`];
           if (st.state === 'ERROR') return [`工具出错：${s(st.tool_name)} ${clip(JSON.stringify(info.error ?? ''), 200)}`];
         }
         return [];
@@ -354,6 +356,8 @@ export interface RunRequest {
   title: string;
   /** 每写一行日志就通知一次（命令行实时显示用）。 */
   onLine?: (line: string) => void;
+  /** 这么久一点输出都没有就停掉：还在干活的工具隔几十秒总会吐一行，卡住的才一直不出声。 */
+  idleMs?: number;
 }
 
 /** 工具出错的样子像不像网络抖了一下（连接被断开、服务器临时忙）：像的话值得隔几秒原地再试一次。 */
@@ -402,6 +406,8 @@ export interface RunResult {
   code: number;
   finalText: string;
   timedOut: boolean;
+  /** 是因为太久没有动静才停的（timedOut 也是 true）。 */
+  idle?: boolean;
   stopped: boolean;
   /** 起不来的原因。 */
   error?: string;
@@ -444,6 +450,11 @@ function killGroup(pid: number | undefined, sig: NodeJS.Signals): void {
   }
 }
 
+/** 「3 分钟」「40 秒」。 */
+export function span(ms: number): string {
+  return ms >= 60_000 ? `${Math.round(ms / 60_000)} 分钟` : `${Math.round(ms / 1000)} 秒`;
+}
+
 export function startRun(req: RunRequest): RunHandle {
   const inv = req.invocation;
   fs.mkdirSync(path.dirname(req.logPath), { recursive: true });
@@ -478,6 +489,14 @@ export function startRun(req: RunRequest): RunHandle {
     killGroup(child.pid, 'SIGTERM');
     if (!killTimer) killTimer = setTimeout(() => killGroup(child.pid, 'SIGKILL'), 5000);
   };
+  let idle = false;
+  const quiet = req.idleMs
+    ? setTimeout(() => {
+        timedOut = idle = true;
+        write(`${span(req.idleMs!)}没有动静，停掉它。`);
+        terminate();
+      }, req.idleMs)
+    : null;
 
   if (inv.stdin !== undefined && child.stdin) {
     child.stdin.on('error', () => {
@@ -491,6 +510,7 @@ export function startRun(req: RunRequest): RunHandle {
   child.stderr?.setEncoding('utf8');
   let buf = '';
   child.stdout?.on('data', (c: string) => {
+    quiet?.refresh();
     buf += c;
     let i: number;
     while ((i = buf.indexOf('\n')) >= 0) {
@@ -502,6 +522,7 @@ export function startRun(req: RunRequest): RunHandle {
   });
   let ebuf = '';
   child.stderr?.on('data', (t: string) => {
+    quiet?.refresh();
     stderrTail = (stderrTail + t).slice(-6000);
     ebuf += t;
     let i: number;
@@ -517,7 +538,7 @@ export function startRun(req: RunRequest): RunHandle {
 
   const timer = setTimeout(() => {
     timedOut = true;
-    write(`超过 ${Math.round(req.timeoutMs / 60000)} 分钟还没结束，停掉它。`);
+    write(`超过 ${span(req.timeoutMs)}还没结束，停掉它。`);
     terminate();
   }, req.timeoutMs);
 
@@ -527,6 +548,7 @@ export function startRun(req: RunRequest): RunHandle {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (quiet) clearTimeout(quiet);
       if (killTimer) clearTimeout(killTimer);
       if (buf.trim()) for (const l of parser.line(buf)) write(l);
       let finalText = parser.final();
@@ -541,7 +563,7 @@ export function startRun(req: RunRequest): RunHandle {
       }
       const durationMs = Date.now() - started;
       write(`退出（${error ? error : `代码 ${code}`}，用时 ${Math.round(durationMs / 1000)} 秒）`);
-      resolve({ code, finalText: finalText.trim(), timedOut, stopped, ...(error ? { error } : {}), stderrTail: stderrTail.trim(), model: parser.model(), durationMs });
+      resolve({ code, finalText: finalText.trim(), timedOut, ...(idle ? { idle } : {}), stopped, ...(error ? { error } : {}), stderrTail: stderrTail.trim(), model: parser.model(), durationMs });
     };
     child.on('error', (e) => finish(-1, `起不来：${e.message}`));
     child.on('close', (code, signal) => finish(code ?? (signal ? 128 : -1)));

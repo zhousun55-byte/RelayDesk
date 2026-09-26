@@ -5,12 +5,12 @@ import path from 'node:path';
 import { RelayError, errorMessage } from './errors';
 import { loadDetected, memberModel, refreshHarnessModel } from './detect';
 import { agentEnv } from './env';
-import { cliTooOld, findHarness, locateCached, modelArg, noteModelNeeds } from './harness';
+import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds } from './harness';
 import { fillTemplate } from './launch';
-import { chat } from './llm';
+import { runLlmAgent } from './llm-agent';
 import { llmName, toolName } from './names';
 import { redactSecrets } from './redact';
-import { startRun } from './runner';
+import { clip, logTail, span, startRun, type RunResult } from './runner';
 import { agentKind, agentLabel, canTalk, findAgent, loadRegistry, OUT_PLACEHOLDER } from './registry';
 import type { AgentConfig } from './types';
 
@@ -241,11 +241,54 @@ function cleanReply(text: string): string {
     .slice(0, 8000);
 }
 
-/** 让一个 AI 回答：API 型直接调接口；命令型把提示从标准输入喂进去，读标准输出（或 {{out}} 文件）。 */
-export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, timeoutMs = 240_000): Promise<string> {
+/** 群聊里一个 AI 最多说多久；中途这么久一点动静都没有就当它卡住了（Codex 干活时最长 49 秒不出声）。 */
+export const TALK_MAX_MS = 15 * 60_000;
+export const TALK_IDLE_MS = 3 * 60_000;
+
+/** 回的是「调用工具」的原文（没给它工具、或者接口没接住）：不是回答。 */
+const RAW_TOOL_CALL = /^<(?:tool_call|function_calls?)>/;
+
+/** 工具一句话没说就结束了：从日志里找原因——被拒绝的操作、认得的报错、它自己最后报的错。 */
+function silentWhy(harness: string | undefined, log: string, r: RunResult): string {
+  const denied = log.match(/被拒绝：(.+)/)?.[1];
+  if (denied) return `「${denied}」没被放行，它就停了。`;
+  const hint = explainFailure(harness, `${r.stderrTail}\n${log}`);
+  if (hint) return hint;
+  const said = r.stderrTail.split('\n').find((l) => /error|错误|失败|failed/i.test(l));
+  return `什么都没说（退出码 ${r.code}）${said ? `：${clip(said.trim(), 200)}` : '。'}`;
+}
+
+function replyOf(raw: string): string {
+  const text = cleanReply(raw);
+  if (RAW_TOOL_CALL.test(text)) throw new RelayError('回的是一段调用工具的原文，不是回答。', 'ask-empty');
+  return text;
+}
+
+/**
+ * 让一个 AI 回答。接口型用内置小代理，只给读文件的工具；编程工具用它的只读模式；
+ * 自定义命令把提示从标准输入喂进去，读标准输出（或 {{out}} 文件）。
+ */
+export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, timeoutMs = TALK_MAX_MS, idleMs = TALK_IDLE_MS): Promise<string> {
+  const late = (idle: boolean | undefined) => (idle ? `${span(idleMs)}没有动静，停掉了。` : `${span(timeoutMs)}还没说完，停掉了。`);
   if (agentKind(agent) === 'api') {
     if (!agent.api) throw new RelayError('这个工人没有配置接口。', 'no-api');
-    return cleanReply(await chat(agent.api, [{ role: 'user', content: prompt }], { timeoutMs, temperature: 0.5 }));
+    // 和编程工具一样能看项目里的文件：不给工具的话，它会把「调用工具」的原文当成回答说出来。
+    const r = await runLlmAgent({
+      spec: agent.api,
+      cwd,
+      brief: prompt,
+      level: 'safe',
+      readOnly: true,
+      gateCommand: '',
+      protectedPaths: [],
+      log: () => {},
+      shouldStop: () => false,
+      deadline: Date.now() + timeoutMs,
+      maxSteps: 30,
+    });
+    const text = replyOf(r.finalText);
+    if (!text) throw new RelayError(r.error ?? (r.timedOut ? late(false) : '什么都没说。'), 'ask-empty');
+    return text;
   }
   const tpl = agent.ask?.trim();
   if (!tpl) {
@@ -266,7 +309,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
       });
     const logPath = path.join(os.tmpdir(), `relay-talk-${stamp}.log`);
     const inv = make();
-    let r = await startRun({ invocation: inv, cwd, timeoutMs, logPath, title: '讨论' }).done;
+    let r = await startRun({ invocation: inv, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
     // 命令行太旧、用不了这个模型：记下来，换成它用得了的再问一次。
     const needs = r.code !== 0 ? cliTooOld(`${r.finalText}\n${r.error ?? ''}\n${r.stderrTail}`) : null;
     const used = modelArg(inv.argv);
@@ -274,11 +317,12 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
       noteModelNeeds(used, needs);
       refreshHarnessModel(spec.id);
       const again = make();
-      if (modelArg(again.argv) !== used) r = await startRun({ invocation: again, cwd, timeoutMs, logPath, title: '讨论' }).done;
+      if (modelArg(again.argv) !== used) r = await startRun({ invocation: again, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
     }
+    const log = logTail(logPath, 6000);
     fs.rmSync(logPath, { force: true });
-    const text = cleanReply(r.finalText);
-    if (!text) throw new RelayError(r.error ?? (r.timedOut ? `${Math.round(timeoutMs / 1000)} 秒没回话，停掉了。` : `什么都没说（退出码 ${r.code}）。`), 'ask-empty');
+    const text = replyOf(r.finalText);
+    if (!text) throw new RelayError(r.error ?? (r.timedOut ? late(r.idle) : silentWhy(spec.id, log, r)), 'ask-empty');
     return text;
   }
   const outFile = tpl.includes(OUT_PLACEHOLDER) ? path.join(os.tmpdir(), `relay-talk-${process.pid}-${Date.now()}.txt`) : null;
@@ -288,34 +332,46 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     const child = spawn('sh', ['-c', cmd], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true, env: agentEnv({ NO_COLOR: '1' }) });
     let out = '';
     let err = '';
+    let timedOut = false;
+    let idle = false;
+    const kill = () => {
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        /* 已结束 */
+      }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill();
+    }, timeoutMs);
+    const quiet = setTimeout(() => {
+      timedOut = idle = true;
+      kill();
+    }, idleMs);
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (c: string) => {
+      quiet.refresh();
       out += c;
       if (out.length > 200_000) out = out.slice(-200_000);
     });
     child.stderr?.on('data', (c: string) => {
+      quiet.refresh();
       err = (err + c).slice(-4000);
     });
     child.stdin?.on('error', () => {
       /* 有的命令不读标准输入 */
     });
     child.stdin?.end(prompt);
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        if (child.pid) process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        /* 已结束 */
-      }
-    }, timeoutMs);
     child.on('error', (e) => {
       clearTimeout(timer);
+      clearTimeout(quiet);
       reject(new RelayError(`启动不了：${e.message}`, 'ask-spawn'));
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      clearTimeout(quiet);
       let reply = out;
       if (outFile) {
         try {
@@ -325,8 +381,13 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
         }
         fs.rmSync(outFile, { force: true });
       }
-      const text = cleanReply(reply);
-      if (timedOut) return reject(new RelayError(`${Math.round(timeoutMs / 1000)} 秒没回话，停掉了。`, 'ask-timeout'));
+      if (timedOut) return reject(new RelayError(late(idle), 'ask-timeout'));
+      let text: string;
+      try {
+        text = replyOf(reply);
+      } catch (e) {
+        return reject(e);
+      }
       if (code !== 0 && !text) return reject(new RelayError(`命令出错（退出码 ${code}）：${cleanReply(err).slice(-600) || '没有输出'}`, 'ask-failed'));
       if (!text) return reject(new RelayError(`什么都没说。${cleanReply(err).slice(-300)}`, 'ask-empty'));
       resolve(text);
