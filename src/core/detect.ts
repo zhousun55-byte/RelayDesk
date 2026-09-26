@@ -277,7 +277,8 @@ export function syncRegistry(report: DetectReport): string[] {
  */
 const FAMILIES: { app: RegExp; harness?: string[]; api?: RegExp; accept?: RegExp }[] = [
   { app: /cursor/i, harness: ['cursor-agent'] },
-  { app: /zcode/i, harness: ['zcode'] },
+  // 桌面版的内核登不了国内编程套餐：没有 ZCode 命令行那位时，记到智谱接口（编程套餐的 API Key）名下
+  { app: /zcode/i, harness: ['zcode'], api: /bigmodel\.cn|\bz\.ai\b/i },
   { app: /mimo/i, api: /mimo/i },
   { app: /deepseek/i, harness: ['dsh'] },
   { app: /chatgpt|codex/i, harness: ['codex'] },

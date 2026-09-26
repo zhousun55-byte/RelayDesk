@@ -92,6 +92,12 @@ test('成员配置校验：桌面程序要有 {{dir}}（旧的 {{worktree}} 也�
   const api = normalizeAgent({ name: 'ds', kind: 'api', model: '旧模型', api: { baseUrl: 'https://api.deepseek.com/', model: '新模型', apiKeyEnv: 'DEEPSEEK_API_KEY' } });
   assert.equal(api.api?.baseUrl, 'https://api.deepseek.com');
   assert.equal(api.model, '新模型');
+  // 协议没写就按地址认：…/anthropic 结尾、api.anthropic.com 是 anthropic；写明了按写的
+  const fmt = (baseUrl: string, format?: string) => normalizeAgent({ name: 'x', kind: 'api', api: { baseUrl, model: 'm', apiKeyEnv: 'K', ...(format ? { format } : {}) } }).api?.format;
+  assert.equal(fmt('https://open.bigmodel.cn/api/anthropic'), 'anthropic');
+  assert.equal(fmt('https://api.anthropic.com'), 'anthropic');
+  assert.equal(fmt('https://api.deepseek.com'), undefined);
+  assert.equal(fmt('https://open.bigmodel.cn/api/anthropic', 'openai'), undefined);
   for (const p of PRESETS.filter((x) => !['api', 'cli'].includes(x.id))) assert.doesNotThrow(() => normalizeAgent(p.agent), p.id);
 });
 

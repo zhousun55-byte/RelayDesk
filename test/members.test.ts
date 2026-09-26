@@ -98,10 +98,12 @@ test('名单去重：桌面程序记到同一家的命令行名下；同一个�
       { name: 'claude-official', kind: 'cli', cmd: 'claude --setting-sources project,local', tier: 'strong', harness: 'claude-official', model: 'claude-opus-5-5' },
       { name: 'agy', kind: 'cli', cmd: 'agy', tier: 'strong', harness: 'agy', model: 'claude-opus-5-5' },
       { name: 'trae', kind: 'app', cmd: 'open -a Trae {{dir}}', tier: 'weak' },
+      { name: 'zcode-app', label: 'ZCode', kind: 'app', cmd: 'open -a ZCode {{dir}}', tier: 'weak' },
+      { name: 'glm-api', kind: 'api', tier: 'weak', api: { baseUrl: 'https://open.bigmodel.cn/api/anthropic', model: 'GLM-5.3', apiKeyEnv: 'ZHIPU_CODING_KEY', format: 'anthropic' } },
     ],
   });
   const changes = detect.tidyRegistry(null);
-  assert.equal(changes.length, 4, changes.join('\n'));
+  assert.equal(changes.length, 5, changes.join('\n'));
   const reg = registry.loadRegistry();
   assert.deepEqual(
     reg.agents.map((a) => [a.name, names.appNameOf(a.app) ?? null]),
@@ -111,8 +113,9 @@ test('名单去重：桌面程序记到同一家的命令行名下；同一个�
       ['claude-official', 'Claude'],
       ['agy', null],
       ['trae', null],
+      ['glm-api', 'ZCode'],
     ],
-    '派活顺序靠前的官方账号留下，终端里的 Claude Code 并进去；Antigravity 里的同一个模型不并；认不出是哪一家的桌面程序单独一位'
+    '派活顺序靠前的官方账号留下，终端里的 Claude Code 并进去；Antigravity 里的同一个模型不并；认不出是哪一家的桌面程序单独一位；没有 ZCode 命令行时 ZCode 记到智谱接口名下'
   );
   assert.deepEqual(detect.tidyRegistry(null), [], '并过了就不再改');
 });

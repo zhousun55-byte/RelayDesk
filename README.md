@@ -212,15 +212,13 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 
 **我有 Claude 官方账号，也把 Claude Code 接到了 DeepSeek，能两个都用吗？** 能。识别时会多出一位「Claude Code 官方账号」（要先在终端运行一次 `claude auth login` 登录官方账号）。它算强，全自动时会被派去复核；接了 DeepSeek 的那位照常干活。两位的额度分开算。
 
-**提示「ZCode 命令行没有默认模型」？** ZCode 桌面版里选的模型，它自带的命令行内核读不到。在终端里打开一次 ZCode 的命令行界面登录，登录完它会把编程套餐的默认模型存下来（界面里的 `/model` 只改当前这一次，不管用）：
+**提示「ZCode 命令行没有默认模型」？** ZCode 桌面版登录的套餐、选的模型，它自带的命令行内核用不上（桌面版是每次对话时临时把账号交给内核）；这个内核也没有命令行界面，登不上国内智谱开放平台的套餐（`zcode login` 只登 Z.AI 国际版）。国内的编程套餐改用接口成员接进来：
 
-```
-ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs
-```
+1. 在 https://bigmodel.cn/coding-plan/personal/overview 复制编程套餐的 API Key，放进环境变量：终端运行 `echo 'export ZHIPU_CODING_KEY=你的钥匙' >> ~/.zshrc`。
+2. 在网页「设置 → 成员」加一位接口：地址 `https://open.bigmodel.cn/api/anthropic`，模型 `GLM-5.3`，密钥环境变量 `ZHIPU_CODING_KEY`（地址以 `/anthropic` 结尾，自动按 Claude 的协议调用）。命令行：`relay workers add glm-api --kind api --api-base https://open.bigmodel.cn/api/anthropic --api-model GLM-5.3 --api-key-env ZHIPU_CODING_KEY`。
+3. 名单里的「ZCode 命令行」可以删掉。ZCode 桌面版会记到这位名下，照样能从接力台打开；桌面版本身不受影响（它读 `AGENTS.md`，照样能接力）。
 
-在里面输入 `/login bigmodel-coding-plan`（智谱开放平台 bigmodel.cn 的编程套餐）或 `/login zai-coding-plan`（Z.AI 国际版），在浏览器里授权后关掉终端窗口。登哪一边跟桌面版一致。`zcode login` 这个命令只登 Z.AI 国际版。桌面版 ZCode 本身不受影响（它读 `AGENTS.md`，照样能接力）。
-
-**提示「额度用完」，原话里是「Insufficient balance or no resource package」（智谱的 1113）？** 这个账号在这一边没有余额或资源包。先看 ZCode 桌面版现在能不能用：也不能用，是套餐用完或到期了；桌面版能用，是命令行登录的和桌面版不在同一边（国内 bigmodel / 国际 Z.AI），按上一条登对的那一边。
+**提示「额度用完」，原话里是「Insufficient balance or no resource package」（智谱的 1113）？** 这个账号在这一边没有余额或资源包。先看 ZCode 桌面版现在能不能用：也不能用，是套餐用完或到期了；桌面版能用，是调用的和桌面版不在同一边（国内 bigmodel / 国际 Z.AI），按上一条改用接口成员。
 
 **提示「没登录或登录过期」？** Claude Code 官方账号：终端运行 `claude auth login`。DeepSeek Harness：打开桌面版重新登录。其他工具：在终端里打开它，按提示登录。
 

@@ -146,14 +146,16 @@ export function normalizeAgent(input: unknown): AgentConfig {
     const apiModel = optText(api.model, '接口模型', 100) ?? '';
     const apiKeyEnv = optText(api.apiKeyEnv, '密钥环境变量名', 100) ?? '';
     const keyFrom = optText(api.keyFrom, '密钥来源', 100);
-    const format = api.format === 'anthropic' ? 'anthropic' : api.format === undefined || api.format === 'openai' || api.format === '' ? undefined : null;
-    if (!/^https?:\/\/\S+$/.test(baseUrl)) throw new RelayError('接口地址要以 http:// 或 https:// 开头。', 'bad-agent');
-    if (!apiModel) throw new RelayError('接口模型不能空（例如 deepseek-chat）。', 'bad-agent');
-    if (format === null) throw new RelayError('接口协议只能是 openai 或 anthropic。', 'bad-agent');
+    // 没写协议就按地址认：…/anthropic 结尾（智谱、Z.AI、DeepSeek、Kimi 兼容 Claude 的地址）和 api.anthropic.com 是 anthropic，别的是 openai。
+    const guess = /\/anthropic\/?$|^https:\/\/api\.anthropic\.com(\/|$)/i.test(baseUrl) ? 'anthropic' : undefined;
+    const format = api.format === 'anthropic' ? 'anthropic' : api.format === undefined || api.format === '' ? guess : api.format === 'openai' ? undefined : null;
+    if (!/^https?:\/\/\S+$/.test(baseUrl)) throw new RelayError('接口地址不是 http:// 或 https:// 开头', 'bad-agent');
+    if (!apiModel) throw new RelayError('接口模型是空的', 'bad-agent');
+    if (format === null) throw new RelayError('接口协议只能是 openai 或 anthropic', 'bad-agent');
     if (keyFrom && !KEY_FROM_RE.test(keyFrom)) throw new RelayError('密钥来源格式不对。', 'bad-agent');
     const local = /^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(baseUrl);
     if (!keyFrom && !(local && !apiKeyEnv) && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
-      throw new RelayError('密钥环境变量名只能是英文、数字、下划线（例如 DEEPSEEK_API_KEY）。密钥本身不要填在这里。', 'bad-agent');
+      throw new RelayError('密钥环境变量名只能是英文、数字、下划线（例如 DEEPSEEK_API_KEY）', 'bad-agent');
     }
     agent.api = { baseUrl: baseUrl.replace(/\/+$/, ''), model: apiModel, apiKeyEnv, ...(format ? { format } : {}), ...(keyFrom ? { keyFrom } : {}) };
     // 接口工人的模型就是接口里填的那个；不另存一份，免得改了接口模型后两边对不上。
