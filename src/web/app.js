@@ -3823,6 +3823,7 @@ function renderRight(force) {
   if (!S.st || !RE.tree) return;
   const p = S.st.project;
   RE.changedBtn.setAttribute('aria-checked', String(S.onlyChanged));
+  RE.changedBtn.hidden = RE.filterBtn.hidden = !!p.pick;
   renderGate(p);
   syncFoldBtn();
   if (p.pick) {
