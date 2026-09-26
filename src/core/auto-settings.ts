@@ -33,7 +33,7 @@ export function autoSettingsPath(): string {
 function names(v: unknown, field: string): string[] {
   if (v === undefined || v === null || v === '') return [];
   const list = typeof v === 'string' ? v.split(/[,，\s]+/) : v;
-  if (!Array.isArray(list)) throw new RelayError(`${field} 要是工人名的列表。`, 'bad-auto');
+  if (!Array.isArray(list)) throw new RelayError(`${field} 要是成员名的列表`, 'bad-auto');
   return [...new Set(list.map((x) => String(x).trim()).filter(Boolean))].slice(0, 30);
 }
 

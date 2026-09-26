@@ -1,6 +1,7 @@
 import { countedReviews, statusWord, verdictWord, type LedgerView, type Stint, type Verdict } from './ledger';
 import { whoName } from './names';
 import { taskProgress, type TaskDoc } from './notes';
+import { plain } from './cause';
 
 /**
  * 验收：这件事能不能算「做完了」。只有这里说了算——全自动收工、网页顶部、接力本、命令行都用它，不各算各的。
@@ -53,14 +54,14 @@ function changed(s: Stint): boolean {
 
 /** 一棒为什么还在待复核（不带「第 N 棒」；普通的待复核返回空）。 */
 export function pendingWhy(s: Stint, rolledBack: ReadonlySet<number> = new Set()): string {
-  if (s.factsError) return '读不到改动，要复核';
+  if (s.factsError) return '读不到改动';
   const last = countedReviews(s, rolledBack).at(-1);
-  if (last) return `复核结论是「${verdictWord(last.verdict)}」（${last.byLabel}）`;
+  if (last) return `复核结论「${verdictWord(last.verdict)}」（${last.byLabel}）`;
   const marks = s.reviews ?? [];
   if (marks.some((m) => m.weak && !m.anon)) return '只有弱模型复核过，不算数';
-  if (marks.some((m) => m.anon)) return '复核是在没有哪一棒进行中的时候写的，认不出是谁写的，不算数';
-  if (marks.some((m) => m.by && rolledBack.has(m.by))) return '复核它的那一棒被退回了，要重新复核';
-  if (!s.facts?.files && s.ticked?.length) return `没改文件，只在清单里打了勾（${s.ticked.slice(0, 3).join('、')}${s.ticked.length > 3 ? '……' : ''}），要确认真做完了`;
+  if (marks.some((m) => m.anon)) return '认不出复核是谁写的，不算数';
+  if (marks.some((m) => m.by && rolledBack.has(m.by))) return '复核它的那一棒被退回了';
+  if (!s.facts?.files && s.ticked?.length) return `没改文件，只打了勾（${s.ticked.slice(0, 3).join('、')}${s.ticked.length > 3 ? '……' : ''}）`;
   return '';
 }
 
@@ -111,14 +112,14 @@ export function acceptance(input: AcceptInput): Acceptance {
       const text = !f
         ? '还没终审'
         : f.status !== 'handed'
-          ? `终审没做成（${whoName(f.who)} ${statusWord(f.status)}${f.note ? `：${f.note.slice(0, 80)}` : ''}）`
+          ? `终审${statusWord(f.status)}（${whoName(f.who)}${f.note ? `，${plain(f.note).slice(0, 80)}` : ''}）`
           : f.who.tier !== 'strong'
             ? `终审实际是弱模型做的（${whoName(f.who)}），不算数`
             : !f.verdict
               ? `终审没留下结论（${whoName(f.who)}）`
               : !FINAL_PASS.has(f.verdict)
-                ? `终审结论是「${verdictWord(f.verdict)}」（${whoName(f.who)}）`
-              : '终审之后又有人改了文件，要重新终审';
+                ? `终审结论「${verdictWord(f.verdict)}」（${whoName(f.who)}）`
+              : '终审之后文件又改过';
       final = { required: true, ok: false, ...(f ? { stint: f.id } : {}), text };
       items.push({ kind: 'final', text, ...(f ? { stint: f.id } : {}) });
     }
@@ -132,7 +133,7 @@ export function acceptance(input: AcceptInput): Acceptance {
     if (!gated) gate = { command: input.gateCommand, status: 'none', text: '还没跑过检查' };
     else if (lastChange && gated.id < lastChange.id) gate = { command: input.gateCommand, status: 'stale', stint: gated.id, text: `第 ${lastChange.id} 棒改了文件之后还没跑检查` };
     else if (gated.gate!.status === 'pass') gate = { command: input.gateCommand, status: 'pass', stint: gated.id, text: '检查通过' };
-    else if (gated.gate!.status === 'fail') gate = { command: input.gateCommand, status: 'fail', stint: gated.id, text: `检查没通过（第 ${gated.id} 棒之后）` };
+    else if (gated.gate!.status === 'fail') gate = { command: input.gateCommand, status: 'fail', stint: gated.id, text: `检查没过（第 ${gated.id} 棒之后）` };
     else gate = { command: input.gateCommand, status: 'error', stint: gated.id, text: gated.gate!.detail ?? '检查没跑成' };
     if (gate.status !== 'pass') items.push({ kind: 'gate', text: gate.text, ...(gate.stint ? { stint: gate.stint } : {}) });
   }
@@ -149,6 +150,6 @@ export function acceptance(input: AcceptInput): Acceptance {
         ? `没法验收：${list(items.filter((i) => i.kind === 'config' || i.kind === 'evidence'))}`
         : state === 'working'
           ? [items.find((i) => i.kind === 'open')?.text, input.task.empty ? '还没写任务' : progress || '任务还没拆成步骤', pending.length ? `待复核 ${pending.length} 棒` : ''].filter(Boolean).join('，')
-          : `清单都打勾了，验收还没过：${list(items)}`;
+          : `验收没过：${list(items)}`;
   return { state, headline, progress: p, items, pending: pending.map((s) => s.id), final, gate };
 }

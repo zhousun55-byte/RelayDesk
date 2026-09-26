@@ -35,7 +35,7 @@ test('全自动：强模型复核写的是「有问题，还没修」，不算�
   s.relay(['task', '做一件事', '--step', '第一件']);
   const out = s.relay(['auto']);
   assert.doesNotMatch(out, /完成：/);
-  assert.match(out, /第 1 棒复核结论是「有问题，还没修」/);
+  assert.match(out, /全自动停止：复核两次没过，第 1 棒复核结论「有问题，还没修」/);
   const st = s.stints();
   assert.deepEqual(
     st.map((x) => [x.kind, x.who.member]),
@@ -46,7 +46,7 @@ test('全自动：强模型复核写的是「有问题，还没修」，不算�
     ]
   );
   assert.equal(st[0].review, 'needed');
-  assert.match(s.relay(['status']), /验收：清单都打勾了，验收还没过：第 1 棒复核结论是「有问题，还没修」/);
+  assert.match(s.relay(['status']), /^验收没过：第 1 棒复核结论「有问题，还没修」/m);
 });
 
 test('全自动：终审写的是「有问题，还没修」，不算终审过；终审两次都没过就停下', () => {
@@ -56,7 +56,7 @@ test('全自动：终审写的是「有问题，还没修」，不算终审过�
   s.relay(['task', '做一件事', '--step', '第一件']);
   const out = s.relay(['auto']);
   assert.doesNotMatch(out, /完成：/);
-  assert.match(out, /终审两次都没过：终审结论是「有问题，还没修」/);
+  assert.match(out, /全自动停止：终审两次没过，终审结论「有问题，还没修」/);
   const finals = s.stints().filter((x) => x.kind === 'final');
   assert.equal(finals.length, 2);
   assert.equal(finals[0].verdict, 'problem');
@@ -73,7 +73,7 @@ test('全自动：开着终审、强模型都在等额度又不等，不会跳�
   fs.writeFileSync(path.join(s.home, '.relay', 'quota.json'), JSON.stringify({ members: { codex: { until: new Date(Date.now() + 3 * 3600_000).toISOString(), note: '额度用完了', at: new Date().toISOString() } } }));
   const out = s.relay(['auto', '--no-wait']);
   assert.doesNotMatch(out, /完成：/);
-  assert.match(out, /任务清单都打勾了，但还没终审/);
+  assert.match(out, /全自动停止：清单都打勾了，还没终审，没有能用的强模型/);
 });
 
 test('换人之前：有 AI 在别的工具里干到一半、刚才还在改文件，就先问你；确认它停了（--force）才换人，账上记下是你确认的', () => {
@@ -91,7 +91,7 @@ test('换人之前：有 AI 在别的工具里干到一半、刚才还在改文�
   const st = s.stints();
   assert.equal(st[0].status, 'handed');
   assert.equal(st[0].stopConfirmed, true);
-  assert.match(st[0].note, /你确认过它已经停下/);
+  assert.match(st[0].note, /已确认它停下/);
   assert.equal(st[1].who.member, 'codex');
 });
 
@@ -105,7 +105,7 @@ test('一个项目同一时间只能有一个调度：锁在别的活着的进�
     fs.mkdirSync(path.join(s.repo, '.relay', 'runs'), { recursive: true });
     fs.writeFileSync(path.join(s.repo, '.relay', 'runs', 'lock'), JSON.stringify({ pid: holder.pid, token: 'other', at: new Date().toISOString() }));
     const out = s.relay(['go', 'codex'], true);
-    assert.match(out, /接力台已经在调度这个项目了/);
+    assert.match(out, /接力台已经在调度这个项目/);
     assert.equal(s.stints().length, 0);
   } finally {
     holder.kill('SIGKILL');

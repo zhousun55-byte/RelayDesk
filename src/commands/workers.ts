@@ -31,7 +31,7 @@ function withFlags(cmd: Command): Command {
     .option('--kind <类型>', 'cli（终端）| app（桌面）| api（只讨论）')
     .option('--cmd <命令>', '启动命令；桌面程序要含 {{dir}}（项目文件夹）')
     .option('--tier <能力>', 'strong（强）| weak（弱）')
-    .option('--mode <喂法>', '终端工人的上岗词喂法：arg | stdin | file')
+    .option('--mode <喂法>', '终端成员的上岗词喂法：arg | stdin | file')
     .option('--model <模型>', '派活时用的模型（如 gpt-6-sol；不填用工具自己的默认）')
     .option('--ask <命令>', '讨论命令：从标准输入读题、标准输出回答')
     .option('--api-base <地址>', 'API 地址（kind=api）')
@@ -79,15 +79,15 @@ function describe(a: AgentConfig): string {
 }
 
 export function workersCommand(): Command {
-  const workers = new Command('workers').alias('agents').description('管理工人（全局名单 ~/.relay/agents.json）');
+  const workers = new Command('workers').alias('agents').description('管理成员（全局名单 ~/.relay/agents.json）');
 
   workers
     .command('list')
-    .description('列出所有工人')
+    .description('列出所有成员')
     .action(() => {
       const reg = loadRegistry();
       if (reg.agents.length === 0) {
-        console.log('还没有工人。先加一个，例如：relay workers add claude --preset claude');
+        console.log('还没有成员。先加一个，例如：relay workers add claude --preset claude');
         console.log('有哪些现成的：relay workers presets');
         return;
       }
@@ -96,14 +96,14 @@ export function workersCommand(): Command {
 
   workers
     .command('presets')
-    .description('看看有哪些现成的工人配置')
+    .description('看看有哪些现成的成员配置')
     .action(() => {
       for (const p of PRESETS) console.log(`${p.id.padEnd(10)} ${p.title}：${p.hint}`);
       console.log('');
       console.log('用法：relay workers add <名字> --preset <上面的编号>（可以再加 --model 等覆盖）');
     });
 
-  withFlags(workers.command('add').description('添加一个工人').argument('<名字>', '英文名，命令里用它，如 claude'))
+  withFlags(workers.command('add').description('添加一个成员').argument('<名字>', '英文名，命令里用它，如 claude'))
     .option('--preset <编号>', '从现成配置开始（relay workers presets 查看）')
     .action((name: string, f: AgentFlags) => {
       let base: Partial<AgentConfig> = { kind: 'cli', tier: 'weak', prompt: { mode: 'file' } };
@@ -119,11 +119,11 @@ export function workersCommand(): Command {
       info(`名单文件：${registryPath()}`);
     });
 
-  withFlags(workers.command('edit').description('修改一个工人（只改给出的项）').argument('<名字>'))
+  withFlags(workers.command('edit').description('修改一个成员（只改给出的项）').argument('<名字>'))
     .option('--rename <新名字>', '改名')
     .action((name: string, f: AgentFlags) => {
       const cur = findAgent(name);
-      if (!cur) throw new RelayError(`工人名单里没有「${name}」。`, 'no-agent');
+      if (!cur) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
       const a = upsertAgent(merged(cur, name, f), name);
       ok(`已修改：${describe(a)}`);
     });
@@ -131,20 +131,20 @@ export function workersCommand(): Command {
   workers
     .command('remove')
     .alias('rm')
-    .description('删掉一个工人')
+    .description('删掉一个成员')
     .argument('<名字>')
     .action((name: string) => {
       removeAgent(name);
-      ok(`已删除工人「${name}」。`);
+      ok(`已删除成员「${name}」`);
     });
 
   workers
     .command('check')
-    .description('检查工人的命令在这台电脑上能不能用')
+    .description('检查成员的命令在这台电脑上能不能用')
     .argument('[名字]')
     .action((name?: string) => {
       const list = name ? [findAgent(name)].filter((a): a is AgentConfig => !!a) : loadRegistry().agents;
-      if (name && list.length === 0) throw new RelayError(`工人名单里没有「${name}」。`, 'no-agent');
+      if (name && list.length === 0) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
       for (const a of list) {
         if (agentKind(a) === 'api') {
           if (a.api && apiUsable(a.api)) ok(`${agentLabel(a)}：${keyWhere(a.api)} 有了`);

@@ -32,7 +32,7 @@ test('自动识别：Claude Code 接的是 DeepSeek 算弱，Codex 是强；桌�
     ]
   );
   const out = s.relay(['detect', '--offline']);
-  assert.match(out, /工人名单不用改/);
+  assert.match(out, /成员名单不用改/);
   assert.match(out, /强 Codex（gpt-6）/);
   assert.match(out, /弱 Claude Code（deepseek-v4-flash）/);
 });
@@ -109,8 +109,7 @@ test('接力台调度一棒：弱模型干完标待复核；relay review 派强�
   s.relay(['init']);
   s.relay(['task', '做两件事', '--step', '第一件', '第二件']);
   const out = s.relay(['go', 'claude']);
-  assert.match(out, /这一棒做完了/);
-  assert.match(out, /等强模型复核/);
+  assert.match(out, /✓ 第 1 棒（DeepSeek V4 Flash）已交接：.+；待复核$/m);
   let st = s.stints();
   assert.equal(st.length, 1);
   assert.equal(st[0].via, 'relay');
@@ -138,7 +137,7 @@ test('全自动：弱模型干一棒 → 强模型复核 → 再干 → 再复�
   s.relay(['init']);
   s.relay(['task', '做两件事', '--step', '第一件', '第二件']);
   const out = s.relay(['auto']);
-  assert.match(out, /完成：验收通过：清单 2\/2 全部打勾，GPT-6 终审过了/);
+  assert.match(out, /✓ 验收通过：清单 2\/2 全部打勾，GPT-6 终审过了/);
   const st = s.stints();
   assert.deepEqual(
     st.map((x) => [x.kind, x.who.member]),
@@ -160,7 +159,7 @@ test('全自动：复核的那位实际跑的是弱模型，写的复核不算�
   s.relay(['init']);
   s.relay(['task', '做一件事', '--step', '第一件']);
   const out = s.relay(['auto']);
-  assert.match(out, /第 1 棒复核了两次，但写复核的都算弱，结论不算数/);
+  assert.match(out, /全自动停止：第 1 棒复核两次都不算数，写复核的都是弱模型/);
   const st = s.stints();
   assert.deepEqual(
     st.map((x) => [x.kind, x.who.member, x.who.tier]),
@@ -179,7 +178,7 @@ test('全自动：终审没做成，不说「终审过了」，停下来说清�
   s.relay(['init']);
   s.relay(['task', '做一件事', '--step', '第一件']);
   const out = s.relay(['auto']);
-  assert.match(out, /任务清单都打勾了，但终审没做成（GPT-6 出错了/);
+  assert.match(out, /全自动停止：清单都打勾了，终审出错（GPT-6，/);
   assert.doesNotMatch(out, /终审过了/);
   assert.deepEqual(
     s.stints().map((x) => [x.kind, x.who.member, x.status]),
@@ -212,7 +211,7 @@ test('额度用完：记下什么时候恢复，自动换下一位接着做；�
   s.relay(['init']);
   s.relay(['task', '做一件事', '--step', '只有一件']);
   const out = s.relay(['auto']);
-  assert.match(out, /完成/);
+  assert.match(out, /✓ 验收通过/);
   const st = s.stints();
   assert.equal(st[0].who.member, 'claude');
   assert.equal(st[0].status, 'quota');
@@ -233,7 +232,7 @@ test('都没额度了又不等：停下交给你，说清楚原因', () => {
   s.relay(['init']);
   s.relay(['task', '做一件事', '--step', 'x']);
   const out = s.relay(['auto', '--no-wait']);
-  assert.match(out, /没有能干活的 AI 了/);
+  assert.match(out, /全自动停止：没有能派活的成员/);
   assert.deepEqual(
     s.stints().map((x) => [x.who.member, x.status]),
     [
@@ -340,7 +339,7 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   assert.equal(s.stints()[0].who.member, 'claude');
   assert.equal(s.stints()[0].who.model, 'deepseek-v4-flash', '用回复里的模型名，不带 init 里的 [1m]');
   assert.equal(s.stints()[0].review, 'needed');
-  assert.match(s.relay(['review', 'claude'], true), /复核要强模型来做/);
+  assert.match(s.relay(['review', 'claude'], true), /不能复核：它算弱模型/);
   // 这台电脑上用过的 Opus：旧会话里是 claude-opus-5-5，最近一个会话是 claude-opus-5。派官方账号时按版本挑最新的。
   const logs = path.join(s.home, '.claude', 'projects', '-desk-');
   fs.mkdirSync(logs, { recursive: true });

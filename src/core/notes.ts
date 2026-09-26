@@ -273,7 +273,7 @@ export function editTask(root: string, edit: TaskEdit): TaskDoc {
     }
     if (edit.op === 'add') {
       const text = oneLine(edit.text);
-      if (!text) throw new RelayError('先写这一步要做什么。', 'empty');
+      if (!text) throw new RelayError('这一步是空的', 'empty');
       if (!sec.items.length && sec.placeholders.length) lines[sec.placeholders[0]] = `- [ ] ${text}`;
       else if (sec.items.length) lines.splice(sec.items[sec.items.length - 1] + 1, 0, `- [ ] ${text}`);
       else {

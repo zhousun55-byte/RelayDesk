@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { agentEnv } from './env';
 import type { Invocation, StreamFormat } from './harness';
+import { cause } from './cause';
 import { stampLocal } from './time';
 
 /**
@@ -450,11 +451,6 @@ function killGroup(pid: number | undefined, sig: NodeJS.Signals): void {
   }
 }
 
-/** 「3 分钟」「40 秒」。 */
-export function span(ms: number): string {
-  return ms >= 60_000 ? `${Math.round(ms / 60_000)} 分钟` : `${Math.round(ms / 1000)} 秒`;
-}
-
 export function startRun(req: RunRequest): RunHandle {
   const inv = req.invocation;
   fs.mkdirSync(path.dirname(req.logPath), { recursive: true });
@@ -493,7 +489,7 @@ export function startRun(req: RunRequest): RunHandle {
   const quiet = req.idleMs
     ? setTimeout(() => {
         timedOut = idle = true;
-        write(`${span(req.idleMs!)}没有动静，停掉它。`);
+        write(cause.idle(req.idleMs!));
         terminate();
       }, req.idleMs)
     : null;
@@ -538,7 +534,7 @@ export function startRun(req: RunRequest): RunHandle {
 
   const timer = setTimeout(() => {
     timedOut = true;
-    write(`超过 ${span(req.timeoutMs)}还没结束，停掉它。`);
+    write(cause.overtime(req.timeoutMs));
     terminate();
   }, req.timeoutMs);
 

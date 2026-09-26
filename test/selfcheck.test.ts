@@ -101,7 +101,7 @@ test('复核算谁的：按复核文件改动的时间对是哪一棒写的。�
   assert.equal(stint(1).review, 'needed', '认不出是谁写的复核不算数');
   assert.equal(stint(1).reviews?.at(-1)?.anon, true);
   assert.equal(stint(1).reviews?.at(-1)?.by, 0);
-  assert.match(acceptance({ ledger: ledger.loadLedger(root), task: notes.readTask(root), gateCommand: '', finalRequired: false }).items.map((i) => i.text).join('；'), /认不出是谁写的/);
+  assert.match(acceptance({ ledger: ledger.loadLedger(root), task: notes.readTask(root), gateCommand: '', finalRequired: false }).items.map((i) => i.text).join('；'), /认不出复核是谁写的/);
 
   // 强模型在自己那一棒里复核（先建交接再写结论）：算数
   write('.relay/交接/第3棒-0925-1030-codex.md', handoff('Codex · gpt-6-astra', 'Codex', 'gpt-6-astra', '进行中'));
@@ -223,7 +223,7 @@ test('只在清单里打勾、一个文件都没改的弱模型，也要复核�
   assert.equal(s.review, 'needed', '以前是「没改文件，不用复核」');
   const a = acceptance({ ledger: ledger.loadLedger(root), task: notes.readTask(root), gateCommand: '', finalRequired: false });
   assert.equal(a.state, 'blocked', '以前关了终审就「验收通过：清单 2/2 全部打勾」');
-  assert.match(a.headline, /只在清单里打了勾/);
+  assert.match(a.headline, /没改文件，只打了勾/);
   assert.match(fs.readFileSync(path.join(root, '.relay/接力本.md'), 'utf8'), /只在任务清单里打了勾：写用法、写示例/);
 
   const b = project('tick-only-strong', '改一句话', ['改']);
@@ -358,7 +358,7 @@ test('网页要成员时：识别结果里有的工具不在请求里再运行�
     const list = members.allMembers('safe', report as never);
     assert.ok(Date.now() - t0 < 1000, `用了 ${Date.now() - t0} 毫秒`);
     assert.equal(list.find((m) => m.name === 'codex')?.canWork, true);
-    assert.equal(list.find((m) => m.name === 'opencode')?.why, '这台电脑上找不到它', '识别结果里没有、现找也没装');
+    assert.equal(list.find((m) => m.name === 'opencode')?.why, '这台电脑上没找到', '识别结果里没有、现找也没装');
   } finally {
     process.env.PATH = PATH;
   }
@@ -465,11 +465,15 @@ test('群聊：一直出声的不按时间掐；一点动静都没有的到点�
   const stuck = await run(`console.log('开个头');setTimeout(()=>console.log('太晚了'),8000)`);
   assert.ok(stuck.timedOut && stuck.idle, JSON.stringify(stuck));
   assert.ok(stuck.durationMs < 4000, `${stuck.durationMs} 毫秒`);
-  assert.match(fs.readFileSync(path.join(dir, 'run.log'), 'utf8'), /1 秒没有动静，停掉它。/);
+  assert.match(fs.readFileSync(path.join(dir, 'run.log'), 'utf8'), /1 秒没有输出，已停止/);
 
   const ask = (cmd: string) => talk.askAgent({ name: 'mine', kind: 'cli', cmd: 'x', tier: 'weak', ask: cmd }, 'hi', dir, 20_000, 1000);
-  await assert.rejects(ask('sleep 5'), /1 秒没有动静，停掉了/);
+  await assert.rejects(ask('sleep 5'), /: 1 秒没有输出，已停止$/);
   await assert.rejects(ask(`printf '<tool_call><function=bash><parameter=command>ls</parameter></function></tool_call>'`), /调用工具的原文/);
+  // 没说话就退出：额度用完（和干活时同一套认法）、别的报错都带原话，说法同一套
+  await assert.rejects(ask(`echo 'Error: insufficient balance, please recharge' >&2; exit 1`), /: 额度用完，原话：Error: insufficient balance, please recharge$/);
+  await assert.rejects(ask(`echo 'Error: bad flag' >&2; exit 2`), /: 退出码 2，原话：Error: bad flag$/);
+  await assert.rejects(ask('exit 0'), /: 没有输出（退出码 0）$/);
 });
 
 test('群聊里的 Gemini 带沙箱；要跑的命令被拒、一句话没说就结束时，说清楚拒的是哪条', async () => {
@@ -491,7 +495,7 @@ test('群聊里的 Gemini 带沙箱；要跑的命令被拒、一句话没说就
   process.env.PATH = `${bin}:${keep}`;
   harness.clearLocateCache();
   try {
-    await assert.rejects(talk.askAgent({ name: 'agy', kind: 'cli', cmd: 'agy', tier: 'weak', harness: 'agy' }, 'hi', dir), /「textutil -convert txt -stdout a\.rtf」没被放行/);
+    await assert.rejects(talk.askAgent({ name: 'agy', kind: 'cli', cmd: 'agy', tier: 'weak', harness: 'agy' }, 'hi', dir), /「textutil -convert txt -stdout a\.rtf」没获准运行/);
     const argv = fs.readFileSync(args, 'utf8').split('\n');
     assert.ok(argv.includes('plan') && argv.includes('--sandbox'), argv.join(' '));
   } finally {

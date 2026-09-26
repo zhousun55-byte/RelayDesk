@@ -337,7 +337,7 @@ export function loadLedger(root: string): LedgerView {
 
 export function requireInit(root: string): LedgerView {
   const v = loadLedger(root);
-  if (!v.init) throw new RelayError('这个文件夹还没接入接力台。先在接力台里点「接入」，或执行 relay init。', 'not-init');
+  if (!v.init) throw new RelayError('这个文件夹还没接入接力台', 'not-init');
   return v;
 }
 
@@ -387,15 +387,15 @@ export function statusWord(s: StintStatus): string {
     case 'working':
       return '进行中';
     case 'handed':
-      return '交接了';
+      return '已交接';
     case 'unfinished':
-      return '没留交接就停了';
+      return '没交接';
     case 'quota':
       return '额度用完';
     case 'failed':
-      return '出错了';
+      return '出错';
     case 'stopped':
-      return '叫停了';
+      return '已停止';
   }
 }
 

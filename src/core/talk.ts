@@ -10,7 +10,9 @@ import { fillTemplate } from './launch';
 import { runLlmAgent } from './llm-agent';
 import { llmName, toolName } from './names';
 import { redactSecrets } from './redact';
-import { clip, logTail, span, startRun, type RunResult } from './runner';
+import { detectQuota } from './quota';
+import { clip, logTail, startRun, toolLines, type RunResult } from './runner';
+import { cause, plain } from './cause';
 import { agentKind, agentLabel, canTalk, findAgent, loadRegistry, OUT_PLACEHOLDER } from './registry';
 import type { AgentConfig } from './types';
 
@@ -248,19 +250,27 @@ export const TALK_IDLE_MS = 3 * 60_000;
 /** 回的是「调用工具」的原文（没给它工具、或者接口没接住）：不是回答。 */
 const RAW_TOOL_CALL = /^<(?:tool_call|function_calls?)>/;
 
-/** 工具一句话没说就结束了：从日志里找原因——被拒绝的操作、认得的报错、它自己最后报的错。 */
+/** 额度用完、余额不足（和干活时认的是同一套），带上它的原话。 */
+function quotaWhy(text: string): string | null {
+  const q = detectQuota(text);
+  return q.hit ? `${cause.quota(q.until)}${q.line ? `，原话：${clip(plain(q.line), 160)}` : ''}` : null;
+}
+
+/** 工具一句话没说就结束了：从日志里找原因——被拒绝的操作、额度、认得的报错、它自己最后报的错。 */
 function silentWhy(harness: string | undefined, log: string, r: RunResult): string {
   const denied = log.match(/被拒绝：(.+)/)?.[1];
-  if (denied) return `「${denied}」没被放行，它就停了。`;
+  if (denied) return cause.denied(denied);
+  const quota = quotaWhy(`${r.stderrTail}\n${toolLines(log)}`);
+  if (quota) return quota;
   const hint = explainFailure(harness, `${r.stderrTail}\n${log}`);
   if (hint) return hint;
   const said = r.stderrTail.split('\n').find((l) => /error|错误|失败|failed/i.test(l));
-  return `什么都没说（退出码 ${r.code}）${said ? `：${clip(said.trim(), 200)}` : '。'}`;
+  return said ? cause.exit(r.code, clip(said.trim(), 200)) : cause.silent(r.code);
 }
 
 function replyOf(raw: string): string {
   const text = cleanReply(raw);
-  if (RAW_TOOL_CALL.test(text)) throw new RelayError('回的是一段调用工具的原文，不是回答。', 'ask-empty');
+  if (RAW_TOOL_CALL.test(text)) throw new RelayError(cause.rawToolCall, 'ask-empty');
   return text;
 }
 
@@ -269,9 +279,9 @@ function replyOf(raw: string): string {
  * 自定义命令把提示从标准输入喂进去，读标准输出（或 {{out}} 文件）。
  */
 export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, timeoutMs = TALK_MAX_MS, idleMs = TALK_IDLE_MS): Promise<string> {
-  const late = (idle: boolean | undefined) => (idle ? `${span(idleMs)}没有动静，停掉了。` : `${span(timeoutMs)}还没说完，停掉了。`);
+  const late = (idle: boolean | undefined) => (idle ? cause.idle(idleMs) : cause.overtime(timeoutMs));
   if (agentKind(agent) === 'api') {
-    if (!agent.api) throw new RelayError('这个工人没有配置接口。', 'no-api');
+    if (!agent.api) throw new RelayError('没有配置接口', 'no-api');
     // 和编程工具一样能看项目里的文件：不给工具的话，它会把「调用工具」的原文当成回答说出来。
     const r = await runLlmAgent({
       spec: agent.api,
@@ -287,7 +297,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
       maxSteps: 30,
     });
     const text = replyOf(r.finalText);
-    if (!text) throw new RelayError(r.error ?? (r.timedOut ? late(false) : '什么都没说。'), 'ask-empty');
+    if (!text) throw new RelayError(r.error ? (quotaWhy(r.error) ?? plain(r.error)) : r.timedOut ? late(false) : cause.silent(), 'ask-empty');
     return text;
   }
   const tpl = agent.ask?.trim();
@@ -295,7 +305,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     // 绑定了认得的编程工具：用它的只读模式回答。
     const spec = findHarness(agent.harness);
     const loc = spec ? locateCached(spec) : null;
-    if (!spec || !loc) throw new RelayError(`「${speakerName(agent)}」没有配置讨论命令。`, 'no-ask');
+    if (!spec || !loc) throw new RelayError('没有配置讨论命令', 'no-ask');
     const stamp = `${process.pid}-${Date.now()}`;
     const make = () =>
       spec.invoke(loc, {
@@ -322,7 +332,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     const log = logTail(logPath, 6000);
     fs.rmSync(logPath, { force: true });
     const text = replyOf(r.finalText);
-    if (!text) throw new RelayError(r.error ?? (r.timedOut ? late(r.idle) : silentWhy(spec.id, log, r)), 'ask-empty');
+    if (!text) throw new RelayError(r.error ? plain(r.error) : r.timedOut ? late(r.idle) : silentWhy(spec.id, log, r), 'ask-empty');
     return text;
   }
   const outFile = tpl.includes(OUT_PLACEHOLDER) ? path.join(os.tmpdir(), `relay-talk-${process.pid}-${Date.now()}.txt`) : null;
@@ -367,7 +377,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     child.on('error', (e) => {
       clearTimeout(timer);
       clearTimeout(quiet);
-      reject(new RelayError(`启动不了：${e.message}`, 'ask-spawn'));
+      reject(new RelayError(`启动失败，原话：${plain(e.message)}`, 'ask-spawn'));
     });
     child.on('close', (code) => {
       clearTimeout(timer);
@@ -388,8 +398,8 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
       } catch (e) {
         return reject(e);
       }
-      if (code !== 0 && !text) return reject(new RelayError(`命令出错（退出码 ${code}）：${cleanReply(err).slice(-600) || '没有输出'}`, 'ask-failed'));
-      if (!text) return reject(new RelayError(`什么都没说。${cleanReply(err).slice(-300)}`, 'ask-empty'));
+      const said = cleanReply(err).slice(-300);
+      if (!text) return reject(new RelayError((said && quotaWhy(said)) || (said ? cause.exit(code ?? -1, said) : cause.silent(code ?? -1)), code ? 'ask-failed' : 'ask-empty'));
       resolve(text);
     });
   });
@@ -463,7 +473,7 @@ function safeContext(context: () => TalkContext): TalkContext {
 async function speakOne(root: string, name: string, rows: TalkRow[], context: () => TalkContext, solo?: string): Promise<void> {
   const agent = findAgent(name);
   try {
-    if (!agent) throw new RelayError('工人名单里已经没有它了。', 'no-agent');
+    if (!agent) throw new RelayError('名单里没有它', 'no-agent');
     const who = speakerName(agent);
     const prompt = buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), ...(solo ? { solo: true } : {}) });
     const text = await askAgent(agent, prompt, root);
@@ -471,7 +481,7 @@ async function speakOne(root: string, name: string, rows: TalkRow[], context: ()
     const m = memberModel(agent, loadDetected());
     appendTalk(root, { kind: 'ai', who: speakerName(agent), agent: agent.name, ...(m ? { model: m } : {}), text, ...(solo ? { round: solo } : {}) });
   } catch (e) {
-    appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agent ? speakerName(agent) : name} 没回上来：${errorMessage(e)}`, error: true, ...(solo ? { round: solo } : {}) });
+    appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agent ? speakerName(agent) : name} 没有回答：${plain(errorMessage(e))}`, error: true, ...(solo ? { round: solo } : {}) });
   }
 }
 
@@ -518,7 +528,7 @@ export function checkSpeakers(ask: string[]): string[] {
   const names: string[] = [];
   for (const n of ask) {
     const a = findAgent(n);
-    if (!a) throw new RelayError(`工人名单里没有「${n}」。`, 'no-agent');
+    if (!a) throw new RelayError(`名单里没有「${n}」`, 'no-agent');
     if (!canTalk(a)) throw new RelayError(`「${speakerName(a)}」还不能参加群聊。`, 'cannot-talk');
     if (!names.includes(n)) names.push(n);
   }
@@ -532,7 +542,7 @@ export function checkSpeakers(ask: string[]): string[] {
  */
 export function say(root: string, text: string, ask: string[], context: () => TalkContext = () => ({}), mode: TalkMode = 'turn'): { row: TalkRow; queued: string[]; done: Promise<void> } {
   const t = text.trim();
-  if (!t) throw new RelayError('先写一句话。', 'empty');
+  if (!t) throw new RelayError('消息是空的', 'empty');
   const names = checkSpeakers(ask);
   const row = appendTalk(root, { kind: 'human', who: '我', text: t, mode });
   const r = roundOf(root);

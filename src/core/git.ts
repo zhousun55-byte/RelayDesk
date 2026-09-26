@@ -28,7 +28,7 @@ export function git(cwd: string, args: string[], opts: GitOptions = {}): GitResu
     maxBuffer: 64 * 1024 * 1024,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true' },
   });
-  if (r.error) throw new RelayError(`无法执行 git：${r.error.message}。请先安装 git。`, 'no-git');
+  if (r.error) throw new RelayError(`没能执行 git：${r.error.message}`, 'no-git');
   const stdout = r.stdout ?? '';
   return { code: r.status ?? -1, stdout: opts.raw ? stdout : stdout.trim(), stderr: (r.stderr ?? '').trim() };
 }

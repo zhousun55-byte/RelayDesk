@@ -345,7 +345,7 @@ export function tidyRegistry(report: DetectReport | null = loadDetected()): stri
 /** 用户同意后，启用一个要用别的工具密钥的接口（如 MiMo 的 Token Plan）。 */
 export function enableProvider(report: DetectReport, id: string, name?: string): AgentConfig {
   const p = report.providers.find((x) => x.id === id);
-  if (!p) throw new RelayError(`识别结果里没有 ${id}，先重新识别一次。`, 'no-provider');
+  if (!p) throw new RelayError(`识别结果里没有 ${id}`, 'no-provider');
   const reg = loadRegistry();
   const existing = reg.agents.find((a) => a.api?.keyFrom === p.keyFrom && a.api?.baseUrl === p.baseUrl);
   if (existing) return existing;
@@ -407,10 +407,10 @@ export function listMembers(level: Level, report: DetectReport | null = loadDete
     let why: string | undefined;
     // 识别结果里有它就不再现找（现找要运行一遍它的 --version；网页每隔几秒要一次成员，找工具的缓存一过期就会卡住整个接力台）。
     // 识别结果里没有（没识别过、或者识别之后才装的）才现找：没装的工具找得很快，装了的只在这时慢一次。
-    if (!hr && !locateCached(spec)) why = '这台电脑上找不到它';
-    else if (hr?.login.state === 'no') why = `没登录：${spec.loginHint}`;
+    if (!hr && !locateCached(spec)) why = '这台电脑上没找到';
+    else if (hr?.login.state === 'no') why = '没登录';
     // 档位不够，或者你给它的设置让安全档守不住：列出来，但不派活
-    const held = !spec.workLevels.includes(level) ? '只有「完全放开」档才能无人值守地干活' : level === 'safe' ? spec.unsafe?.() : undefined;
+    const held = !spec.workLevels.includes(level) ? '安全档不能无人值守地干活' : level === 'safe' ? spec.unsafe?.() : undefined;
     out.push({
       ...base,
       kind: 'harness',

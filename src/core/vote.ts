@@ -5,6 +5,7 @@ import { loadDetected, memberModel } from './detect';
 import { errorMessage, RelayError } from './errors';
 import { TASK_REL } from './notes';
 import { redactSecrets } from './redact';
+import { plain } from './cause';
 import { findAgent } from './registry';
 import { memberTier } from './tier';
 import { appendTalkRaw, askAgent, checkSpeakers, inParallel, speakerName, talkPath, type TalkContext } from './talk';
@@ -186,9 +187,9 @@ const running = new Map<string, Promise<Vote>>();
 /** 开始一次投票。立即返回；出方案、投票在后台进行，进度写进群聊记录。 */
 export function startVote(root: string, input: StartVoteInput): { vote: Vote; done: Promise<Vote> } {
   const q = input.question.trim();
-  if (!q) throw new RelayError('先写下要投票的问题。', 'empty');
+  if (!q) throw new RelayError('投票的问题是空的', 'empty');
   const voters = checkSpeakers(input.voters);
-  if (voters.length < 2) throw new RelayError('至少请两个 AI 来投票。', 'few-voters');
+  if (voters.length < 2) throw new RelayError('投票的 AI 少于两个', 'few-voters');
   const own = (input.options ?? []).map((x) => x.trim()).filter(Boolean);
   if (own.length === 1) throw new RelayError('至少要两个选项（或者不写选项，让 AI 各自出方案）。', 'few-options');
   const ctx = input.context ?? (() => ({}));
@@ -225,12 +226,12 @@ async function runVote(root: string, v: Vote, context: () => TalkContext): Promi
           const text = await askAgent(a, proposePrompt({ speaker: speaker(name), root, question: v.question, context: ctx }), root);
           if (text.trim()) got.push({ author: name, text: text.trim().slice(0, 2000) });
         } catch (e) {
-          v.ballots.push({ voter: name, voterLabel: speaker(name), choice: null, reason: '', void: `出方案时出错：${errorMessage(e)}` });
+          v.ballots.push({ voter: name, voterLabel: speaker(name), choice: null, reason: '', void: `没出方案，${plain(errorMessage(e))}` });
         }
       });
       if (got.length < 2) {
         v.status = 'done';
-        v.error = got.length ? '只有一个 AI 出了方案，投不了票。' : '没有 AI 出方案（都出错了）。';
+        v.error = got.length ? '投票没开始：只有 1 个方案' : '投票没开始：没有方案';
         return save(root, v);
       }
       v.options = shuffle(got).slice(0, KEYS.length).map((g, i) => ({ key: KEYS[i], text: g.text, author: g.author, authorLabel: speaker(g.author) }));
@@ -251,7 +252,7 @@ async function runVote(root: string, v: Vote, context: () => TalkContext): Promi
         const bad = !b.choice ? '没按格式投票' : b.choice === mine ? '投了自己的方案' : undefined;
         v.ballots.push({ voter: name, voterLabel: speaker(name), choice: bad ? null : b.choice, reason: b.reason, tier, ...(bad ? { void: bad } : {}) });
       } catch (e) {
-        v.ballots.push({ voter: name, voterLabel: speaker(name), choice: null, reason: '', tier, void: `出错：${errorMessage(e)}` });
+        v.ballots.push({ voter: name, voterLabel: speaker(name), choice: null, reason: '', tier, void: plain(errorMessage(e)) });
       }
       withHumanBallot(root, v);
       save(root, { ...v, ...tally(v.options, v.ballots) });
@@ -271,7 +272,7 @@ async function runVote(root: string, v: Vote, context: () => TalkContext): Promi
 export function castHumanVote(root: string, id: string, key: string, reason = ''): Vote {
   const v = findVote(root, id);
   if (!v) throw new RelayError('找不到这次投票。', 'no-vote');
-  if (v.status === 'proposing') throw new RelayError('方案还没出齐，等一下再投。', 'not-ready');
+  if (v.status === 'proposing') throw new RelayError('方案还没出齐', 'not-ready');
   if (!v.options.some((o) => o.key === key)) throw new RelayError(`没有方案 ${key}。`, 'bad-key');
   const ballots = [...v.ballots.filter((b) => b.voter !== 'human'), { voter: 'human', voterLabel: '我', choice: key, reason: reason.trim().slice(0, 300) }];
   const next: Vote = { ...v, ballots, ...(v.status === 'done' ? tally(v.options, ballots) : {}) };

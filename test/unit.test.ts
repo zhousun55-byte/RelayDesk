@@ -265,7 +265,7 @@ test('网页上改任务：改标题、打勾、加一步、删一步；模板�
   );
   assert.match(t.raw, /## 约定/);
   assert.throws(() => editTask(root, { op: 'toggle', index: 5 }), /没有这一步/);
-  assert.throws(() => editTask(root, { op: 'add', text: '  ' }), /先写这一步/);
+  assert.throws(() => editTask(root, { op: 'add', text: '  ' }), /这一步是空的/);
   // 自己写的任务没有「进度」一节：加在「约定」前面，约定原样留着。
   fs.writeFileSync(file, '# 任务\n\n自己写的任务\n\n## 约定\n\n- 别动 config\n');
   t = editTask(root, { op: 'add', text: '第一步' });

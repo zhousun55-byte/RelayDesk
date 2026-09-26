@@ -10,7 +10,7 @@ import { apiUsable, keyWhere } from '../core/llm';
 import { allMembers, readyMembers } from '../core/members';
 import { relayHome } from '../core/paths';
 import { protocolState } from '../core/protocol';
-import { untilText } from '../core/quota';
+import { cause } from '../core/cause';
 import { agentKind, agentLabel, loadRegistry } from '../core/registry';
 import { projectConfigSafe } from '../ops/track';
 import { findRoot } from './relay';
@@ -20,7 +20,7 @@ export interface DoctorLine {
   text: string;
 }
 
-/** 体检：这台电脑、工人、当前项目能不能用。网页的「环境检查」也用它。 */
+/** 体检：这台电脑、成员、当前项目能不能用。网页的「环境检查」也用它。 */
 export function doctor(dir: string): DoctorLine[] {
   const out: DoctorLine[] = [];
   const add = (level: DoctorLine['level'], text: string) => out.push({ level, text });
@@ -39,19 +39,19 @@ export function doctor(dir: string): DoctorLine[] {
 
   try {
     const reg = loadRegistry();
-    if (reg.agents.length === 0) add('warn', '还没有工人。在接力台「设置」里添加，或 relay workers add claude --preset claude');
+    if (reg.agents.length === 0) add('warn', '还没有成员。在接力台「设置」里添加，或 relay workers add claude --preset claude');
     for (const a of reg.agents) {
       if (agentKind(a) === 'api') {
-        if (a.api && apiUsable(a.api)) add('ok', `工人 ${agentLabel(a)}：${keyWhere(a.api)} 有了`);
-        else add('warn', `工人 ${agentLabel(a)}：没有密钥（${a.api ? keyWhere(a.api) : '没配接口'}），它现在用不了`);
+        if (a.api && apiUsable(a.api)) add('ok', `成员 ${agentLabel(a)}：${keyWhere(a.api)} 有了`);
+        else add('warn', `成员 ${agentLabel(a)}：没有密钥（${a.api ? keyWhere(a.api) : '没配接口'}），它现在用不了`);
         continue;
       }
       const r = checkCommand(a.cmd ?? '');
-      if (r.ok) add('ok', `工人 ${agentLabel(a)}：${r.found}`);
-      else add('warn', `工人 ${agentLabel(a)}：${r.problem}`);
+      if (r.ok) add('ok', `成员 ${agentLabel(a)}：${r.found}`);
+      else add('warn', `成员 ${agentLabel(a)}：${r.problem}`);
       if (a.ask) {
         const t = checkCommand(a.ask);
-        if (!t.ok) add('warn', `工人 ${agentLabel(a)} 的讨论命令：${t.problem}`);
+        if (!t.ok) add('warn', `成员 ${agentLabel(a)} 的讨论命令：${t.problem}`);
       }
     }
   } catch (e) {
@@ -64,10 +64,10 @@ export function doctor(dir: string): DoctorLine[] {
     const list = allMembers(settings.level);
     const ready = readyMembers(list);
     const strong = ready.filter((m) => m.tier === 'strong');
-    if (ready.length) add('ok', `接力台能调度的：${ready.map((m) => `${m.label}（${m.tier === 'strong' ? '强' : '弱'}）`).join('、')}`);
-    else add('warn', '接力台现在调度不了任何 AI（没装、没登录，或者额度都用完了）。你自己在工具里接着做也行，接力台照样记账。');
-    if (ready.length && !strong.length) add('warn', '能调度的里面没有强模型：弱模型的活要等强模型复核。');
-    for (const m of list.filter((x) => x.cooling)) add('warn', `${m.label} 额度用完了，${untilText(m.cooling!)}`);
+    if (ready.length) add('ok', `能派活的成员：${ready.map((m) => `${m.label}（${m.tier === 'strong' ? '强' : '弱'}）`).join('、')}`);
+    else add('warn', '没有能派活的成员：没装、没登录或额度都用完了');
+    if (ready.length && !strong.length) add('warn', '能派活的成员里没有强模型');
+    for (const m of list.filter((x) => x.cooling)) add('warn', `${m.label} ${cause.quota(m.cooling)}`);
   } catch (e) {
     add('warn', errorMessage(e));
   }

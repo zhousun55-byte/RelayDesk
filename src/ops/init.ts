@@ -110,7 +110,7 @@ export function liveProjects(): string[] {
 /** 写下新任务（旧的存档），记一笔，从这张快照开始算这件事。 */
 export function newTask(root: string, text: string, items: string[] = []): void {
   const t = text.trim();
-  if (!t) throw new RelayError('先写下要做什么。', 'no-task');
+  if (!t) throw new RelayError('任务是空的', 'no-task');
   const v = loadLedger(root);
   if (!v.init) throw new RelayError('这个文件夹还没接入接力台。', 'not-init');
   const before = readTask(root);

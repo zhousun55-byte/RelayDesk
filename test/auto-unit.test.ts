@@ -113,7 +113,7 @@ test('工人配置：绑定工具、思考强度、别的工具配置里的密�
   assert.equal(api.api!.keyFrom, 'mimocode:xiaomi-token-plan-cn');
   const local = normalizeAgent({ name: 'ollama', kind: 'api', api: { baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen3', apiKeyEnv: '' } });
   assert.equal(local.api!.apiKeyEnv, '', '本机服务不要密钥');
-  assert.throws(() => normalizeAgent({ name: 'x', kind: 'app', cmd: 'open -a X {{worktree}}', harness: 'claude' }), /只有终端工人/);
+  assert.throws(() => normalizeAgent({ name: 'x', kind: 'app', cmd: 'open -a X {{worktree}}', harness: 'claude' }), /只有命令行成员/);
   assert.throws(() => normalizeAgent({ name: 'x', kind: 'api', api: { baseUrl: 'https://a', model: 'm', apiKeyEnv: '', keyFrom: '../../etc/passwd' } }), /密钥来源/);
   assert.throws(() => normalizeAgent({ name: 'x', kind: 'cli', cmd: 'x', effort: 'high; rm -rf /' }), /思考强度/);
 });
@@ -270,8 +270,8 @@ test('认得网络抖动：连接被断开、服务器临时忙算；没登录�
 });
 
 
-test('认得的报错翻成能照做的话：ZCode 没选默认模型、没登录', () => {
-  assert.match(explainFailure('zcode', 'Error: Model creation failed (traceId: x)') ?? '', /\/model/);
-  assert.match(explainFailure('codex', 'Error: not logged in') ?? '', /登录/);
+test('认得的报错翻成一句说明（只说是什么情况）：ZCode 没选默认模型、没登录', () => {
+  assert.equal(explainFailure('zcode', 'Error: Model creation failed (traceId: x)'), 'ZCode 命令行没有默认模型');
+  assert.equal(explainFailure('codex', 'Error: not logged in'), '没登录或登录过期');
   assert.equal(explainFailure('codex', 'TypeError: x is undefined'), null);
 });

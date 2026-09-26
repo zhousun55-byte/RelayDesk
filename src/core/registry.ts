@@ -52,10 +52,10 @@ export function loadRegistry(): AgentsRegistry {
   try {
     parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch {
-    throw new RelayError(`工人名单 ${p} 不是合法的 JSON。修好它，或删掉后重新添加工人。`, 'bad-registry');
+    throw new RelayError(`成员名单 ${p} 不是合法的 JSON`, 'bad-registry');
   }
   const list = (parsed as Partial<AgentsRegistry> | null)?.agents;
-  if (!Array.isArray(list)) throw new RelayError(`工人名单 ${p} 格式不对，应为 { "agents": [...] }。`, 'bad-registry');
+  if (!Array.isArray(list)) throw new RelayError(`成员名单 ${p} 格式不对，应为 { "agents": [...] }`, 'bad-registry');
   const removed = (parsed as Partial<AgentsRegistry>).removed;
   const reg: AgentsRegistry = {
     agents: list.filter((a): a is AgentConfig => !!a && typeof a === 'object' && typeof a.name === 'string'),
@@ -120,7 +120,7 @@ function optText(v: unknown, field: string, max = 200): string | undefined {
 
 /** 校验一条工人配置并整理成标准形状。网页保存、命令行添加、预设都走这里。 */
 export function normalizeAgent(input: unknown): AgentConfig {
-  if (!input || typeof input !== 'object') throw new RelayError('工人配置不完整。', 'bad-agent');
+  if (!input || typeof input !== 'object') throw new RelayError('成员配置不完整', 'bad-agent');
   const o = input as Record<string, unknown>;
   const name = typeof o.name === 'string' ? o.name.trim() : '';
   if (!NAME_RE.test(name)) {
@@ -173,7 +173,7 @@ export function normalizeAgent(input: unknown): AgentConfig {
     if (ask) agent.ask = ask;
     const harness = optText(o.harness, '编程工具', 40);
     if (harness) {
-      if (kind !== 'cli') throw new RelayError('只有终端工人能绑定编程工具。', 'bad-agent');
+      if (kind !== 'cli') throw new RelayError('只有命令行成员能绑定编程工具', 'bad-agent');
       if (!/^[a-z][a-z0-9-]{0,30}$/.test(harness)) throw new RelayError('编程工具的名字不对。', 'bad-agent');
       agent.harness = harness;
     }
@@ -186,7 +186,7 @@ export function normalizeAgent(input: unknown): AgentConfig {
   if (note) agent.note = note;
   const app = optText(o.app, '桌面程序', 300);
   if (app) {
-    if (kind === 'app') throw new RelayError('桌面程序自己就是打开命令，不用再配桌面程序。', 'bad-agent');
+    if (kind === 'app') throw new RelayError('桌面程序不能再配桌面程序', 'bad-agent');
     if (!DIR_PLACEHOLDERS.some((x) => app.includes(x))) throw new RelayError(`桌面程序的打开命令必须含 ${DIR_PLACEHOLDER}（项目文件夹）。`, 'bad-agent');
     agent.app = app;
   }
@@ -201,11 +201,11 @@ export function upsertAgent(input: unknown, originalName?: string): AgentConfig 
   const from = originalName ?? agent.name;
   const idx = reg.agents.findIndex((a) => a.name === from);
   if (agent.name !== from && reg.agents.some((a) => a.name === agent.name)) {
-    throw new RelayError(`已经有叫「${agent.name}」的工人了，换个名字。`, 'dup-agent');
+    throw new RelayError(`已经有叫「${agent.name}」的成员`, 'dup-agent');
   }
   if (idx >= 0) reg.agents[idx] = agent;
   else {
-    if (originalName) throw new RelayError(`工人名单里没有「${originalName}」。`, 'no-agent');
+    if (originalName) throw new RelayError(`名单里没有「${originalName}」`, 'no-agent');
     reg.agents.push(agent);
   }
   // 自己加回来的：不再算删掉的
@@ -217,7 +217,7 @@ export function upsertAgent(input: unknown, originalName?: string): AgentConfig 
 
 export function addAgent(input: unknown): AgentConfig {
   const agent = normalizeAgent(input);
-  if (findAgent(agent.name)) throw new RelayError(`已经有叫「${agent.name}」的工人了。要改请用 relay workers edit。`, 'dup-agent');
+  if (findAgent(agent.name)) throw new RelayError(`已经有叫「${agent.name}」的成员`, 'dup-agent');
   return upsertAgent(agent);
 }
 
@@ -236,6 +236,6 @@ export function removalKeys(a: AgentConfig): string[] {
 export function removeAgent(name: string): void {
   const reg = loadRegistry();
   const gone = reg.agents.find((a) => a.name === name);
-  if (!gone) throw new RelayError(`工人名单里没有「${name}」。`, 'no-agent');
+  if (!gone) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
   saveRegistry({ agents: reg.agents.filter((a) => a !== gone), removed: [...(reg.removed ?? []), ...removalKeys(gone)] });
 }

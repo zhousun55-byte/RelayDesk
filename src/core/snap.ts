@@ -109,7 +109,7 @@ function sg(root: string, args: string[], opts: { raw?: boolean; input?: string 
       maxBuffer: 256 * 1024 * 1024,
       env: cleanEnv(root),
     });
-    if (r.error) throw new RelayError(`无法执行 git：${r.error.message}。请先安装 git。`, 'no-git');
+    if (r.error) throw new RelayError(`没能执行 git：${r.error.message}`, 'no-git');
     const res = { code: r.status ?? -1, stdout: opts.raw ? r.stdout ?? '' : (r.stdout ?? '').trim(), stderr: (r.stderr ?? '').trim() };
     if (res.code !== 0 && /index\.lock|Unable to create .*\.lock/.test(res.stderr) && attempt < 20) {
       sleepMs(150);
@@ -162,7 +162,7 @@ function excludeBigFiles(root: string): void {
   if (r.code !== 0) return;
   const files = r.stdout.split('\0').filter(Boolean);
   if (files.length > TOO_MANY && !headSnap(root)) {
-    throw new RelayError(`这个文件夹里有 ${files.length} 个文件，不像是一个项目（是不是选成了整个家目录？）。换一个项目文件夹再接入。`, 'too-many');
+    throw new RelayError(`这个文件夹里有 ${files.length} 个文件，不像是一个项目`, 'too-many');
   }
   const big: string[] = [];
   for (const f of files) {

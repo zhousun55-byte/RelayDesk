@@ -177,10 +177,10 @@ test('验收：清单打勾不等于做完——开着终审却没终审、终�
   assert.match(a.final.text, /终审没留下结论/);
   // 终审出错
   a = acceptance({ ...base, ledger: view([work, { ...good, status: 'failed', verdict: undefined }]) });
-  assert.match(a.final.text, /终审没做成/);
+  assert.match(a.final.text, /^终审出错（GPT-6）$/);
   // 终审之后又有人改了文件（复核棒改的也算）
   a = acceptance({ ...base, ledger: view([work, good, stint(3, { kind: 'review', who: STRONG, review: 'skip' })]) });
-  assert.match(a.final.text, /终审之后又有人改了文件/);
+  assert.match(a.final.text, /^终审之后文件又改过$/);
   // 都对：通过
   a = acceptance({ ...base, ledger: view([work, good]) });
   assert.equal(a.state, 'accepted');
@@ -192,7 +192,7 @@ test('验收：清单打勾不等于做完——开着终审却没终审、终�
   assert.equal(a.state, 'blocked');
   assert.deepEqual(a.pending, [1]);
   a = acceptance({ ...base, finalRequired: false, ledger: view([stint(1, { reviews: [mark(2, 'problem')] })]) });
-  assert.match(a.headline, /第 1 棒复核结论是「有问题，还没修」/);
+  assert.match(a.headline, /^验收没过：第 1 棒复核结论「有问题，还没修」/);
   // 检查：没跑、最后一次改动之后没跑、没过、没跑成
   const g = { ...base, finalRequired: false, gateCommand: 'npm test' };
   assert.match(acceptance({ ...g, ledger: view([work]) }).gate.text, /还没跑过检查/);
@@ -353,7 +353,7 @@ test('网页切换项目：A 的请求晚回来也不会显示在 B 里（状态
     while (src[j] !== '}') j++;
     return src.slice(i, j + 1).join('\n');
   };
-  const code = ['q', 'ticket', 'stale', 'setOffline', 'refresh', 'loadTalk', 'loadTree', 'loadDetail', 'loadDoc', 'switchProject', 'tabKey'].map(fn).join('\n\n');
+  const code = ['q', 'ticket', 'stale', 'fail', 'setOffline', 'refresh', 'loadTalk', 'loadTree', 'loadDetail', 'loadDoc', 'switchProject', 'tabKey'].map(fn).join('\n\n');
   const out: string[] = [];
   const script = `
 let treeKey = '', stintsKey = '', streamThread = null, docSig = '', barSig = '', heroSig = '', tabsSig = '';

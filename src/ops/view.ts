@@ -286,7 +286,7 @@ export function statusLines(root: string): string[] {
   if (!pv.init) return ['这个文件夹还没接入接力台。执行 relay init，或者在网页里点「接入」。'];
   const out: string[] = [];
   out.push(`任务：${pv.task.empty ? '（还没写）' : pv.task.title}${pv.task.total ? `（${pv.task.done}/${pv.task.total}${pv.task.complete ? '，全部打勾' : ''}）` : ''}`);
-  out.push(`验收：${pv.acceptance.headline}`);
+  out.push(/^(验收|没法验收)/.test(pv.acceptance.headline) ? pv.acceptance.headline : `验收：${pv.acceptance.headline}`);
   if (pv.config.error) out.push(`配置文件坏了：${pv.config.error}`);
   out.push(`现在：${pv.now.text}`);
   if (pv.go?.waitingUntil) out.push(`等额度：${untilText(pv.go.waitingUntil)}`);

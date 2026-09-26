@@ -8,7 +8,7 @@ import { loadAutoSettings, normalizeAutoSettings, type AutoSettings } from '../c
 import { errorMessage, RelayError } from '../core/errors';
 import { refreshHarnessModel } from '../core/detect';
 import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from '../core/harness';
-import { countedReviews, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, stintTitle, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
+import { countedReviews, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { pidAlive } from '../core/proc';
 import { allMembers, orderMembers, readyMembers, type MemberInfo } from '../core/members';
@@ -17,6 +17,7 @@ import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, re
 import { finalPrompt, reviewPrompt, workPrompt } from '../core/prompts';
 import { clearQuota, detectQuota, markQuota, untilText } from '../core/quota';
 import { clip, logTail, looksLikeNetworkBlip, startRun, toolLines, type RunHandle, type RunResult } from '../core/runner';
+import { cause, plain } from '../core/cause';
 import { takeSnapshot } from '../core/snap';
 import { memberTier, sameModel, whoOfMember } from '../core/tier';
 import { applyReviews, closeStint, gateStint, projectConfig, projectConfigSafe, refreshBrief, track } from './track';
@@ -140,11 +141,11 @@ function acquireLock(root: string): () => void {
       const mine = holder.pid === process.pid;
       const alive = !!holder.pid && (mine ? !!holder.token && heldLocks.has(holder.token) : pidAlive(holder.pid));
       // 别的进程刚建好锁、还没来得及写进去：当它在用。
-      if (alive || (!holder.pid && ageMs < 3000)) throw new RelayError('接力台已经在调度这个项目了（可能是另一个窗口或命令行）。先停下，再换人。', 'busy');
+      if (alive || (!holder.pid && ageMs < 3000)) throw new RelayError('接力台已经在调度这个项目（可能是另一个窗口或命令行）', 'busy');
       fs.rmSync(p, { force: true });
     }
   }
-  throw new RelayError('拿不到这个项目的调度锁，稍后再试。', 'busy');
+  throw new RelayError('拿不到这个项目的调度锁', 'busy');
 }
 
 // ---- 你自己在别的工具里干到一半的那一棒 ----
@@ -169,7 +170,7 @@ function agoText(ms: number): string {
 }
 
 function nativeActiveError(a: { stint: Stint; idleMs: number }): RelayError {
-  return new RelayError(`第 ${a.stint.id} 棒（${whoName(a.stint.who)}）${agoText(a.idleMs)}还在改这个文件夹。确认它已经停下（额度用完、关掉了）再换人，不然两个 AI 会同时改文件。`, 'native-active');
+  return new RelayError(`第 ${a.stint.id} 棒（${whoName(a.stint.who)}）${agoText(a.idleMs)}还在改这个文件夹；现在换人，两个 AI 会同时改文件`, 'native-active');
 }
 
 export function loadGoState(root: string): GoState | null {
@@ -441,8 +442,8 @@ class GoRunner {
       const h = v.open.handoff ? readHandoff(root, v.open.handoff) : null;
       const idle = Math.round((Date.now() - Date.parse(v.open.activeAt ?? v.open.startedAt)) / 60_000);
       const note = active
-        ? `接力台派 ${nameOf(m)} 接手时，这一棒还没交接；你确认过它已经停下。`
-        : `接力台派 ${nameOf(m)} 接手时，这一棒还没交接（它已经 ${idle} 分钟没改文件了；接力台没法确认它真的停了，只是账面上结束）。`;
+        ? `${nameOf(m)} 接手时这一棒没交接，已确认它停下`
+        : `${nameOf(m)} 接手时这一棒没交接：${idle} 分钟没改文件，账面上结束`;
       closeStint(root, { ...v.open, ...(active ? { stopConfirmed: true } : {}) }, { status: h ? 'handed' : 'unfinished', to: takeSnapshot(root, '换人接手').sha, handoff: h, note }, cfg);
       v = loadLedger(root);
     }
@@ -478,7 +479,7 @@ class GoRunner {
     const what = kind === 'review' ? '复核' : kind === 'final' ? '终审' : '干活';
     this.state.current = { stint: id, member: m.name, label: who.label, kind, since: stint.startedAt, log: logRel };
     this.state.stints.push(id);
-    this.phase(`第 ${id} 棒：${whoName(who)} 正在${what}…`);
+    this.phase(`第 ${id} 棒（${whoName(who)}）正在${what}`);
     const log = this.logger(logAbs);
     log(`# ${stintTitle(stint)}（${tierWord(who.tier)}）${what}${targets.length ? `：第 ${targets.map((t) => t.id).join('、')} 棒` : ''}`);
 
@@ -523,7 +524,7 @@ class GoRunner {
         if (failed) {
           const said = clip(r.stderrTail.split('\n').filter(Boolean).slice(-2).join(' '), 200);
           const hint = explainFailure(m.harness, `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}`);
-          error = r.error ?? (r.timedOut ? `超过 ${Math.round(timeoutMs / 60000)} 分钟，停掉了` : hint ?? `退出码 ${r.code}${said ? `：${said}` : ''}`);
+          error = r.error ?? (r.timedOut ? cause.overtime(timeoutMs) : hint ?? cause.exit(r.code, said));
         }
       } else if (m.kind === 'api' && m.agent.api) {
         log(`（接力台内置小代理：${m.agent.api.baseUrl} · ${m.agent.api.model}）`);
@@ -547,11 +548,11 @@ class GoRunner {
         });
         finalText = r.finalText;
         stopped = r.stopped;
-        error = r.error ?? (r.timedOut ? `超过 ${Math.round(timeoutMs / 60000)} 分钟，停掉了` : undefined);
+        error = r.error ?? (r.timedOut ? cause.overtime(timeoutMs) : undefined);
         quotaText = `${r.error ?? ''}`;
         log(`结束（${r.steps} 步${error ? `，${error}` : ''}）`);
       } else {
-        throw new RelayError('接力台调度不了它（桌面程序要你自己打开）。', 'cannot-drive');
+        throw new RelayError('桌面程序不能派活', 'cannot-drive');
       }
     } catch (e) {
       error = errorMessage(e);
@@ -574,12 +575,11 @@ class GoRunner {
     let quotaUntil: string | undefined;
     if (stopped || this.stopRequested) {
       status = 'stopped';
-      note = '你叫停了。';
     } else if (quota.hit) {
       status = 'quota';
       const e = markQuota(m.name, quota);
       quotaUntil = e.until;
-      note = `额度用完了（${untilText(e.until)}）：${clip(quota.line ?? '', 160)}`;
+      note = `${cause.quota(e.until)}${quota.line ? `，原话：${clip(plain(quota.line), 160)}` : ''}`;
       log(note);
     } else if (error) {
       status = 'failed';
@@ -596,7 +596,7 @@ class GoRunner {
       const r = readReview(root, reviewFile);
       const cur = loadLedger(root).stints.find((x) => x.id === id);
       if (cur) saveStint(root, { ...cur, verdict: r?.verdict ?? 'unknown', ...(r?.verdictText ? { verdictText: r.verdictText } : {}) });
-      log(r ? `终审结论：${verdictWord(r.verdict)}${r.verdictText ? `（原话：${clip(r.verdictText, 80)}）` : ''}` : `终审没写结论（${reviewFile}），这次终审不算数。`);
+      log(r ? `终审结论：${verdictWord(r.verdict)}${r.verdictText ? `，原话：${clip(r.verdictText, 80)}` : ''}` : `终审没写结论（${reviewFile}），不算数`);
     }
     // 强模型干活时也会先复核（接力本里这么要求的）：它写的复核结论一样算数。
     applyReviews(root, closed);
@@ -629,7 +629,7 @@ class GoRunner {
     const ms = Math.max(0, new Date(m.cooling).getTime() - Date.now()) + 30_000;
     this.state.status = 'waiting';
     this.state.waitingUntil = m.cooling;
-    this.phase(`${why}等 ${nameOf(m)} 的额度恢复（${untilText(m.cooling)}）。`);
+    this.phase(`${why}：等 ${nameOf(m)} ${untilText(m.cooling)}`);
     await this.sleep(Math.min(ms, 6 * 3600_000));
     delete this.state.waitingUntil;
     this.state.status = 'running';
@@ -647,33 +647,33 @@ class GoRunner {
       let m: MemberInfo | null = null;
       if (this.opts.who) {
         m = all.find((x) => x.name === this.opts.who) ?? null;
-        if (!m) throw new RelayError(`名单里没有「${this.opts.who}」。`, 'no-agent');
-        if (!m.canWork) throw new RelayError(`「${nameOf(m)}」接力台调度不了：${m.why ?? '不能用'}。`, 'cannot-drive');
+        if (!m) throw new RelayError(`名单里没有「${this.opts.who}」`, 'no-agent');
+        if (!m.canWork) throw new RelayError(`${nameOf(m)} 不能派活：${plain(m.why ?? '不能用')}`, 'cannot-drive');
       } else {
         m = this.pick(kind === 'review');
-        if (!m) throw new RelayError(kind === 'review' ? '现在没有能复核的强模型（都没额度了，或者没登录）。' : '现在没有能调度的 AI（都没额度了，或者没登录）。', 'nobody');
+        if (!m) throw new RelayError(kind === 'review' ? '没有能复核的强模型：都没额度或没登录' : '没有能派活的成员：都没额度或没登录', 'nobody');
       }
       if (kind === 'review') {
-        if (m.tier !== 'strong') throw new RelayError(`复核要强模型来做：${nameOf(m)} 算弱，它写的复核不算数。换一位强模型；你觉得它其实够强，就在「设置」里把它改成强。`, 'weak-reviewer');
+        if (m.tier !== 'strong') throw new RelayError(`${nameOf(m)} 不能复核：它算弱模型，复核要强模型`, 'weak-reviewer');
         const targets = pendingReviews(v);
-        if (!targets.length) return this.finish('done', '没有待复核的棒。');
+        if (!targets.length) return this.finish('done', '没有待复核的棒');
         const o = await this.runStint(m, 'review', targets);
-        return this.finishOnce(o, '复核');
+        return this.finishOnce(o);
       }
       const o = await this.runStint(m, 'work');
-      return this.finishOnce(o, '这一棒');
+      return this.finishOnce(o);
     } catch (e) {
       return this.finish(e instanceof RelayError && e.code === 'native-active' ? 'needs-human' : 'failed', errorMessage(e));
     }
   }
 
-  private finishOnce(o: StintOutcome, what: string): GoState {
+  private finishOnce(o: StintOutcome): GoState {
     const s = o.stint;
-    if (s.status === 'stopped') return this.finish('stopped', `已停止。第 ${s.id} 棒改到一半的东西都在文件夹里，账上也记了。`);
-    if (s.status === 'quota') return this.finish('needs-human', `${whoName(s.who)} 额度用完了（${s.quotaUntil ? untilText(s.quotaUntil) : '不知道什么时候恢复'}）。换一位接着做吧。`);
-    if (s.status === 'failed') return this.finish('failed', `${whoName(s.who)} 出错了：${s.note ?? ''}`);
-    const rv = s.review === 'needed' ? '（弱模型的活，等强模型复核）' : '';
-    return this.finish('done', `${what}做完了：${s.summary || (o.changed ? '改了文件' : '没改文件')}${rv}`);
+    const head = `第 ${s.id} 棒（${whoName(s.who)}）`;
+    if (s.status === 'stopped') return this.finish('stopped', `${head}已停止：改到一半的内容还在文件夹里`);
+    if (s.status === 'quota') return this.finish('needs-human', `${head}${cause.quota(s.quotaUntil)}`);
+    if (s.status === 'failed') return this.finish('failed', `${head}出错${s.note ? `：${plain(s.note)}` : ''}`);
+    return this.finish('done', `${head}${statusWord(s.status)}：${s.summary || (o.changed ? '改了文件' : '没改文件')}${s.review === 'needed' ? '；待复核' : ''}`);
   }
 
   // ---- 全自动 ----
@@ -684,11 +684,11 @@ class GoRunner {
     try {
       requireInit(this.root);
       for (let guard = 0; guard < this.settings.maxStints * 3 + 10; guard++) {
-        if (this.stopRequested) return this.finish('stopped', '已停止。改到一半的东西都在文件夹里，账上也记了；随时可以接着跑。');
+        if (this.stopRequested) return this.finish('stopped', '全自动已停止：改到一半的内容还在文件夹里');
         track(this.root);
         const v = loadLedger(this.root);
         const task = readTask(this.root);
-        if (task.empty) return this.finish('needs-human', '还没写下要做什么。先写任务，再开全自动。');
+        if (task.empty) return this.finish('needs-human', '全自动停止：还没写任务');
         const pending = pendingReviews(v);
 
         // 1. 有待复核、又有强模型能用：先复核。
@@ -699,13 +699,13 @@ class GoRunner {
             // 写了复核、但写的人算弱（或者是自己复核自己）：结论不算数，和「没写出来」「写了有问题」是三回事。
             const weakOnly = stuck.every((p) => (p.reviews ?? []).length > 0 && (p.reviews ?? []).every((m) => m.weak));
             const anon = stuck.some((p) => (p.reviews ?? []).some((m) => m.anon));
-            if (weakOnly) return this.finish('needs-human', anon ? `第 ${ids} 棒复核了两次，但复核结论认不出是谁写的（写的时候没有哪一棒在做），不算数。让强模型在自己那一棒里重新复核（先建交接、再写结论）。` : `第 ${ids} 棒复核了两次，但写复核的都算弱，结论不算数。在「设置」里把复核它的那位改成强，或者等别的强模型有额度了再开全自动。`);
+            if (weakOnly) return this.finish('needs-human', `全自动停止：第 ${ids} 棒复核两次都不算数，${anon ? '认不出复核是谁写的' : '写复核的都是弱模型'}`);
             const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
             const why = stuck.map((p) => {
               const last = countedReviews(p, dropped).at(-1);
-              return last ? `第 ${p.id} 棒复核结论是「${verdictWord(last.verdict)}」（${last.byLabel}，见 ${last.file}）` : `第 ${p.id} 棒复核了两次都没写出结论`;
+              return last ? `第 ${p.id} 棒复核结论「${verdictWord(last.verdict)}」（${last.byLabel}，${last.file}）` : `第 ${p.id} 棒两次都没写结论`;
             });
-            return this.finish('needs-human', `${why.join('；')}。复核了两次还没过，先停下：看看复核里写的问题，修好或者说明白之后再开全自动。`);
+            return this.finish('needs-human', `全自动停止：复核两次没过，${why.join('；')}`);
           }
           const authors = pending.map((p) => p.who.member).filter(Boolean) as string[];
           const reviewer = this.pick(true, authors) ?? this.pick(true);
@@ -719,18 +719,18 @@ class GoRunner {
         if (taskComplete(task)) {
           if (pending.length) {
             const c = this.earliestCooling(true);
-            if (c && (await this.waitFor(c, '活干完了，但还有弱模型的棒要复核；强模型都没额度，'))) continue;
-            return this.finish('needs-human', '任务清单都打勾了，但还有弱模型做的棒没人复核（强模型都没额度，或者没有强模型）。等强模型额度恢复后再开全自动，会先复核。');
+            if (c && (await this.waitFor(c, '清单都打勾了，还有棒待复核，强模型都没额度'))) continue;
+            return this.finish('needs-human', `全自动停止：清单都打勾了，第 ${pending.map((p) => p.id).join('、')} 棒待复核，没有能用的强模型`);
           }
           const conf = projectConfigSafe(this.root);
           const acc = acceptance({ ledger: v, task, gateCommand: conf.cfg.gate.command.trim(), ...(conf.error ? { configError: conf.error } : {}), finalRequired: this.settings.finalReview });
-          if (acc.state === 'accepted') return this.finish('done', `${acc.headline}。`);
-          if (acc.state === 'unknown') return this.finish('needs-human', `${acc.headline}。`);
+          if (acc.state === 'accepted') return this.finish('done', acc.headline);
+          if (acc.state === 'unknown') return this.finish('needs-human', acc.headline);
           if (!acc.final.ok) {
             const live = v.stints.filter((x) => !x.rolledBack && x.status !== 'working');
             const lastWork = [...live].reverse().find((x) => x.kind === 'work');
             const finals = live.filter((x) => x.kind === 'final' && x.id > (lastWork?.id ?? 0));
-            if (finals.length >= 2) return this.finish('needs-human', `任务清单都打勾了，但终审两次都没过：${acc.final.text}。看看终审写的结论，修好之后再开全自动。`);
+            if (finals.length >= 2) return this.finish('needs-human', `全自动停止：终审两次没过，${acc.final.text}`);
             // 终审换一双眼睛：有别的强模型，就不请这个任务里干过活的来审；实际跑成弱模型的不再请。
             const since = Date.parse([...v.events].reverse().find((e) => e.type === 'task')?.ts ?? v.init?.ts ?? '');
             const doers = v.stints.filter((x) => x.kind === 'work' && !x.rolledBack && !(Date.parse(x.startedAt) < since)).map((x) => x.who.member).filter((x): x is string => !!x);
@@ -743,30 +743,30 @@ class GoRunner {
               continue;
             }
             const c = this.earliestCooling(true);
-            if (c && (await this.waitFor(c, '活干完了，要请强模型终审；强模型都没额度，'))) continue;
-            return this.finish('needs-human', `任务清单都打勾了，但${acc.final.text}；现在也没有能终审的强模型（都没额度、这次出过错，或者名单里没有强模型）。强模型能用了再开全自动，会先终审。`);
+            if (c && (await this.waitFor(c, '清单都打勾了，要终审，强模型都没额度'))) continue;
+            return this.finish('needs-human', `全自动停止：清单都打勾了，${acc.final.text}，没有能用的强模型`);
           }
           // 最后一次改动之后还没跑检查：现在跑一次（记在最后一棒上），再看验收。
           if ((acc.gate.status === 'stale' || acc.gate.status === 'none') && this.gateRuns < 1) {
             const last = [...v.stints].reverse().find((x) => !x.rolledBack && x.status !== 'working');
             if (last) {
               this.gateRuns++;
-              this.phase('清单都打勾了，跑一遍检查……');
+              this.phase('清单都打勾了，正在跑检查');
               await gateStint(this.root, last.id, undefined, { absorb: 'all' });
               continue;
             }
           }
-          return this.finish('needs-human', `${acc.headline}。`);
+          return this.finish('needs-human', acc.headline);
         }
 
         // 3. 派人干活。
-        if (stints >= this.settings.maxStints) return this.finish('needs-human', `已经接力了 ${stints} 棒，任务还没做完。看看进度，想继续就再开一次全自动。`);
+        if (stints >= this.settings.maxStints) return this.finish('needs-human', `全自动停止：接力到上限 ${stints} 棒，任务还没做完`);
         const w = this.pick(false);
         if (!w) {
           const c = this.earliestCooling(false);
-          if (c && (await this.waitFor(c, '能干活的都没额度了，'))) continue;
+          if (c && (await this.waitFor(c, '能派活的都没额度'))) continue;
           const failed = [...this.failed].join('、');
-          return this.finish('needs-human', `没有能干活的 AI 了${failed ? `（这次出错的：${failed}）` : ''}。额度恢复、或者登录好之后再开全自动。`);
+          return this.finish('needs-human', `全自动停止：没有能派活的成员，都没额度或没登录${failed ? `；这次出错的：${failed}` : ''}`);
         }
         const before = taskProgress(task).done;
         const o = await this.runStint(w, 'work');
@@ -786,11 +786,11 @@ class GoRunner {
               idle = 0;
               continue;
             }
-            return this.finish('needs-human', `${nameOf(w)} 说做不下去了${o.handoff?.next ? `：${clip(o.handoff.next, 200)}` : ''}。看看它的交接，给点指示再继续。`);
+            return this.finish('needs-human', `全自动停止：${nameOf(w)} 做不下去了${o.handoff?.next ? `，原话：${clip(plain(o.handoff.next), 200)}` : ''}`);
           }
         } else idle = 0;
       }
-      return this.finish('needs-human', '步骤太多了，为防止死循环先停下。');
+      return this.finish('needs-human', '全自动停止：步骤超过上限');
     } catch (e) {
       return this.finish(e instanceof RelayError && e.code === 'native-active' ? 'needs-human' : 'failed', errorMessage(e));
     }
@@ -805,7 +805,7 @@ export function startGo(root: string, opts: GoOptions, hooks: GoHooks = {}): { s
   requireInit(abs);
   const prev = loadGoState(abs);
   if (runners.has(abs) || (prev && (prev.status === 'running' || prev.status === 'waiting'))) {
-    throw new RelayError('接力台已经在调度这个项目了。先停下，再换人。', 'busy');
+    throw new RelayError('接力台已经在调度这个项目', 'busy');
   }
   // 配置文件坏了：先说出来，不能带着「没有检查、没有不许改的文件」开工。
   projectConfig(abs);

@@ -80,9 +80,9 @@ export function taskCommand(): Command {
     });
 }
 
+/** 结果本身就是一句「主语 + 结果：原因」（docs/设计说明.md「结果怎么说」），前面只加一个记号。 */
 function printGo(s: GoState): void {
-  const word: Record<GoState['status'], string> = { running: '进行中', waiting: '在等额度', done: '完成', stopped: '已停止', 'needs-human': '需要你看一下', failed: '没做成' };
-  console.log(`${s.status === 'done' ? c.green('✓') : s.status === 'failed' ? c.red('✗') : c.yellow('•')} ${word[s.status]}：${s.result ?? s.phase}`);
+  console.log(`${s.status === 'done' ? c.green('✓') : s.status === 'failed' ? c.red('✗') : c.yellow('•')} ${s.result ?? s.phase}`);
 }
 
 const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;

@@ -441,7 +441,7 @@ async function api(path, body, same) {
   } catch {
     throw new Error(`接力台返回了看不懂的内容（${res.status}）`);
   }
-  if (!j.ok) throw Object.assign(new Error(j.error || '出错了'), { code: j.code });
+  if (!j.ok) throw Object.assign(new Error(j.error || '出错'), { code: j.code });
   return j;
 }
 
@@ -462,6 +462,12 @@ function q(path) {
 }
 
 /** 按钮点下去：请求期间转圈，出错弹提示，做完刷新。 */
+/** 失败的提示：「没能 X：原因」（原因去掉句末的句号）。说法见 docs/设计说明.md「结果怎么说」。 */
+function fail(what, e) {
+  const why = String((e && e.message) || e || '').trim().replace(/[。.]+$/, '');
+  toast(what ? `没能${what}：${why || '出错'}` : why || '出错', { bad: true });
+}
+
 async function act(btn, fn, okText) {
   if (btn) {
     btn.classList.add('busy');
@@ -477,7 +483,7 @@ async function act(btn, fn, okText) {
     schedule();
     return r;
   } catch (e) {
-    if (e.code !== 'cancelled') toast(e.message, { bad: true });
+    if (e.code !== 'cancelled') fail(typeof okText === 'string' && okText.startsWith('已') ? okText.slice(1) : '', e);
     return null;
   } finally {
     if (btn && btn.isConnected) {
@@ -1023,7 +1029,7 @@ async function refresh(force) {
   } catch (e) {
     if (stale(t)) return;
     if (e instanceof TypeError) setOffline(true);
-    else toast(e.message, { bad: true });
+    else fail('刷新', e);
   }
 }
 
@@ -1038,7 +1044,7 @@ async function loadTalk() {
     renderLeft();
     renderCenter();
   } catch (e) {
-    if (!stale(t) && !(e instanceof TypeError)) toast(e.message, { bad: true });
+    if (!stale(t) && !(e instanceof TypeError)) fail('读取群聊', e);
   }
 }
 
@@ -1390,7 +1396,7 @@ async function forget(pr) {
     toast('已移出');
     await refresh();
   } catch (e) {
-    toast(e.message, { bad: true });
+    fail('移出', e);
   }
 }
 
@@ -1440,7 +1446,7 @@ async function chooseFolder() {
     const r = await api('/api/choose-folder', {});
     switchProject(r.dir);
   } catch (e) {
-    if (e.code !== 'cancelled') toast(e.message, { bad: true });
+    if (e.code !== 'cancelled') fail('打开文件夹', e);
   }
 }
 
@@ -1449,7 +1455,7 @@ async function reveal(path, root) {
     const r = await api('/api/reveal', { path: path || undefined, ...(root ? { dir: root } : {}) });
     if (!r.revealed) toast('没能打开访达', { bad: true });
   } catch (e) {
-    toast(e.message, { bad: true });
+    fail('打开访达', e);
   }
 }
 
@@ -1644,7 +1650,7 @@ function renderBar(t) {
           { class: 'split' },
           h(
             'button',
-            { class: 'btn primary', disabled: !!why, 'data-tip': why || null, onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), '全自动已开始') },
+            { class: 'btn primary', disabled: !!why, 'data-tip': why || null, onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), '已开始全自动') },
             icon('play'),
             h('span', { class: 'lbl' }, '全自动')
           ),
@@ -1792,7 +1798,7 @@ async function editStep(body, local) {
   try {
     await api('/api/task/edit', body);
   } catch (e) {
-    toast(e.message, { bad: true });
+    fail('改清单', e);
   }
   await refresh(true);
   again();
@@ -1924,7 +1930,7 @@ async function editTaskRaw() {
   try {
     raw = (await api(q('/api/task'))).raw;
   } catch (e) {
-    return stale(t) ? undefined : toast(e.message, { bad: true });
+    return stale(t) ? undefined : fail('读取任务', e);
   }
   if (stale(t)) return;
   const ta = h('textarea', { class: 'raw', spellcheck: 'false', value: raw, 'aria-label': '任务' });
@@ -2215,8 +2221,8 @@ function rollbackLine(rb) {
  */
 function verdictEl(g, a) {
   const state = a ? a.state : { done: 'accepted', 'needs-human': 'blocked', failed: 'failed', stopped: 'stopped' }[g.status];
-  const [ic, title] = { accepted: ['check', '验收通过'], blocked: ['warn', a ? '验收没过' : '等人处理'], unknown: ['unknown', '没法验收'], failed: ['warn', '全自动出错'], stopped: ['stop', '全自动停了'] }[state];
-  const why = (a ? (a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('；')) : g.result).replace(/^(验收(通过|没过)：|已停止。)/, '');
+  const [ic, title] = { accepted: ['check', '验收通过'], blocked: ['warn', a ? '验收没过' : '全自动停止'], unknown: ['unknown', '没法验收'], failed: ['warn', '全自动出错'], stopped: ['stop', '全自动已停止'] }[state];
+  const why = (a ? (a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('；')) : g.result).replace(/^(验收通过|验收没过|没法验收|全自动停止|全自动已停止)：/, '');
   const body = [state === 'blocked' || state === 'failed' ? h('span', { class: 'rd' }) : null, title];
   return h(
     'div',
@@ -2265,7 +2271,7 @@ function pillOf(s) {
   if (s.rolledBack) return h('span', { class: 'pill soft' }, '作废');
   if (s.kind === 'final' && s.verdictWord) return h('span', { class: 'pill' }, icon('search'), `终审 · ${s.verdictWord}`);
   if (s.kind === 'review') return h('span', { class: 'pill' }, icon('review'), '复核');
-  const [ic, word] = { handed: ['arrow', '交接了'], unfinished: ['', '没留交接'], quota: ['', `额度用完${s.quotaUntil ? ` · ${clock(s.quotaUntil)} 恢复` : ''}`], failed: ['', '出错'], stopped: ['stop', '叫停了'] }[s.status] || [];
+  const [ic, word] = { handed: ['arrow', '已交接'], unfinished: ['', '没交接'], quota: ['', `额度用完${s.quotaUntil ? ` · ${clock(s.quotaUntil)} 恢复` : ''}`], failed: ['', '出错'], stopped: ['stop', '已停止'] }[s.status] || [];
   if (!word) return null;
   return h('span', { class: `pill${s.status === 'handed' ? '' : ' soft'}` }, s.status === 'failed' ? h('span', { class: 'rd' }) : ic ? icon(ic) : null, word);
 }
@@ -2436,7 +2442,7 @@ async function loadDetail(id) {
     const s = stintById(id);
     if (el && s) fillDetail(el, s);
   } catch (e) {
-    if (!stale(t)) toast(e.message, { bad: true });
+    if (!stale(t)) fail('读取这一棒', e);
   } finally {
     detailLoading.delete(id);
   }
@@ -2536,7 +2542,7 @@ async function copyHandoff(s) {
       if (stale(t)) return;
       S.detail.set(s.id, d);
     } catch (e) {
-      return stale(t) ? undefined : toast(e.message, { bad: true });
+      return stale(t) ? undefined : fail('复制交接', e);
     }
   }
   copyToast(d.handoff || '');
@@ -2547,7 +2553,7 @@ async function skipReview(btn, s) {
   const { root, name } = S.st.project;
   const who = s.who.tier === 'unknown' ? '身份不明' : s.who.tier === 'weak' ? '弱模型' : '还没复核';
   if (!(await confirmSheet(`跳过第 ${s.id} 棒的复核？`, `「${name}」第 ${s.id} 棒（${who}）跳过后不再等复核。可以撤销。`, '跳过复核'))) return;
-  if (!S.st || S.st.project.root !== root) return toast('项目已经换了，没有跳过。', { bad: true });
+  if (!S.st || S.st.project.root !== root) return fail('跳过复核', '项目已经换了');
   const r = await act(btn, () => api('/api/mark', { dir: root, stint: s.id }));
   if (r) toast(`第 ${s.id} 棒已跳过复核`, { action: { label: '撤销', run: () => act(null, () => api('/api/mark', { dir: root, stint: s.id, review: 'needed' }), '已改回待复核') } });
 }
@@ -2556,7 +2562,7 @@ async function rollbackTo(btn, s) {
   if (!S.st) return;
   const { root, name } = S.st.project;
   if (!(await confirmSheet(`退回到第 ${s.id} 棒之前？`, `「${name}」第 ${s.id} 棒和之后的改动作废，清单里对应的勾去掉。可以撤销。`, '退回'))) return;
-  if (!S.st || S.st.project.root !== root) return toast('项目已经换了，没有退回。', { bad: true });
+  if (!S.st || S.st.project.root !== root) return fail('退回', '项目已经换了');
   const r = await act(btn, () => api('/api/rollback', { dir: root, stint: s.id }));
   if (r) {
     const tk = r.task && r.task.missing ? ' · 清单没跟着退回（旧账本）' : r.task && r.task.unchecked.length ? ` · 清单去掉 ${r.task.unchecked.length} 个勾` : '';
@@ -2641,7 +2647,7 @@ async function loadArchive(id) {
     S.archive = d;
     renderCenter();
   } catch (e) {
-    if (!stale(t)) toast(e.message, { bad: true });
+    if (!stale(t)) fail('读取群聊记录', e);
   }
 }
 
@@ -2651,7 +2657,7 @@ async function newChat() {
     try {
       await api('/api/talk/clear', {});
     } catch (e) {
-      return toast(e.message, { bad: true });
+      return fail('新建群聊', e);
     }
     await loadTalk();
   }
@@ -3394,7 +3400,7 @@ async function uploadFiles(files) {
       await refresh(true);
     }
   } catch (e) {
-    return toast(e.message, { bad: true });
+    return fail('上传', e);
   }
   await Promise.all(
     files.map(async (f) => {
@@ -3404,10 +3410,10 @@ async function uploadFiles(files) {
       try {
         const r = await fetch(q(`/api/upload?name=${encodeURIComponent(job.name)}`), { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: f });
         const j = await r.json().catch(() => ({ ok: false, error: `传不上去（${r.status}）` }));
-        if (!j.ok) throw new Error(j.error || '传不上去');
+        if (!j.ok) throw new Error(j.error || '出错');
         if (!S.files.includes(j.path)) S.files.push(j.path);
       } catch (e) {
-        toast(`${job.name}：${e.message}`, { bad: true });
+        fail(`上传「${job.name}」`, e);
       } finally {
         S.uploading = S.uploading.filter((x) => x !== job);
         updateComposer();
@@ -3480,7 +3486,7 @@ const idleNow = () => !runState().running && !runState().waiting;
 const SLASH = [
   { key: 'step', label: '加一步', icon: 'plus', needsText: true, placeholder: '这一步', run: (text) => act(null, () => api('/api/task/edit', { op: 'add', text }), '已加入清单') },
   { key: 'go', label: '接着做', icon: 'play', when: () => idleNow() && !!defaultWorker(), run: goDefault },
-  { key: 'auto', label: '全自动', icon: 'bolt', when: () => idleNow() && ready().length > 0, run: () => act(null, () => startWork('/api/auto', {}), '全自动已开始') },
+  { key: 'auto', label: '全自动', icon: 'bolt', when: () => idleNow() && ready().length > 0, run: () => act(null, () => startWork('/api/auto', {}), '已开始全自动') },
   { key: 'review', label: '复核', icon: 'review', when: () => idleNow() && S.st.project.pending.length > 0 && !!reviewer(), run: reviewNow },
   { key: 'stop', label: '停止', icon: 'stop', when: () => !idleNow(), run: stopNow },
   { key: 'task', label: '新任务', icon: 'plus', run: newThread },
@@ -3643,7 +3649,7 @@ async function send() {
     schedule();
     scrollBottom(true);
   } catch (e) {
-    toast(e.message, { bad: true });
+    fail('发送', e);
   } finally {
     C.send.classList.remove('busy');
     updateComposer();
@@ -3665,7 +3671,7 @@ async function createTask(text) {
   if (!p.init) await api('/api/init', {});
   const refs = S.files.map((f) => `\`${f}\``).join(' ');
   await api('/api/task', { text: [lines[0].trim(), ...body, refs].filter(Boolean).join('\n'), steps });
-  if (S.autoAfter) await startWork('/api/auto', {}).catch((e) => e.code !== 'cancelled' && toast(e.message, { bad: true }));
+  if (S.autoAfter) await startWork('/api/auto', {}).catch((e) => e.code !== 'cancelled' && fail('开始全自动', e));
   S.draft = false;
   S.thread = null;
   S.autoAfter = false;
@@ -4211,7 +4217,7 @@ function settingsBody(tab, redraw) {
         mark.flash();
         await refresh();
       } catch (e) {
-        toast(e.message, { bad: true });
+        fail('保存设置', e);
       }
     };
     const tagInput = h('input', {
@@ -4283,7 +4289,7 @@ function settingsBody(tab, redraw) {
         S.st.settings = r.settings;
         mark.flash();
       } catch (e) {
-        toast(e.message, { bad: true });
+        fail('保存设置', e);
       }
       redraw();
     };
@@ -4375,7 +4381,7 @@ function settingsBody(tab, redraw) {
           onclick: async (e) => {
             const b = e.currentTarget;
             if (!(await confirmSheet('关闭接力台？', '正在进行的调度会停止。', '关闭'))) return;
-            await act(b, () => api('/api/quit', {}), '接力台已关闭');
+            await act(b, () => api('/api/quit', {}), '已关闭接力台');
             setTimeout(() => setOffline(true), 600);
           },
         },
@@ -4661,7 +4667,7 @@ function paletteItems(query, scope) {
       { label: '新任务', icon: 'plus', run: newThread },
       { label: '新群聊', icon: 'plus', run: newChat },
       p.init && !p.task.empty && !run.running && ready().length ? { label: '接着做', icon: 'play', run: goDefault } : null,
-      p.init && !p.task.empty && !run.running && ready().length ? { label: '全自动', icon: 'bolt', run: () => act(null, () => startWork('/api/auto', {}), '全自动已开始') } : null,
+      p.init && !p.task.empty && !run.running && ready().length ? { label: '全自动', icon: 'bolt', run: () => act(null, () => startWork('/api/auto', {}), '已开始全自动') } : null,
       p.pending.length && reviewer() ? { label: '复核', icon: 'review', run: reviewNow } : null,
       run.running || run.waiting ? { label: '停止', icon: 'stop', kbd: '⌘.', run: stopNow } : null,
       p.init ? { label: '编辑任务', icon: 'pencil', run: editTaskRaw } : null,

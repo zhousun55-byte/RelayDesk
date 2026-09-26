@@ -753,7 +753,7 @@ const antigravity: HarnessSpec = {
   // （出沙箱、写项目外、工具执行不是 proceed-in-sandbox 时没放行过的命令）无界面模式下直接拒绝，这一棒停在那儿。1.1.12 起 -p 才认 --mode。
   workLevels: ['safe', 'full'],
   // 写文件的工具不经过沙箱：它设置里允许读写项目外的文件时，项目外也照写不误（1.2.11 实测）
-  unsafe: () => (agySettings()?.allowNonWorkspaceAccess === true ? '它的设置允许读写项目外的文件，安全档不派它' : undefined),
+  unsafe: () => (agySettings()?.allowNonWorkspaceAccess === true ? '设置允许读写项目外的文件，安全档不派活' : undefined),
   canReview: true,
   tested: 'partial',
   loginHint: '在终端运行 agy，按提示用 Google 账号登录。',
@@ -926,18 +926,18 @@ const grok: HarnessSpec = {
 
 export const HARNESSES: HarnessSpec[] = [claude, claudeOfficial, codex, cursorAgent, dsh, zcode, antigravity, gemini, qwen, opencode, droid, copilot, grok];
 
-/** 认得的工具报错：翻成能照着做的一句话（认不出返回 null）。 */
+/** 认得的工具报错：翻成一句说明（只写是什么情况，怎么处理写在 README「常见问题」；认不出返回 null）。 */
 export function explainFailure(harnessId: string | undefined, text: string): string | null {
   if (harnessId === 'zcode' && /Select a model before continuing|Model creation failed/i.test(text)) {
-    return 'ZCode 命令行还没选默认模型（桌面版里选的它不认）。在终端里运行一次 ZCode 的命令行，输入 /model 选好模型，之后接力台就能调度它。';
+    return 'ZCode 命令行没有默认模型';
   }
   if (harnessId === 'dsh' && /ACCOUNT_SIGN_IN_REQUIRED|ACCOUNT_TOKEN_INVALID|sign.?in required/i.test(text)) {
-    return 'DeepSeek Harness 没登录（或者登录过期了）：打开 DeepSeek Harness 桌面版，重新登录 DeepSeek 账号。';
+    return 'DeepSeek Harness 没登录或登录过期';
   }
   if (harnessId === 'claude-official' && (NOT_LOGGED_IN.test(text) || /invalid api key/i.test(text))) {
-    return 'Claude Code 的官方账号没登录（或者登录过期了）：在终端运行 claude auth login，用 claude.ai 账号登录。';
+    return 'Claude Code 官方账号没登录或登录过期';
   }
-  if (NOT_LOGGED_IN.test(text)) return '看起来没登录（或者登录过期了）：在终端里打开这个工具重新登录一下。';
+  if (NOT_LOGGED_IN.test(text)) return '没登录或登录过期';
   return null;
 }
 

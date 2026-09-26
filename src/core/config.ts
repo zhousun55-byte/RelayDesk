@@ -58,7 +58,7 @@ export function normalizeConfig(raw: unknown, where = '接力配置'): RelayConf
 export function loadRelayConfig(repoRoot: string): RelayConfig {
   const p = relayConfigPath(repoRoot);
   if (!fs.existsSync(p)) {
-    throw new RelayError('这个文件夹还不是接力项目。先执行 relay init，或在接力台里点「接入这个文件夹」。', 'no-config');
+    throw new RelayError('这个文件夹还没接入接力台', 'no-config');
   }
   let raw: unknown;
   try {

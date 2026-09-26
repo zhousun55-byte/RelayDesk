@@ -32,7 +32,7 @@ export function printReport(r: DetectReport): void {
     console.log(`  ${mark(p.state)} ${bits.join(' · ')}`);
     if (p.needsConsent) info(c.dim(`    同意使用：relay detect --use ${p.id}`));
   }
-  if (r.unknownKeys.length) warn(`还有不认识的密钥：${r.unknownKeys.join('、')}（不知道接口地址，没用上；可以在设置里手动加成「接口」工人）`);
+  if (r.unknownKeys.length) warn(`还有不认识的密钥：${r.unknownKeys.join('、')}（不知道接口地址，没用上；可以在设置里手动加成「接口」成员）`);
   if (r.apps.length) {
     console.log(c.bold('桌面程序（你自己打开它接着做，接力台记账）'));
     for (const a of r.apps) info(`${a.name}：${a.hint}`);
@@ -53,7 +53,7 @@ export function printTeam(): void {
 
 export function detectCommand(): Command {
   return new Command('detect')
-    .description('自动识别这台电脑上的 AI 编程工具和模型接口，并更新工人名单')
+    .description('自动识别这台电脑上的 AI 编程工具和模型接口，并更新成员名单')
     .option('--offline', '不连网（不检查接口密钥能不能用）')
     .option('--use <编号>', '同意使用一个需要别的工具密钥的接口（如 mimocode:xiaomi-token-plan-cn）')
     .option('--json', '输出 JSON')
@@ -72,7 +72,7 @@ export function detectCommand(): Command {
       printReport(report);
       console.log('');
       if (changes.length) for (const ch of changes) ok(ch);
-      else info('工人名单不用改。');
+      else info('成员名单不用改');
       console.log('');
       printTeam();
     });

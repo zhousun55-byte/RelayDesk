@@ -223,7 +223,7 @@ function resolveDir(raw: string | undefined, fallback: string): string {
 }
 
 function requireProject(root: string): void {
-  if (!loadLedger(root).init) throw new RelayError('这个文件夹还没接入接力台。先点「接入」。', 'not-init');
+  if (!loadLedger(root).init) throw new RelayError('这个文件夹还没接入接力台', 'not-init');
 }
 
 function num(v: unknown, what: string): number {
@@ -421,7 +421,7 @@ export function createServer(opts: ServerOptions): http.Server {
       const a = findAgent(str(b.who) ?? '');
       if (!a) throw new RelayError('名单里没有它。', 'no-agent');
       const cmd = agentKind(a) === 'app' ? a.cmd : a.app;
-      if (!cmd) throw new RelayError('它没有桌面程序可以打开：让接力台派它做一棒（「只做一棒」或「全自动」）。', 'cannot-open');
+      if (!cmd) throw new RelayError('没有桌面程序', 'cannot-open');
       const copied = copyToClipboard(HINT);
       const r = await runOpener(fillTemplate(cmd, { dir: root, worktree: root }), root);
       if (r.code !== 0 && !r.lingering) throw new RelayError(`打不开：${r.output || `退出码 ${r.code}`}`, 'open-failed');
@@ -437,12 +437,12 @@ export function createServer(opts: ServerOptions): http.Server {
     },
     '/api/rollback': (q, b) => {
       const root = dirOf(q, b);
-      if (goActive(root)) throw new RelayError('接力台正在调度，先停下再退回。', 'busy');
+      if (goActive(root)) throw new RelayError('接力台正在调度一棒', 'busy');
       return rollbackBefore(root, num(b.stint, '棒号'));
     },
     '/api/rollback/undo': (q, b) => {
       const root = dirOf(q, b);
-      if (goActive(root)) throw new RelayError('接力台正在调度，先停下再撤销。', 'busy');
+      if (goActive(root)) throw new RelayError('接力台正在调度一棒', 'busy');
       return undoRollback(root);
     },
     '/api/mark': (q, b) => {
@@ -482,7 +482,7 @@ export function createServer(opts: ServerOptions): http.Server {
     },
     '/api/detect/use': (_q, b) => {
       const report = loadDetected();
-      if (!report) throw new RelayError('先识别一次。', 'no-detect');
+      if (!report) throw new RelayError('还没识别过', 'no-detect');
       const agent = enableProvider(report, str(b.id) ?? '');
       return { agent, members: memberViews() };
     },
