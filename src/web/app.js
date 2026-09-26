@@ -1134,6 +1134,7 @@ function lastActive(t) {
 
 function centerMode() {
   const p = S.st.project;
+  if (p.pick) return 'pick';
   if (!p.init) return 'setup';
   if (S.draft) return 'new';
   const t = selectedThread();
@@ -1315,8 +1316,8 @@ function drawLeft() {
       'div',
       { class: 'acts' },
       chat
-        ? h('button', { class: 'btn line', onclick: newChat }, icon('plus'), '新群聊')
-        : h('button', { class: 'btn line', onclick: newThread, disabled: !p.init && !st.projects.length }, icon('plus'), '新任务'),
+        ? h('button', { class: 'btn line', onclick: newChat, disabled: !!p.pick }, icon('plus'), '新群聊')
+        : h('button', { class: 'btn line', onclick: newThread, disabled: !!p.pick || (!p.init && !st.projects.length) }, icon('plus'), '新任务'),
       h('button', { class: 'find', onclick: () => openPalette() }, icon('search'), '搜索', h('kbd', null, '⌘K'))
     ),
     h('nav', { class: 'nav', 'aria-label': '项目' }, h('div', { class: 'nav-label' }, h('span', { class: 'cap' }, '项目'), iconBtn('打开文件夹', 'plus', chooseFolder)), projects),
@@ -1528,13 +1529,35 @@ function renderCenter() {
     C.wrap.remove();
     CE.chat.style.setProperty('--compose-h', '0px');
   }
-  document.title = S.st.project.name ? `${S.st.project.name} · 接力台` : '接力台';
+  document.title = S.st.project.name && !S.st.project.pick ? `${S.st.project.name} · 接力台` : '接力台';
 }
 
 // ----- 空闲：小标题、要人看的一行、输入框 -----
 
 function renderHero(mode) {
   const p = S.st.project;
+  // 还没有项目（停在家目录这种大文件夹）：只请你选一个项目文件夹
+  if (mode === 'pick') {
+    const sig = JSON.stringify([mode, members().length, !!S.st.detecting, UI.noLeft, UI.noRight, narrow()]);
+    if (sig !== heroSig) {
+      heroSig = sig;
+      C.wrap.remove();
+      CE.hero.replaceChildren(
+        h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null),
+        h(
+          'div',
+          { class: 'hero-in' },
+          h(
+            'div',
+            { class: 'hero-head' },
+            h('div', null, h('h1', null, '接力台'), h('span', { class: 'cap' }, S.st.detecting && !members().length ? '识别中' : `${members().length} 位 AI`)),
+            h('button', { class: 'btn primary', onclick: chooseFolder }, icon('folder'), '打开文件夹')
+          )
+        )
+      );
+    }
+    return;
+  }
   const setup = mode === 'setup' || mode === 'chat-setup';
   const chat = mode === 'chat-new' || mode === 'chat-setup';
   const pend = setup || chat ? [] : p.pending;
@@ -2646,6 +2669,7 @@ function chatData() {
 
 /** 群聊这一页现在是什么样：还没接入（先接入，群聊记录放在接入后的 .relay 里）、一段空的新群聊、有内容的群聊。 */
 function chatMode() {
+  if (S.st.project.pick) return 'pick';
   if (!S.st.project.init) return 'chat-setup';
   return S.chat || talkHas(S.talk) || talkLive() ? 'chat' : 'chat-new';
 }
@@ -3801,6 +3825,13 @@ function renderRight(force) {
   RE.changedBtn.setAttribute('aria-checked', String(S.onlyChanged));
   renderGate(p);
   syncFoldBtn();
+  if (p.pick) {
+    // 还没有项目：右边空着
+    RE.tree.replaceChildren();
+    RE.note.hidden = true;
+    treeSig = '';
+    return;
+  }
   const touched = touchedMap();
   const sig = JSON.stringify([S.treeRev, !!S.tree, [...touched].map(([k, v]) => [k, v.looks, v.pending]), [...S.treeOpen], S.treeFilter, S.onlyChanged, S.treeSel, looks.key]);
   if (!force && sig === treeSig) return;

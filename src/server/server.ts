@@ -24,7 +24,7 @@ import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
 import { archiveTalk, readTalk, resumeTalk, say, talkBusy, talkFile, talkSessions, talkStatus } from '../core/talk';
 import { adoptOption, castHumanVote, readVotes, startVote, voteBusy } from '../core/vote';
 import { goActive, startGo, stopGo } from '../ops/go';
-import { initProject, liveProjects, newTask } from '../ops/init';
+import { checkRoot, initProject, liveProjects, newTask } from '../ops/init';
 import { buildStamp, keeperMode } from '../ops/keeper';
 import { rollbackBefore, undoRollback } from '../ops/rollback';
 import { refreshBrief, relayBusy, trackAndGate } from '../ops/track';
@@ -120,6 +120,17 @@ function memberViews() {
     update: (m.harness && report?.harnesses.find((h) => h.id === m.harness)?.model.note) || null,
     agent: m.agent,
   }));
+}
+
+/** 家目录、桌面这种大文件夹不能当项目：还没打开过项目时（从「接力台」小程序启动，停在家目录）网页先请你选一个。 */
+function pickFolder(root: string, init: boolean): boolean {
+  if (init) return false;
+  try {
+    checkRoot(root);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 function projectList(current: string | null) {
@@ -262,15 +273,16 @@ export function createServer(opts: ServerOptions): http.Server {
       }
       const t = talkStatus(root);
       const w = watching(root);
+      const pick = pickFolder(root, !!pv.init);
       return {
         version: VERSION,
         build: BUILD,
         keeper: keeperMode(),
         home: os.homedir(),
-        project: pv,
+        project: pick ? { ...pv, pick: true } : pv,
         members: memberViews(),
         settings: loadAutoSettings(),
-        projects: projectList(root),
+        projects: projectList(pick ? null : root),
         talk: { count: readTalk(root).length, speaking: t.speaking, queue: t.queue },
         detecting: !!detecting,
         detectedAt: loadDetected()?.at ?? null,
@@ -331,7 +343,11 @@ export function createServer(opts: ServerOptions): http.Server {
       }
       return { rows: readTalk(root, 300), votes: readVotes(root).slice(-20), status: talkStatus(root), sessions: talkSessions(root) };
     },
-    '/api/tree': (q) => projectFiles(dirOf(q, {})),
+    '/api/tree': (q) => {
+      const root = dirOf(q, {});
+      // 家目录这种不是项目的：不列里面的文件
+      return pickFolder(root, !!loadLedger(root).init) ? { files: [], truncated: false } : projectFiles(root);
+    },
     '/api/file': (q) => readProjectFile(dirOf(q, {}), q.get('path') ?? ''),
     '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
     '/api/presets': () => ({ presets: PRESETS }),

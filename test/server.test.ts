@@ -355,6 +355,24 @@ test('网页接口：传文件存进项目的 .relay/uploads（不进 git）；�
   }
 });
 
+test('还没有项目（从小程序启动，停在家目录）：网页请你选一个项目文件夹，不列家目录里的文件，也不把家目录放进项目列表', async () => {
+  const s = sandbox('srv-pick');
+  fs.writeFileSync(path.join(s.home, '私人笔记.txt'), '不该出现在网页上');
+  const ui = await startUi(s);
+  try {
+    const home = `?dir=${encodeURIComponent(s.home)}`;
+    const st = await ui.call(`/api/state${home}`);
+    assert.equal(st.json.project.pick, true);
+    assert.ok(!st.json.projects.some((p: { root: string }) => p.root === fs.realpathSync(s.home) || p.root === s.home), '家目录不进项目列表');
+    assert.deepEqual((await ui.call(`/api/tree${home}`)).json.files, [], '不列家目录里的文件');
+    const proj = await ui.call(`/api/state${q(s)}`);
+    assert.equal(proj.json.project.pick, undefined, '真正的项目文件夹照常');
+    assert.ok((await ui.call(`/api/tree${q(s)}`)).json.files.length > 0);
+  } finally {
+    ui.child.kill();
+  }
+});
+
 test('不许接入整个家目录这种大文件夹', async () => {
   const s = sandbox('srv-home');
   const out = s.relay(['init'], false);
