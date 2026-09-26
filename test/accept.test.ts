@@ -184,7 +184,7 @@ test('验收：清单打勾不等于做完——开着终审却没终审、终�
   // 都对：通过
   a = acceptance({ ...base, ledger: view([work, good]) });
   assert.equal(a.state, 'accepted');
-  assert.match(a.headline, /验收通过：清单 2\/2 全部打勾，Codex · gpt-6 终审过了/);
+  assert.match(a.headline, /验收通过：清单 2\/2 全部打勾，GPT-6 终审过了/);
   // 没开终审：强模型干完就行
   assert.equal(acceptance({ ...base, finalRequired: false, ledger: view([work]) }).state, 'accepted');
   // 弱模型的活没复核、复核结论有问题

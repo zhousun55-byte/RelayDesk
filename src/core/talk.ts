@@ -8,9 +8,10 @@ import { agentEnv } from './env';
 import { cliTooOld, findHarness, locateCached, modelArg, noteModelNeeds } from './harness';
 import { fillTemplate } from './launch';
 import { chat } from './llm';
+import { llmName, toolName } from './names';
 import { redactSecrets } from './redact';
 import { startRun } from './runner';
-import { agentKind, agentLabel, canTalk, findAgent, OUT_PLACEHOLDER } from './registry';
+import { agentKind, agentLabel, canTalk, findAgent, loadRegistry, OUT_PLACEHOLDER } from './registry';
 import type { AgentConfig } from './types';
 
 /**
@@ -39,9 +40,18 @@ export function talkPath(root: string): string {
   return path.join(root, '.relay', 'talk.jsonl');
 }
 
+/** 存档的群聊（点「新群聊」时旧的改名存下）：.relay/talk-年月日-时分秒.jsonl，id 就是去掉 .jsonl 的文件名。 */
+const ARCHIVE = /^talk-\d{8}-\d{6}(?:-\d+)?$/;
+
+/** 群聊记录的文件：不给 id 是正在用的那一个。 */
+export function talkFile(root: string, id?: string | null): string {
+  if (!id) return talkPath(root);
+  if (!ARCHIVE.test(id)) throw new RelayError('没有这个群聊。', 'no-talk');
+  return path.join(root, '.relay', `${id}.jsonl`);
+}
+
 /** 读讨论记录。兼容旧版格式（person/system + windowId），跳过旧版残留的「正在说」占位行。 */
-export function readTalk(root: string, limit = 400): TalkRow[] {
-  const p = talkPath(root);
+export function readTalk(root: string, limit = 400, p = talkPath(root)): TalkRow[] {
   if (!fs.existsSync(p)) return [];
   const out: TalkRow[] = [];
   for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
@@ -93,16 +103,88 @@ export function appendTalk(root: string, row: Omit<TalkRow, 'ts'> & { ts?: strin
   return full;
 }
 
-/** 清空讨论：旧记录改名存档（talk-时间.jsonl），不删。 */
+/** 新群聊：正在用的记录改名存档（talk-时间.jsonl），不删；是空的就不存。返回存档的 id。 */
 export function archiveTalk(root: string): string | null {
   const p = talkPath(root);
-  if (!fs.existsSync(p)) return null;
+  let text = '';
+  try {
+    text = fs.readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
+  if (!text.trim()) {
+    fs.rmSync(p, { force: true });
+    return null;
+  }
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
-  const name = `talk-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jsonl`;
-  const to = path.join(path.dirname(p), name);
-  fs.renameSync(p, to);
-  return to;
+  const base = `talk-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  let id = base;
+  for (let i = 2; fs.existsSync(talkFile(root, id)); i++) id = `${base}-${i}`;
+  fs.renameSync(p, talkFile(root, id));
+  return id;
+}
+
+/** 接着一个存档的群聊：正在用的先存档，再把它换回来。 */
+export function resumeTalk(root: string, id: string): void {
+  const from = talkFile(root, id);
+  if (!fs.existsSync(from)) throw new RelayError('没有这个群聊。', 'no-talk');
+  archiveTalk(root);
+  fs.renameSync(from, talkPath(root));
+  sessionCache.delete(from);
+}
+
+export interface TalkSession {
+  id: string;
+  /** 第一句问话（没有就是第一个投票的问题）。 */
+  title: string;
+  /** 最后一条的时间。 */
+  at: string;
+}
+
+const sessionCache = new Map<string, { size: number; mtimeMs: number; s: TalkSession }>();
+
+/** 存档的群聊，最近的在前。存档不会再变：按文件大小和修改时间记住，不每次重读。 */
+export function talkSessions(root: string, limit = 40): TalkSession[] {
+  const dir = path.join(root, '.relay');
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl') && ARCHIVE.test(n.slice(0, -6)));
+  } catch {
+    return [];
+  }
+  const out: TalkSession[] = [];
+  for (const n of names) {
+    const file = path.join(dir, n);
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(file);
+    } catch {
+      continue;
+    }
+    const hit = sessionCache.get(file);
+    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) {
+      out.push(hit.s);
+      continue;
+    }
+    let title = '';
+    let at = '';
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      let r: Record<string, unknown>;
+      try {
+        r = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (typeof r.ts === 'string' && r.ts > at) at = r.ts;
+      if (!title && r.kind === 'human' && typeof r.text === 'string') title = r.text;
+      if (!title && r.kind === 'vote' && typeof r.question === 'string') title = r.question;
+    }
+    const s: TalkSession = { id: n.slice(0, -6), title: title.trim().split('\n')[0].slice(0, 60) || '群聊', at: at || st.mtime.toISOString() };
+    sessionCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, s });
+    out.push(s);
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
 }
 
 export interface TalkContext {
@@ -169,7 +251,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     // 绑定了认得的编程工具：用它的只读模式回答。
     const spec = findHarness(agent.harness);
     const loc = spec ? locateCached(spec) : null;
-    if (!spec || !loc) throw new RelayError(`「${agentLabel(agent)}」没有配置讨论命令。`, 'no-ask');
+    if (!spec || !loc) throw new RelayError(`「${speakerName(agent)}」没有配置讨论命令。`, 'no-ask');
     const stamp = `${process.pid}-${Date.now()}`;
     const make = () =>
       spec.invoke(loc, {
@@ -277,7 +359,10 @@ function roundOf(root: string): Round {
 
 export function talkStatus(root: string): { current: { agent: string; label: string; since: string } | null; speaking: { agent: string; label: string }[]; queue: { agent: string; label: string }[] } {
   const r = rounds.get(path.resolve(root));
-  const lab = (n: string) => agentLabel(findAgent(n) ?? n);
+  const lab = (n: string) => {
+    const a = findAgent(n);
+    return a ? speakerName(a) : n;
+  };
   const speaking = [...(r?.current ?? [])].map((n) => ({ agent: n, label: lab(n) }));
   const first = speaking[0];
   return {
@@ -287,10 +372,22 @@ export function talkStatus(root: string): { current: { agent: string; label: str
   };
 }
 
-/** 群聊里显示的名字：工具名 · 实际用的模型（Claude Code 接的是 DeepSeek 就写 DeepSeek 的模型）。 */
+/**
+ * 群聊里的名字：它实际用的模型（GPT-6 Sol；Claude Code 接的是 DeepSeek 就叫 DeepSeek Flash），认不出模型的写工具名。
+ * 名单里还有一位也是这个模型：后面带上工具，免得大家分不清在跟谁说话。
+ */
 export function speakerName(agent: AgentConfig): string {
-  const m = memberModel(agent, loadDetected());
-  return `${agentLabel(agent)}${m ? ` · ${m}` : ''}`;
+  const report = loadDetected();
+  const nameOf = (a: AgentConfig) => llmName(memberModel(a, report)) || agentLabel(a);
+  const mine = nameOf(agent);
+  let twin = false;
+  try {
+    twin = loadRegistry().agents.some((a) => a.name !== agent.name && canTalk(a) && nameOf(a) === mine);
+  } catch {
+    /* 名单读不了：不带工具 */
+  }
+  const tool = toolName(agent.harness) ?? (agentKind(agent) === 'api' ? '接口' : undefined);
+  return twin && tool ? `${mine}（${tool}）` : mine;
 }
 
 function safeContext(context: () => TalkContext): TalkContext {
@@ -312,7 +409,7 @@ async function speakOne(root: string, name: string, rows: TalkRow[], context: ()
     const m = memberModel(agent, loadDetected());
     appendTalk(root, { kind: 'ai', who: speakerName(agent), agent: agent.name, ...(m ? { model: m } : {}), text, ...(solo ? { round: solo } : {}) });
   } catch (e) {
-    appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agentLabel(agent ?? name)} 没回上来：${errorMessage(e)}`, error: true, ...(solo ? { round: solo } : {}) });
+    appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agent ? speakerName(agent) : name} 没回上来：${errorMessage(e)}`, error: true, ...(solo ? { round: solo } : {}) });
   }
 }
 
@@ -360,7 +457,7 @@ export function checkSpeakers(ask: string[]): string[] {
   for (const n of ask) {
     const a = findAgent(n);
     if (!a) throw new RelayError(`工人名单里没有「${n}」。`, 'no-agent');
-    if (!canTalk(a)) throw new RelayError(`「${agentLabel(a)}」还不能参加群聊：在设置里给它填「讨论命令」。`, 'cannot-talk');
+    if (!canTalk(a)) throw new RelayError(`「${speakerName(a)}」还不能参加群聊。`, 'cannot-talk');
     if (!names.includes(n)) names.push(n);
   }
   return names;

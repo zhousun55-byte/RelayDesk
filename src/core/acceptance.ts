@@ -1,4 +1,5 @@
 import { countedReviews, statusWord, verdictWord, type LedgerView, type Stint, type Verdict } from './ledger';
+import { whoName } from './names';
 import { taskProgress, type TaskDoc } from './notes';
 
 /**
@@ -104,19 +105,19 @@ export function acceptance(input: AcceptInput): Acceptance {
   const good = [...finals].reverse().find((f) => f.status === 'handed' && f.who.tier === 'strong' && !!f.verdict && FINAL_PASS.has(f.verdict) && !changedAfter(f));
   let final: Acceptance['final'] = { required: input.finalRequired, ok: !input.finalRequired, text: input.finalRequired ? '还没终审' : '没开终审' };
   if (input.finalRequired) {
-    if (good) final = { required: true, ok: true, stint: good.id, text: `${good.who.label} 终审过了` };
+    if (good) final = { required: true, ok: true, stint: good.id, text: `${whoName(good.who)} 终审过了` };
     else {
       const f = finals.at(-1);
       const text = !f
         ? '还没终审'
         : f.status !== 'handed'
-          ? `终审没做成（${f.who.label} ${statusWord(f.status)}${f.note ? `：${f.note.slice(0, 80)}` : ''}）`
+          ? `终审没做成（${whoName(f.who)} ${statusWord(f.status)}${f.note ? `：${f.note.slice(0, 80)}` : ''}）`
           : f.who.tier !== 'strong'
-            ? `终审实际是弱模型做的（${f.who.label}），不算数`
+            ? `终审实际是弱模型做的（${whoName(f.who)}），不算数`
             : !f.verdict
-              ? `终审没留下结论（${f.who.label}）`
+              ? `终审没留下结论（${whoName(f.who)}）`
               : !FINAL_PASS.has(f.verdict)
-                ? `终审结论是「${verdictWord(f.verdict)}」（${f.who.label}）`
+                ? `终审结论是「${verdictWord(f.verdict)}」（${whoName(f.who)}）`
               : '终审之后又有人改了文件，要重新终审';
       final = { required: true, ok: false, ...(f ? { stint: f.id } : {}), text };
       items.push({ kind: 'final', text, ...(f ? { stint: f.id } : {}) });

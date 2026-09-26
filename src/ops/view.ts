@@ -4,6 +4,7 @@ import { acceptance, pendingWhy, type Acceptance } from '../core/acceptance';
 import { loadAutoSettings } from '../core/auto-settings';
 import { countedReviews, loadLedger, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
 import { archivedTaskTitles, handoffFilled, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
+import { whoName } from '../core/names';
 import { protocolState } from '../core/protocol';
 import { untilText } from '../core/quota';
 import { goLogTail, loadGoState, type GoState } from './go';
@@ -221,9 +222,9 @@ export function projectView(root: string): ProjectView {
   if (go && go.status === 'waiting') {
     now = { kind: 'waiting', text: go.phase };
   } else if (busy) {
-    now = { kind: 'relay', text: `${busy.who.label} 正在${busy.kind === 'review' ? '复核' : busy.kind === 'final' ? '终审' : '干活'}（第 ${busy.id} 棒，接力台调度）`, stint: busy.id, since: busy.startedAt };
+    now = { kind: 'relay', text: `${whoName(busy.who)} 正在${busy.kind === 'review' ? '复核' : busy.kind === 'final' ? '终审' : '干活'}（第 ${busy.id} 棒，接力台调度）`, stint: busy.id, since: busy.startedAt };
   } else if (v.open) {
-    now = { kind: 'native', text: `第 ${v.open.id} 棒进行中：${v.open.who.label === '不知道是谁' ? '有 AI 在改文件（还没写交接，不知道是谁）' : `${v.open.who.label} 在做`}`, stint: v.open.id, since: v.open.startedAt };
+    now = { kind: 'native', text: `第 ${v.open.id} 棒进行中：${v.open.who.label === '不知道是谁' ? '有 AI 在改文件（还没写交接，不知道是谁）' : `${whoName(v.open.who)} 在做`}`, stint: v.open.id, since: v.open.startedAt };
   }
   const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
   const views = v.stints.map((x) => toView(x, dropped, liveSummary(root, x)));
@@ -289,7 +290,7 @@ export function statusLines(root: string): string[] {
   if (pv.config.error) out.push(`配置文件坏了：${pv.config.error}`);
   out.push(`现在：${pv.now.text}`);
   if (pv.go?.waitingUntil) out.push(`等额度：${untilText(pv.go.waitingUntil)}`);
-  if (pv.pending.length) out.push(`待复核：${pv.pending.map((s) => `第 ${s.id} 棒（${s.who.label}）`).join('、')}`);
+  if (pv.pending.length) out.push(`待复核：${pv.pending.map((s) => `第 ${s.id} 棒（${whoName(s.who)}）`).join('、')}`);
   for (const s of pv.stints.slice(0, 8)) {
     out.push(`  ${s.title}（${s.tierWord}）· ${s.statusWord}${s.reviewText ? ` · ${s.reviewText}` : ''}${s.summary ? ` · ${s.summary}` : ''}`);
   }

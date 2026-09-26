@@ -103,7 +103,6 @@ const S = {
 };
 const threads = () => S.st.project.threads;
 const threadStints = () => [];
-const threadTalk = () => ({ rows: [], votes: [] });
 const looks = { key: '' };
 ${code}
 const has = (t) => streamItems(t).some((it) => String(it.key).startsWith('res:'));
@@ -142,16 +141,15 @@ result = pane.kids.map((k) => (k === null ? 'null' : typeof k === 'string' ? k :
   assert.equal(run('old').length, 5, '接力规矩有新版本：多一行「更新」');
 });
 
-test('网页 ▾ 菜单的「打开」：只列桌面程序，命令行工具不弹终端窗口（在「只做一棒」里由接力台派活）', () => {
-  const code = ['whoMenu'].map(pick).join('\n\n');
+test('网页 ▾ 菜单：「只做一棒」列能派活的（叫模型的名字）；「打开」列有桌面程序的，命令行工具不弹终端窗口', () => {
+  const code = ['splitLabel', 'LLM_WORD', 'LLM_VARIANT', 'llmName', 'nameOf', 'memberName', 'whoMenu'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
   vm.runInNewContext(
     `
 const list = [
-  { name: 'codex', label: 'Codex', kind: 'harness', agent: { cmd: 'codex' }, canWork: true, tier: 'strong', model: 'gpt-6-sol' },
-  { name: 'cursor', label: 'Cursor', kind: 'app', canWork: false },
+  { name: 'codex', label: 'Codex', llm: 'GPT-6 Sol', tool: 'Codex', app: 'ChatGPT', kind: 'harness', agent: { cmd: 'codex' }, canWork: true, tier: 'strong', model: 'gpt-6-sol' },
+  { name: 'trae', label: 'Trae', llm: 'Trae', tool: 'Trae', app: 'Trae', kind: 'app', canWork: false },
   { name: 'claude', label: 'Claude Code', kind: 'harness', agent: { cmd: 'claude' }, canWork: true, tier: 'weak', model: 'deepseek-flash' },
-  { name: 'gpt', label: 'ChatGPT', kind: 'app', canWork: false },
 ];
 const members = () => list;
 const tile = () => null, goWith = () => {}, openIn = () => {}, copyHint = () => {};
@@ -164,8 +162,8 @@ result = { work: items.slice(1, at - 1).map((x) => x.label), open: items.slice(a
     ctx
   );
   const r = JSON.parse(JSON.stringify(ctx.result)) as { work: string[]; open: string[] };
-  assert.deepEqual(r.work, ['Codex', 'Claude Code'], '命令行工具在「只做一棒」里');
-  assert.deepEqual(r.open, ['Cursor', 'ChatGPT'], '「打开」里只有桌面程序');
+  assert.deepEqual(r.work, ['GPT-6 Sol', 'Claude Code'], '能派活的在「只做一棒」里；老接力台没给名字时按记下的叫');
+  assert.deepEqual(r.open, ['GPT-6 Sol', 'Trae'], '「打开」里是有桌面程序的（记在命令行名下的也算）');
 });
 
 test('网页定时刷新：和上次拿到的一字不差就不解析、不重画；换了项目从头来；操作之后一定按最新状态重画', async () => {
@@ -208,7 +206,6 @@ const t1 = { id: 't1', title: '新任务', from: '2026-09-25T14:07:00Z', to: nul
 const S = { st: { project: { task: { title: '新任务', body: '', items: [] }, threads: [t0, t1], lastRollback: null, protocol: 'ok', go: ${JSON.stringify(go)}, acceptance: ${JSON.stringify(acceptance)} } }, talk: { status: { speaking: [], queue: [] } }, dismissed: '' };
 const threads = () => S.st.project.threads;
 const threadStints = () => [];
-const threadTalk = () => ({ rows: [], votes: [] });
 const looks = { key: '' };
 ${code}
 const ends = (t) => streamItems(t).filter((it) => it.stop).map((it) => String(it.key).split(':')[0]);

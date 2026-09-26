@@ -27,9 +27,19 @@ test('工具调用参数：安全档 / 完全放开 / 只读，各家都按无�
   assert.equal(codex.outFile, '/tmp/o');
   assert.ok(findHarness('codex')!.invoke(loc, { ...base, level: 'safe', readOnly: true }).argv.includes('read-only'));
 
-  const cursor = findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'safe', readOnly: false });
-  assert.deepEqual(cursor.argv.slice(1), ['-p', '--trust', '--output-format', 'stream-json', '--workspace', '/wt', '--force', '--sandbox', 'enabled', 'P']);
-  assert.ok(findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'safe', readOnly: true }).argv.includes('ask'));
+  // Cursor：名单里没指定模型就用 Cursor 里选的（这里是假家目录，只有命令行自己的设置）
+  const realHome = process.env.HOME;
+  process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-cursor-home-'));
+  try {
+    fs.mkdirSync(path.join(process.env.HOME, '.cursor'));
+    fs.writeFileSync(path.join(process.env.HOME, '.cursor', 'cli-config.json'), JSON.stringify({ model: { modelId: 'grok-4.7-high-fast', displayName: 'Grok 4.7' } }));
+    const cursor = findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'safe', readOnly: false });
+    assert.deepEqual(cursor.argv.slice(1), ['-p', '--trust', '--output-format', 'stream-json', '--workspace', '/wt', '--force', '--sandbox', 'enabled', '--model', 'grok-4.7-high-fast', 'P']);
+    assert.ok(findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'safe', readOnly: true }).argv.includes('ask'));
+    assert.ok(findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'safe', readOnly: false, model: 'x-1' }).argv.join(' ').includes('--model x-1'), '名单里指定的优先');
+  } finally {
+    process.env.HOME = realHome;
+  }
 
   const zcode = findHarness('zcode')!.invoke(loc, { ...base, level: 'safe', readOnly: false });
   assert.deepEqual(zcode.argv.slice(1), ['-p', 'P', '--cwd', '/wt', '--mode', 'edit', '--no-color']);

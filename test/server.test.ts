@@ -205,6 +205,59 @@ test('网页接口：强弱可以改；投票出结果后采纳，写进任务�
   }
 });
 
+test('网页接口：成员叫模型的名字、删掉的不再加回来；群聊分几段：新群聊把正在用的存档、看存档、接着存档的那段', async () => {
+  const s = sandbox('srv-talks');
+  withFakes(s);
+  s.relay(['detect', '--offline']);
+  s.relay(['init', '做滤镜']);
+  const ui = await startUi(s);
+  try {
+    const st = await ui.call(`/api/state${q(s)}`);
+    const codex = st.json.members.find((m: { name: string }) => m.name === 'codex');
+    assert.deepEqual([codex.llm, codex.tool, codex.app], ['GPT-6', 'Codex', null]);
+
+    assert.equal((await ui.call('/api/talk/say', { dir: s.repo, text: '第一段', ask: ['codex'] })).status, 200);
+    await until(15_000, async () => (await ui.call(`/api/talk${q(s)}`)).json.rows.some((r: { kind: string }) => r.kind === 'ai'), '回话');
+    const ai = (await ui.call(`/api/talk${q(s)}`)).json.rows.find((r: { kind: string }) => r.kind === 'ai');
+    assert.equal(ai.who, 'GPT-6', '群聊里的署名是模型的名字');
+    let id = '';
+    await until(10_000, async () => {
+      const c = await ui.call('/api/talk/clear', { dir: s.repo });
+      id = c.json.archived ?? '';
+      return c.status === 200;
+    }, '这一轮说完后存档');
+    let t = await ui.call(`/api/talk${q(s)}`);
+    assert.deepEqual(t.json.rows, []);
+    assert.deepEqual(
+      t.json.sessions.map((x: { id: string; title: string }) => [x.id, x.title]),
+      [[id, '第一段']]
+    );
+    assert.equal((await ui.call(`/api/talk${q(s)}&id=${id}`)).json.rows[0].text, '第一段', '看存档的那段');
+    assert.equal((await ui.call(`/api/talk${q(s)}&id=..%2F..%2Fetc`)).status, 400);
+
+    await ui.call('/api/talk/say', { dir: s.repo, text: '第二段', ask: [] });
+    assert.equal((await ui.call('/api/talk/resume', { dir: s.repo, id })).status, 200);
+    t = await ui.call(`/api/talk${q(s)}`);
+    assert.equal(t.json.rows[0].text, '第一段', '接着的那段换成了正在用的');
+    assert.deepEqual(
+      t.json.sessions.map((x: { title: string }) => x.title),
+      ['第二段'],
+      '原来正在用的存了档'
+    );
+
+    assert.equal((await ui.call('/api/workers/delete', { name: 'claude' })).status, 200);
+    const d = await ui.call('/api/detect', { dir: s.repo, offline: true });
+    assert.equal(d.status, 200, JSON.stringify(d.json));
+    assert.deepEqual(
+      d.json.members.map((m: { name: string }) => m.name),
+      ['codex'],
+      '删掉的再识别也不加回来'
+    );
+  } finally {
+    ui.child.kill();
+  }
+});
+
 test('网页接口的安全检查：只认本机地址和本端口，POST 必须是 JSON；网页能关闭接力台', async () => {
   const s = sandbox('srv-sec');
   const ui = await startUi(s);

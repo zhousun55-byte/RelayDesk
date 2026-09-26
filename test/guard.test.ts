@@ -85,7 +85,7 @@ test('换人之前：有 AI 在别的工具里干到一半、刚才还在改文�
   s.relay(['snap']);
   assert.equal(s.stints()[0].status, 'working');
   const out = s.relay(['go', 'codex'], true);
-  assert.match(out, /第 1 棒（Claude Code · deepseek-v4-flash）不到一分钟前还在改这个文件夹/);
+  assert.match(out, /第 1 棒（DeepSeek V4 Flash）不到一分钟前还在改这个文件夹/);
   assert.equal(s.stints().length, 1, '没换人');
   s.relay(['go', 'codex', '--force']);
   const st = s.stints();

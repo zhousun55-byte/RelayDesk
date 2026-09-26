@@ -7,21 +7,22 @@ import { doctor } from '../commands/doctor';
 import { talkContext } from '../commands/talk';
 import { loadAutoSettings, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
-import { enableProvider, loadDetected, type DetectReport } from '../core/detect';
+import { enableProvider, loadDetected, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { projectFiles, projectPath, readProjectFile } from '../core/files';
 import { copyToClipboard, fillTemplate, reveal, runOpener, chooseFolder } from '../core/launch';
 import { loadLedger, saveStint, type Stint } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
 import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
+import { appNameOf, llmName, toolName } from '../core/names';
 import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
 import { isInside } from '../core/paths';
 import { PRESETS } from '../core/presets';
 import { untilText } from '../core/quota';
 import { agentKind, findAgent, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
-import { archiveTalk, readTalk, say, talkBusy, talkStatus } from '../core/talk';
-import { adoptOption, castHumanVote, readVotes, startVote } from '../core/vote';
+import { archiveTalk, readTalk, resumeTalk, say, talkBusy, talkFile, talkSessions, talkStatus } from '../core/talk';
+import { adoptOption, castHumanVote, readVotes, startVote, voteBusy } from '../core/vote';
 import { goActive, startGo, stopGo } from '../ops/go';
 import { initProject, liveProjects, newTask } from '../ops/init';
 import { buildStamp, keeperMode } from '../ops/keeper';
@@ -94,9 +95,17 @@ function memberViews() {
   const s = loadAutoSettings();
   const now = new Date();
   const report = loadDetected();
-  return orderMembers(allMembers(s.level, report), s.order).map((m) => ({
+  const list = orderMembers(allMembers(s.level, report), s.order);
+  // 给人看的名字是模型的名字；同一个模型有两位时，后面带上工具
+  const nameOf = (m: (typeof list)[number]) => llmName(m.model) || m.label;
+  const toolOf = (m: (typeof list)[number]) => toolName(m.harness) ?? (m.kind === 'api' ? '接口' : m.kind === 'app' ? appNameOf(m.agent.cmd) ?? m.label : m.label);
+  return list.map((m) => ({
     name: m.name,
     label: m.label,
+    llm: list.some((x) => x !== m && nameOf(x) === nameOf(m)) ? `${nameOf(m)}（${toolOf(m)}）` : nameOf(m),
+    tool: toolOf(m),
+    /** 你自己接着做时打开的桌面程序。 */
+    app: appNameOf(m.kind === 'app' ? m.agent.cmd : m.agent.app) ?? null,
     model: m.model ?? null,
     kind: m.kind,
     tier: m.tier,
@@ -226,7 +235,15 @@ export interface ServerOptions {
 }
 
 export function createServer(opts: ServerOptions): http.Server {
-  if (opts.autoDetect) ensureDetected();
+  if (opts.autoDetect) {
+    // 名单里重复的先并成一位（旧名单里桌面程序和命令行各占一位）；识别完还会再看一次。
+    try {
+      tidyRegistry();
+    } catch {
+      /* 名单坏了：网页上会报出来 */
+    }
+    ensureDetected();
+  }
   const watchOn = (root: string) => {
     if (opts.watch && loadLedger(root).init) watchProject(root);
   };
@@ -305,7 +322,14 @@ export function createServer(opts: ServerOptions): http.Server {
     },
     '/api/talk': (q) => {
       const root = dirOf(q, {});
-      return { rows: readTalk(root, 300), votes: readVotes(root).slice(-20), status: talkStatus(root) };
+      // 带 id：看一个存档的群聊
+      const id = q.get('id');
+      if (id) {
+        const file = talkFile(root, id);
+        if (!fs.existsSync(file)) throw new RelayError('没有这个群聊。', 'no-talk');
+        return { id, rows: readTalk(root, 300, file), votes: readVotes(root, file).slice(-20) };
+      }
+      return { rows: readTalk(root, 300), votes: readVotes(root).slice(-20), status: talkStatus(root), sessions: talkSessions(root) };
     },
     '/api/tree': (q) => projectFiles(dirOf(q, {})),
     '/api/file': (q) => readProjectFile(dirOf(q, {}), q.get('path') ?? ''),
@@ -380,13 +404,12 @@ export function createServer(opts: ServerOptions): http.Server {
       requireProject(root);
       const a = findAgent(str(b.who) ?? '');
       if (!a) throw new RelayError('名单里没有它。', 'no-agent');
+      const cmd = agentKind(a) === 'app' ? a.cmd : a.app;
+      if (!cmd) throw new RelayError('它没有桌面程序可以打开：让接力台派它做一棒（「只做一棒」或「全自动」）。', 'cannot-open');
       const copied = copyToClipboard(HINT);
-      if (agentKind(a) === 'app') {
-        const r = await runOpener(fillTemplate(a.cmd ?? '', { dir: root, worktree: root }), root);
-        if (r.code !== 0 && !r.lingering) throw new RelayError(`打不开：${r.output || `退出码 ${r.code}`}`, 'open-failed');
-        return { opened: true, copied, hint: HINT };
-      }
-      throw new RelayError('它没有桌面程序可以打开：让接力台派它做一棒（「只做一棒」或「全自动」）。', 'cannot-open');
+      const r = await runOpener(fillTemplate(cmd, { dir: root, worktree: root }), root);
+      if (r.code !== 0 && !r.lingering) throw new RelayError(`打不开：${r.output || `退出码 ${r.code}`}`, 'open-failed');
+      return { opened: true, copied, hint: HINT };
     },
     '/api/copy-hint': () => ({ copied: copyToClipboard(HINT), hint: HINT }),
     '/api/reveal': (q, b) => {
@@ -481,9 +504,17 @@ export function createServer(opts: ServerOptions): http.Server {
       return { row: r.row, queued: r.queued };
     },
     '/api/talk/clear': (q, b) => {
+      // 新群聊：正在用的存档（左栏里还看得到）。
       const root = dirOf(q, b);
-      if (talkBusy(root)) throw new RelayError('还有人在发言，等这一轮说完再清空。', 'busy');
+      if (talkBusy(root) || voteBusy()) throw new RelayError('还有人在发言，等这一轮说完。', 'busy');
       return { archived: archiveTalk(root) };
+    },
+    '/api/talk/resume': (q, b) => {
+      // 接着一个存档的群聊：它换成正在用的，原来正在用的存档。
+      const root = dirOf(q, b);
+      if (talkBusy(root) || voteBusy()) throw new RelayError('还有人在发言，等这一轮说完。', 'busy');
+      resumeTalk(root, str(b.id) ?? '');
+      return {};
     },
     '/api/vote/start': (q, b) => {
       const root = dirOf(q, b);

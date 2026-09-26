@@ -60,6 +60,10 @@ export function modelFromLabel(text: string): string | undefined {
 /** 同一个工具的不同用法（Claude Code 官方账号也是 Claude Code）。 */
 const TOOL_FAMILY: Record<string, string> = { 'claude-official': 'claude' };
 
+export function toolFamily(harness: string | undefined): string | undefined {
+  return harness ? TOOL_FAMILY[harness] ?? harness : undefined;
+}
+
 /** 模型的简称：Claude Code 里 --model opus 就是最新的 Opus。 */
 const ALIASES = ['opus', 'sonnet', 'haiku', 'fable'];
 
@@ -96,7 +100,7 @@ export function resolveWho(claim: { who?: string; tool?: string; model?: string 
   if (!text.trim()) return { label: '不知道是谁', tier: 'unknown' };
   const model = claim.model?.trim() || modelFromLabel(claim.who ?? '');
   const tool = TOOL_WORDS.find((t) => t.re.test(claim.tool ?? '') || t.re.test(claim.who ?? ''));
-  const toolOf = (m: MemberLike) => (m.harness ? TOOL_FAMILY[m.harness] ?? m.harness : undefined);
+  const toolOf = (m: MemberLike) => toolFamily(m.harness);
   const byTool = tool ? members.filter((m) => toolOf(m) === tool.id || m.name === tool.id || new RegExp(tool.re.source, 'i').test(m.label)) : [];
   const byModel = model ? members.filter((m) => m.model && sameModel(m.model, model)) : [];
   // 版本对不上、但同一家的（名单记的 claude-opus-5-5，这次是 claude-opus-5）：这个工具里只有一位是这家的，就是它。

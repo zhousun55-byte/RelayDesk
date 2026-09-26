@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { RelayError } from './errors';
+import { appNameOf } from './names';
 import { relayHome } from './paths';
 import type { AgentConfig, AgentKind, AgentsRegistry, PromptMode, Tier } from './types';
 
@@ -46,9 +47,7 @@ export function loadRegistry(): AgentsRegistry {
   } catch {
     return { agents: [] };
   }
-  if (cache && cache.path === p && cache.mtimeMs === st.mtimeMs && cache.size === st.size) {
-    return { agents: cache.reg.agents.map((a) => ({ ...a })) };
-  }
+  if (cache && cache.path === p && cache.mtimeMs === st.mtimeMs && cache.size === st.size) return copyOf(cache.reg);
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -57,15 +56,24 @@ export function loadRegistry(): AgentsRegistry {
   }
   const list = (parsed as Partial<AgentsRegistry> | null)?.agents;
   if (!Array.isArray(list)) throw new RelayError(`工人名单 ${p} 格式不对，应为 { "agents": [...] }。`, 'bad-registry');
-  const reg = { agents: list.filter((a): a is AgentConfig => !!a && typeof a === 'object' && typeof a.name === 'string') };
+  const removed = (parsed as Partial<AgentsRegistry>).removed;
+  const reg: AgentsRegistry = {
+    agents: list.filter((a): a is AgentConfig => !!a && typeof a === 'object' && typeof a.name === 'string'),
+    ...(Array.isArray(removed) ? { removed: removed.filter((x): x is string => typeof x === 'string') } : {}),
+  };
   cache = { path: p, mtimeMs: st.mtimeMs, size: st.size, reg };
-  return { agents: reg.agents.map((a) => ({ ...a })) };
+  return copyOf(reg);
+}
+
+function copyOf(reg: AgentsRegistry): AgentsRegistry {
+  return { agents: reg.agents.map((a) => ({ ...a })), ...(reg.removed ? { removed: [...reg.removed] } : {}) };
 }
 
 export function saveRegistry(reg: AgentsRegistry): void {
   const p = registryPath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(reg, null, 2) + '\n');
+  const out: AgentsRegistry = { agents: reg.agents, ...(reg.removed?.length ? { removed: [...new Set(reg.removed)] } : {}) };
+  fs.writeFileSync(p, JSON.stringify(out, null, 2) + '\n');
   cache = null;
 }
 
@@ -176,6 +184,12 @@ export function normalizeAgent(input: unknown): AgentConfig {
     }
   }
   if (note) agent.note = note;
+  const app = optText(o.app, '桌面程序', 300);
+  if (app) {
+    if (kind === 'app') throw new RelayError('桌面程序自己就是打开命令，不用再配桌面程序。', 'bad-agent');
+    if (!DIR_PLACEHOLDERS.some((x) => app.includes(x))) throw new RelayError(`桌面程序的打开命令必须含 ${DIR_PLACEHOLDER}（项目文件夹）。`, 'bad-agent');
+    agent.app = app;
+  }
   if (o.detected === true) agent.detected = true;
   return agent;
 }
@@ -194,6 +208,9 @@ export function upsertAgent(input: unknown, originalName?: string): AgentConfig 
     if (originalName) throw new RelayError(`工人名单里没有「${originalName}」。`, 'no-agent');
     reg.agents.push(agent);
   }
+  // 自己加回来的：不再算删掉的
+  const back = new Set(removalKeys(agent));
+  if (reg.removed) reg.removed = reg.removed.filter((k) => !back.has(k));
   saveRegistry(reg);
   return agent;
 }
@@ -204,9 +221,21 @@ export function addAgent(input: unknown): AgentConfig {
   return upsertAgent(agent);
 }
 
+/** 识别时认它的记号：删掉之后，再识别也不把它加回来。 */
+export function removalKeys(a: AgentConfig): string[] {
+  const keys: string[] = [];
+  if (a.harness) keys.push(`h:${a.harness}`);
+  if (a.api?.baseUrl) keys.push(`api:${a.api.baseUrl.replace(/\/+$/, '')}`);
+  for (const cmd of [agentKind(a) === 'app' ? a.cmd : undefined, a.app]) {
+    const n = appNameOf(cmd);
+    if (n) keys.push(`app:${n}`);
+  }
+  return keys;
+}
+
 export function removeAgent(name: string): void {
   const reg = loadRegistry();
-  const next = reg.agents.filter((a) => a.name !== name);
-  if (next.length === reg.agents.length) throw new RelayError(`工人名单里没有「${name}」。`, 'no-agent');
-  saveRegistry({ agents: next });
+  const gone = reg.agents.find((a) => a.name === name);
+  if (!gone) throw new RelayError(`工人名单里没有「${name}」。`, 'no-agent');
+  saveRegistry({ agents: reg.agents.filter((a) => a !== gone), removed: [...(reg.removed ?? []), ...removalKeys(gone)] });
 }

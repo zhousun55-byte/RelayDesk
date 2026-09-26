@@ -5,11 +5,13 @@ import { scanApps } from './env';
 import { RelayError } from './errors';
 import { checkCommand } from './launch';
 import { findHarness, HARNESSES, harnessForCommand, locateCached, clearLocateCache, type HarnessSpec, type Level, type LoginInfo, type ModelInfo } from './harness';
+import { loadAutoSettings } from './auto-settings';
 import { apiUsable } from './llm';
+import { appNameOf } from './names';
 import { relayHome } from './paths';
 import { scanProviders, toApiSpec, type DetectedProvider } from './providers';
 import { agentKind, agentLabel, agentModel, loadRegistry, registryPath, saveRegistry } from './registry';
-import { tierForModel } from './tier';
+import { sameModel, tierForModel, toolFamily } from './tier';
 import type { AgentConfig } from './types';
 
 /**
@@ -185,6 +187,8 @@ export function syncRegistry(report: DetectReport): string[] {
   const reg = loadRegistry();
   const changes: string[] = [];
   const names = new Set(reg.agents.map((a) => a.name));
+  // 你删掉的：再识别也不加回来
+  const removed = new Set(reg.removed ?? []);
 
   for (const a of reg.agents) {
     if (agentKind(a) === 'app' && /^cursor(\s|$)/.test((a.cmd ?? '').trim())) {
@@ -214,6 +218,10 @@ export function syncRegistry(report: DetectReport): string[] {
       }
       continue;
     }
+    if (removed.has(`h:${h.id}`)) continue;
+    // 同一个工具、同一个模型的已经有一位了（Claude Code 和官方账号都是 Opus）：不再加一位
+    const want = h.model.model ?? h.model.label;
+    if (want && reg.agents.some((a) => agentKind(a) === 'cli' && toolFamily(a.harness) === toolFamily(h.id) && sameModel(memberModel(a, report) ?? '', want))) continue;
     let name = DEFAULT_NAMES[h.id] ?? h.id;
     for (let i = 2; names.has(name); i++) name = `${DEFAULT_NAMES[h.id] ?? h.id}${i}`;
     names.add(name);
@@ -226,7 +234,7 @@ export function syncRegistry(report: DetectReport): string[] {
   for (const p of report.providers) {
     if (p.needsConsent || p.state !== 'ok' || !p.model) continue;
     const same = reg.agents.find((a) => agentKind(a) === 'api' && a.api && a.api.baseUrl.replace(/\/+$/, '') === p.baseUrl.replace(/\/+$/, ''));
-    if (same) continue;
+    if (same || removed.has(`api:${p.baseUrl.replace(/\/+$/, '')}`)) continue;
     let name = p.id.replace(/[^a-zA-Z0-9_-]/g, '-');
     for (let i = 2; names.has(name); i++) name = `${p.id.replace(/[^a-zA-Z0-9_-]/g, '-')}${i}`;
     names.add(name);
@@ -234,21 +242,101 @@ export function syncRegistry(report: DetectReport): string[] {
     changes.push(`新加了模型接口 ${p.label}（${p.model}）。`);
   }
 
-  // 桌面程序：加进名单（你自己打开它接着做时，接力台知道它是谁、强还是弱）。
+  // 桌面程序：同一家的命令行 / 接口在名单里，就记在它身上（同一个账号、同一个模型，是一位）；不然单独加一位。
   for (const app of report.apps) {
     const def = APPS.find((x) => x.name === app.name);
-    if (!def) continue;
-    const exists = reg.agents.some((a) => agentKind(a) === 'app' && (a.name === def.id || (a.cmd ?? '').includes(`"${def.name}"`) || (a.cmd ?? '').includes(`-a ${def.name} `) || (a.cmd ?? '').endsWith(`-a ${def.name}`)));
+    if (!def || removed.has(`app:${def.name}`)) continue;
+    const exists = reg.agents.some((a) => appNameOf(agentKind(a) === 'app' ? a.cmd : a.app) === def.name || (agentKind(a) === 'app' && a.name === def.id));
     if (exists || names.has(def.id)) continue;
-    names.add(def.id);
     const q = /\s/.test(def.name) ? `"${def.name}"` : def.name;
-    reg.agents.push({ name: def.id, label: def.label, kind: 'app', cmd: `open -a ${q} {{dir}}`, tier: def.tier, detected: true });
+    const entry: AgentConfig = { name: def.id, label: def.label, kind: 'app', cmd: `open -a ${q} {{dir}}`, tier: def.tier, detected: true };
+    const sib = siblingOf(entry, reg.agents, report);
+    if (sib && !sib.app) {
+      sib.app = entry.cmd;
+      changes.push(`桌面程序 ${def.label} 记在了 ${agentLabel(sib)} 名下。`);
+      continue;
+    }
+    names.add(def.id);
+    reg.agents.push(entry);
     changes.push(`新加了桌面程序 ${def.label}。`);
   }
 
   if (changes.length) {
     backupRegistryOnce();
     saveRegistry(reg);
+  }
+  return [...changes, ...tidyRegistry(report)];
+}
+
+// ---- 同一家的并成一位 ----
+
+/**
+ * 桌面程序和它的命令行 / 接口是一家（同一个账号、同一个模型）。harness：同一家的命令行工具；api：同一家的接口（按地址、密钥来源认）；
+ * accept：只认用这种模型的（Claude 桌面版是官方账号，不会是被接到 DeepSeek 上的 Claude Code）。
+ */
+const FAMILIES: { app: RegExp; harness?: string[]; api?: RegExp; accept?: RegExp }[] = [
+  { app: /cursor/i, harness: ['cursor-agent'] },
+  { app: /zcode/i, harness: ['zcode'] },
+  { app: /mimo/i, api: /mimo/i },
+  { app: /deepseek/i, harness: ['dsh'] },
+  { app: /chatgpt|codex/i, harness: ['codex'] },
+  { app: /antigravity/i, harness: ['agy'] },
+  { app: /^claude$/i, harness: ['claude-official', 'claude'], accept: /claude|opus|sonnet|fable|haiku/i },
+];
+
+/** 桌面程序在名单里的同一家：命令行 / 接口的那一位。 */
+export function siblingOf(app: AgentConfig, all: AgentConfig[], report: DetectReport | null): AgentConfig | undefined {
+  const f = FAMILIES.find((x) => x.app.test(appNameOf(app.cmd) ?? app.label ?? app.name));
+  if (!f) return undefined;
+  for (const h of f.harness ?? []) {
+    const hit = all.find((x) => agentKind(x) === 'cli' && x.harness === h && (!f.accept || f.accept.test(memberModel(x, report) ?? '')));
+    if (hit) return hit;
+  }
+  return f.api ? all.find((x) => agentKind(x) === 'api' && f.api!.test(`${x.api?.baseUrl ?? ''} ${x.api?.keyFrom ?? ''}`)) : undefined;
+}
+
+/**
+ * 名单里重复的并成一位（识别完、接力台启动时各看一次，没有重复就什么都不改）：
+ * - 同一个工具、同一个模型的（Claude Code 和 Claude Code 官方账号都是 Opus 5.5）：留派活顺序靠前的那位；
+ * - 桌面程序并到同一家的命令行 / 接口上，记成它的 app（你自己接着做时打开它）。
+ * 同一个模型、不同工具的不并：常常是两份额度（Cursor 里的 Opus 和 Claude Code 的 Opus），额度用完换人时用得上。
+ */
+export function tidyRegistry(report: DetectReport | null = loadDetected()): string[] {
+  const reg = loadRegistry();
+  const order = loadAutoSettings().order;
+  const rank = (a: AgentConfig) => {
+    const i = order.indexOf(a.name);
+    return i >= 0 ? i : order.length + reg.agents.indexOf(a);
+  };
+  const gone = new Set<AgentConfig>();
+  const changes: string[] = [];
+  const cli = reg.agents.filter((a) => agentKind(a) === 'cli' && a.harness).sort((a, b) => rank(a) - rank(b));
+  cli.forEach((a, i) => {
+    const ma = memberModel(a, report);
+    if (gone.has(a) || !ma) return;
+    for (const b of cli.slice(i + 1)) {
+      const mb = memberModel(b, report);
+      if (gone.has(b) || toolFamily(a.harness) !== toolFamily(b.harness) || !mb || !sameModel(ma, mb)) continue;
+      gone.add(b);
+      if (!a.app && b.app) a.app = b.app;
+      changes.push(`「${agentLabel(b)}」和「${agentLabel(a)}」是同一个工具、同一个模型，并成了一位。`);
+    }
+  });
+  for (const a of reg.agents) {
+    if (agentKind(a) !== 'app' || gone.has(a)) continue;
+    const sib = siblingOf(
+      a,
+      reg.agents.filter((x) => !gone.has(x)),
+      report
+    );
+    if (!sib || sib.app) continue;
+    sib.app = a.cmd;
+    gone.add(a);
+    changes.push(`桌面程序「${agentLabel(a)}」记在了「${agentLabel(sib)}」名下。`);
+  }
+  if (gone.size) {
+    backupRegistryOnce();
+    saveRegistry({ ...reg, agents: reg.agents.filter((a) => !gone.has(a)) });
   }
   return changes;
 }

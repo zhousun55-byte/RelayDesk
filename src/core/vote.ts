@@ -57,10 +57,10 @@ export interface Vote {
   error?: string;
 }
 
-export function readVotes(root: string): Vote[] {
+export function readVotes(root: string, file = talkPath(root)): Vote[] {
   let text = '';
   try {
-    text = fs.readFileSync(talkPath(root), 'utf8');
+    text = fs.readFileSync(file, 'utf8');
   } catch {
     return [];
   }
@@ -286,7 +286,7 @@ export function adoptOption(root: string, id: string, key: string): Vote {
   const o = v.options.find((x) => x.key === key);
   if (!o) throw new RelayError(`没有方案 ${key}。`, 'bad-key');
   const count = v.counts?.[key] ?? 0;
-  const by = /[\u4e00-\u9fff]$/.test(o.authorLabel) ? `${o.authorLabel}出的` : `${o.authorLabel} 出的`;
+  const by = /[\u4e00-\u9fff\uff00-\uffef]$/.test(o.authorLabel) ? `${o.authorLabel}出的` : `${o.authorLabel} 出的`;
   appendRule(root, `${v.question.replace(/\s+/g, ' ').slice(0, 60)} → 采用方案 ${key}（${count} 票，${by}）：${firstLine(o.text)}`);
   return save(root, { ...v, adopted: { key, at: new Date().toISOString() } });
 }

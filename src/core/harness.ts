@@ -201,17 +201,62 @@ export function codexSettings(): { model?: string; effort?: string; provider?: s
 }
 
 /**
- * Cursor Agent 的 ~/.cursor/cli-config.json：当前选的模型。
- * 命令行 --model 要的名字是显示名转出来的（「Cursor Grok 4.6 High Fast」→ cursor-grok-4.6-high-fast），
- * 配置里的 modelId（grok-4.6）命令行不认。
+ * Cursor 用的模型：以桌面版对话框里选的为准（你平时在 Cursor 里用的就是它），没有再看命令行自己的 ~/.cursor/cli-config.json。
+ * 命令行 --model 认的是「旧名」（grok-4.7-high-fast、cursor-grok-4.6-high-fast）：桌面版记的是模型加参数（grok-4.7、高思考、快），
+ * 按参数在它的模型表里找到对应的旧名。
  */
 export function cursorSettings(): { model?: string; label?: string } {
+  const desk = cursorDesktopModel(cursorState());
+  if (desk) return desk;
   const j = readJson(path.join(home(), '.cursor', 'cli-config.json')) ?? {};
   const m = obj(j.model);
-  const sel = obj(j.selectedModel);
   const display = strOf(m.displayName);
-  const id = display ? display.toLowerCase().replace(/\s+/g, '-') : strOf(sel.modelId) ?? strOf(m.modelId);
-  return { model: id, label: display?.replace(/^Cursor\s+/, '') ?? id };
+  const id = strOf(m.displayModelId) ?? strOf(m.modelId) ?? strOf(obj(j.selectedModel).modelId);
+  // 旧版配置里 modelId 只是模型本身（grok-4.6，命令行不认），命令行要的名字藏在显示名里（「Cursor Grok 4.6 High Fast」）
+  const bare = !id || /^[a-z]+-\d+(\.\d+)?$/i.test(id);
+  const model = bare && display ? display.toLowerCase().replace(/\s+/g, '-') : id;
+  return { model, label: display?.replace(/^Cursor\s+/, '') ?? model };
+}
+
+/** 桌面版的设置（Cursor 的 SQLite 库里的一条 JSON）：模型表和对话框里选的。读不到就是 null。 */
+let cursorCache: { key: string; value: unknown } | null = null;
+function cursorState(): unknown {
+  const base = process.platform === 'darwin' ? path.join(home(), 'Library', 'Application Support') : process.platform === 'win32' ? process.env.APPDATA ?? '' : path.join(home(), '.config');
+  const db = path.join(base, 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+  let key = '';
+  try {
+    key = [db, `${db}-wal`].map((f) => (fs.existsSync(f) ? fs.statSync(f).mtimeMs : 0)).join('/');
+  } catch {
+    return null;
+  }
+  if (key.startsWith('0/')) return null;
+  if (cursorCache?.key === key) return cursorCache.value;
+  const sqlite = which('sqlite3');
+  let value: unknown = null;
+  if (sqlite) {
+    const r = spawnSync(sqlite, ['-readonly', db, "select value from ItemTable where key = 'src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser'"], { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024 * 1024 });
+    try {
+      value = r.status === 0 && r.stdout.trim() ? JSON.parse(r.stdout) : null;
+    } catch {
+      value = null;
+    }
+  }
+  cursorCache = { key, value };
+  return value;
+}
+
+/** 从桌面版的设置里找出对话框选的模型，换成命令行认的名字。没选（默认 / 自动）或者对不上就是 null。 */
+export function cursorDesktopModel(state: unknown): { model: string; label: string } | null {
+  const s = obj(state);
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(obj) : []);
+  const sel = list(obj(obj(obj(s.aiSettings).modelConfig).composer).selectedModels)[0];
+  const id = strOf(sel?.modelId);
+  if (!sel || !id || id === 'default') return null;
+  const want = new Map(list(sel.parameters).map((p) => [strOf(p.id), strOf(p.value)]));
+  const def = list(s.availableDefaultModels2).find((m) => m.name === id);
+  const v = def && list(def.variants).find((x) => list(x.parameterValues).every((p) => want.get(strOf(p.id)) === strOf(p.value)));
+  const slug = strOf(v?.legacySlug);
+  return slug && def ? { model: slug, label: strOf(def.clientDisplayName) ?? id } : null;
 }
 
 /** ZCode 的 ~/.zcode/v2/config.json：启用的接口里的模型（不带 Flash 的优先）。 */
@@ -528,7 +573,9 @@ const cursorAgent: HarnessSpec = {
     if (i.readOnly) a.push('--mode', 'ask');
     // --force：不再逐个确认；安全档同时打开 Cursor 自己的沙箱（命令只能写工作目录）。
     else a.push('--force', '--sandbox', i.level === 'full' ? 'disabled' : 'enabled');
-    if (i.model) a.push('--model', i.model);
+    // 名单里没指定：用你在 Cursor 里选的（命令行自己的默认可能还停在旧模型上）
+    const model = i.model ?? cursorSettings().model;
+    if (model) a.push('--model', model);
     a.push(i.prompt);
     return { argv: a, format: 'cursor' };
   },
@@ -708,7 +755,10 @@ const antigravity: HarnessSpec = {
     if (fs.existsSync(path.join(home(), '.gemini', 'oauth_creds.json'))) return { state: 'ok', detail: '找到 Google 登录凭据' };
     return { state: 'no', detail: '没找到登录凭据' };
   },
-  model: () => ({}),
+  model() {
+    const m = strOf(readJson(path.join(home(), '.gemini', 'antigravity-cli', 'settings.json'))?.model);
+    return m ? { model: m, label: m } : {};
+  },
   invoke(loc, i) {
     const a = [...loc.exec, '-p', i.prompt, '--output-format', 'stream-json'];
     if (i.readOnly) a.push('--mode', 'plan');
@@ -786,7 +836,13 @@ const opencode: HarnessSpec = {
   loginHint: '在终端运行 opencode auth login。',
   locate: () => locateBin('opencode'),
   login: () => ({ state: 'unknown', detail: '看不出登录状态' }),
-  model: () => ({}),
+  model() {
+    // 配置里写的是「接口/模型」（deepseek/deepseek-flash）
+    const m = strOf(readJson(path.join(home(), '.config', 'opencode', 'opencode.json'))?.model);
+    if (!m) return {};
+    const cut = m.indexOf('/');
+    return { model: m, label: m.slice(cut + 1), ...(cut > 0 ? { via: m.slice(0, cut) } : {}) };
+  },
   invoke(loc, i) {
     const a = [...loc.exec, 'run'];
     if (i.readOnly) a.push('--agent', 'plan');

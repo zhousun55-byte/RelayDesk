@@ -67,10 +67,14 @@ export interface AgentConfig {
   effort?: string;
   /** 这一条是「自动识别」加进来的。 */
   detected?: boolean;
+  /** 同一个模型的桌面程序（打开文件夹的命令，含 {{dir}}）：你自己接着做时打开它。和命令行 / 接口是同一家、同一个账号，所以并成一位。 */
+  app?: string;
 }
 
 export interface AgentsRegistry {
   agents: AgentConfig[];
+  /** 你删掉的（识别时认的记号：h:工具、api:接口地址、app:桌面程序）：再识别也不加回来。 */
+  removed?: string[];
 }
 
 /**

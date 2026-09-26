@@ -138,7 +138,7 @@ test('全自动：弱模型干一棒 → 强模型复核 → 再干 → 再复�
   s.relay(['init']);
   s.relay(['task', '做两件事', '--step', '第一件', '第二件']);
   const out = s.relay(['auto']);
-  assert.match(out, /完成：验收通过：清单 2\/2 全部打勾，Codex · gpt-6 终审过了/);
+  assert.match(out, /完成：验收通过：清单 2\/2 全部打勾，GPT-6 终审过了/);
   const st = s.stints();
   assert.deepEqual(
     st.map((x) => [x.kind, x.who.member]),
@@ -179,7 +179,7 @@ test('全自动：终审没做成，不说「终审过了」，停下来说清�
   s.relay(['init']);
   s.relay(['task', '做一件事', '--step', '第一件']);
   const out = s.relay(['auto']);
-  assert.match(out, /任务清单都打勾了，但终审没做成（Codex · gpt-6 出错了/);
+  assert.match(out, /任务清单都打勾了，但终审没做成（GPT-6 出错了/);
   assert.doesNotMatch(out, /终审过了/);
   assert.deepEqual(
     s.stints().map((x) => [x.kind, x.who.member, x.status]),
@@ -389,7 +389,7 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   assert.equal(det.model.model, 'opus', '名单上显示实际会用的');
   assert.match(det.note, /claude update/, '告诉你升级命令行就能用上');
   fs.writeFileSync(path.join(s.base, 'fake.log'), '');
-  assert.match(s.relay(['talk', '说一句', '--ask', 'claude-official']), /Claude Code 官方账号 · opus：/, '署名写实际用的');
+  assert.match(s.relay(['talk', '说一句', '--ask', 'claude-official']), /Claude Opus：/, '署名是实际用的模型');
   const talkCalls = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n');
   assert.equal(talkCalls.length, 1, `记下来之后直接用 opus，不再先试一次：\n${talkCalls.join('\n')}`);
   assert.match(talkCalls[0], /--model opus/);
@@ -397,7 +397,7 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   fs.rmSync(path.join(s.home, '.relay', 'cli-models.json'));
   s.relay(['detect', '--offline']);
   fs.writeFileSync(path.join(s.base, 'fake.log'), '');
-  assert.match(s.relay(['talk', '再说一句', '--ask', 'claude-official']), /Claude Code 官方账号 · opus：claude 的看法/);
+  assert.match(s.relay(['talk', '再说一句', '--ask', 'claude-official']), /Claude Opus：claude 的看法/);
   assert.deepEqual(
     fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n').map((l) => l.match(/--model (\S+)/)?.[1]),
     ['claude-opus-5-5', 'opus']
@@ -449,7 +449,7 @@ test('群聊：轮流说、各自先想；投票不投自己，一个 AI 一票'
   const s = prepared('talk');
   s.relay(['init', '做滤镜']);
   const t1 = s.relay(['talk', '先做哪个？', '--ask', 'claude,codex']);
-  assert.match(t1, /Claude Code · deepseek-v4-flash：claude 的看法：同意/);
+  assert.match(t1, /DeepSeek V4 Flash：claude 的看法：同意/, '署名是它实际用的模型（Claude Code 接的是 DeepSeek）');
   const t2 = s.relay(['talk', '各自说说', '--ask', 'claude,codex', '--solo']);
   assert.match(t2, /claude 独立想了想/);
   assert.match(t2, /codex 独立想了想/);

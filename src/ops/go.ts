@@ -12,6 +12,7 @@ import { countedReviews, loadLedger, nextStintId, pendingReviews, requireInit, s
 import { runLlmAgent } from '../core/llm-agent';
 import { pidAlive } from '../core/proc';
 import { allMembers, orderMembers, readyMembers, type MemberInfo } from '../core/members';
+import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc } from '../core/notes';
 import { finalPrompt, reviewPrompt, workPrompt } from '../core/prompts';
 import { clearQuota, detectQuota, markQuota, untilText } from '../core/quota';
@@ -65,6 +66,9 @@ export interface GoHooks {
   onUpdate?: (s: GoState) => void;
   onLine?: (line: string) => void;
 }
+
+/** 给人看的名字：它用的模型（GPT-6 Sol），认不出模型写工具名。 */
+const nameOf = (m: MemberInfo) => llmName(m.model) || m.label;
 
 function runsDir(root: string): string {
   return path.join(root, '.relay', 'runs');
@@ -165,7 +169,7 @@ function agoText(ms: number): string {
 }
 
 function nativeActiveError(a: { stint: Stint; idleMs: number }): RelayError {
-  return new RelayError(`第 ${a.stint.id} 棒（${a.stint.who.label}）${agoText(a.idleMs)}还在改这个文件夹。确认它已经停下（额度用完、关掉了）再换人，不然两个 AI 会同时改文件。`, 'native-active');
+  return new RelayError(`第 ${a.stint.id} 棒（${whoName(a.stint.who)}）${agoText(a.idleMs)}还在改这个文件夹。确认它已经停下（额度用完、关掉了）再换人，不然两个 AI 会同时改文件。`, 'native-active');
 }
 
 export function loadGoState(root: string): GoState | null {
@@ -437,8 +441,8 @@ class GoRunner {
       const h = v.open.handoff ? readHandoff(root, v.open.handoff) : null;
       const idle = Math.round((Date.now() - Date.parse(v.open.activeAt ?? v.open.startedAt)) / 60_000);
       const note = active
-        ? `接力台派 ${m.label} 接手时，这一棒还没交接；你确认过它已经停下。`
-        : `接力台派 ${m.label} 接手时，这一棒还没交接（它已经 ${idle} 分钟没改文件了；接力台没法确认它真的停了，只是账面上结束）。`;
+        ? `接力台派 ${nameOf(m)} 接手时，这一棒还没交接；你确认过它已经停下。`
+        : `接力台派 ${nameOf(m)} 接手时，这一棒还没交接（它已经 ${idle} 分钟没改文件了；接力台没法确认它真的停了，只是账面上结束）。`;
       closeStint(root, { ...v.open, ...(active ? { stopConfirmed: true } : {}) }, { status: h ? 'handed' : 'unfinished', to: takeSnapshot(root, '换人接手').sha, handoff: h, note }, cfg);
       v = loadLedger(root);
     }
@@ -474,7 +478,7 @@ class GoRunner {
     const what = kind === 'review' ? '复核' : kind === 'final' ? '终审' : '干活';
     this.state.current = { stint: id, member: m.name, label: who.label, kind, since: stint.startedAt, log: logRel };
     this.state.stints.push(id);
-    this.phase(`第 ${id} 棒：${who.label} 正在${what}…`);
+    this.phase(`第 ${id} 棒：${whoName(who)} 正在${what}…`);
     const log = this.logger(logAbs);
     log(`# ${stintTitle(stint)}（${tierWord(who.tier)}）${what}${targets.length ? `：第 ${targets.map((t) => t.id).join('、')} 棒` : ''}`);
 
@@ -625,7 +629,7 @@ class GoRunner {
     const ms = Math.max(0, new Date(m.cooling).getTime() - Date.now()) + 30_000;
     this.state.status = 'waiting';
     this.state.waitingUntil = m.cooling;
-    this.phase(`${why}等 ${m.label} 的额度恢复（${untilText(m.cooling)}）。`);
+    this.phase(`${why}等 ${nameOf(m)} 的额度恢复（${untilText(m.cooling)}）。`);
     await this.sleep(Math.min(ms, 6 * 3600_000));
     delete this.state.waitingUntil;
     this.state.status = 'running';
@@ -644,13 +648,13 @@ class GoRunner {
       if (this.opts.who) {
         m = all.find((x) => x.name === this.opts.who) ?? null;
         if (!m) throw new RelayError(`名单里没有「${this.opts.who}」。`, 'no-agent');
-        if (!m.canWork) throw new RelayError(`「${m.label}」接力台调度不了：${m.why ?? '不能用'}。`, 'cannot-drive');
+        if (!m.canWork) throw new RelayError(`「${nameOf(m)}」接力台调度不了：${m.why ?? '不能用'}。`, 'cannot-drive');
       } else {
         m = this.pick(kind === 'review');
         if (!m) throw new RelayError(kind === 'review' ? '现在没有能复核的强模型（都没额度了，或者没登录）。' : '现在没有能调度的 AI（都没额度了，或者没登录）。', 'nobody');
       }
       if (kind === 'review') {
-        if (m.tier !== 'strong') throw new RelayError(`复核要强模型来做：${m.label}${m.model ? `（${m.model}）` : ''}算弱，它写的复核不算数。换一位强模型；你觉得它其实够强，就在「设置」里把它改成强。`, 'weak-reviewer');
+        if (m.tier !== 'strong') throw new RelayError(`复核要强模型来做：${nameOf(m)} 算弱，它写的复核不算数。换一位强模型；你觉得它其实够强，就在「设置」里把它改成强。`, 'weak-reviewer');
         const targets = pendingReviews(v);
         if (!targets.length) return this.finish('done', '没有待复核的棒。');
         const o = await this.runStint(m, 'review', targets);
@@ -666,8 +670,8 @@ class GoRunner {
   private finishOnce(o: StintOutcome, what: string): GoState {
     const s = o.stint;
     if (s.status === 'stopped') return this.finish('stopped', `已停止。第 ${s.id} 棒改到一半的东西都在文件夹里，账上也记了。`);
-    if (s.status === 'quota') return this.finish('needs-human', `${s.who.label} 额度用完了（${s.quotaUntil ? untilText(s.quotaUntil) : '不知道什么时候恢复'}）。换一位接着做吧。`);
-    if (s.status === 'failed') return this.finish('failed', `${s.who.label} 出错了：${s.note ?? ''}`);
+    if (s.status === 'quota') return this.finish('needs-human', `${whoName(s.who)} 额度用完了（${s.quotaUntil ? untilText(s.quotaUntil) : '不知道什么时候恢复'}）。换一位接着做吧。`);
+    if (s.status === 'failed') return this.finish('failed', `${whoName(s.who)} 出错了：${s.note ?? ''}`);
     const rv = s.review === 'needed' ? '（弱模型的活，等强模型复核）' : '';
     return this.finish('done', `${what}做完了：${s.summary || (o.changed ? '改了文件' : '没改文件')}${rv}`);
   }
@@ -782,7 +786,7 @@ class GoRunner {
               idle = 0;
               continue;
             }
-            return this.finish('needs-human', `${w.label} 说做不下去了${o.handoff?.next ? `：${clip(o.handoff.next, 200)}` : ''}。看看它的交接，给点指示再继续。`);
+            return this.finish('needs-human', `${nameOf(w)} 说做不下去了${o.handoff?.next ? `：${clip(o.handoff.next, 200)}` : ''}。看看它的交接，给点指示再继续。`);
           }
         } else idle = 0;
       }

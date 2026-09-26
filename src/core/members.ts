@@ -1,4 +1,4 @@
-import { listMembers, loadDetected, memberModel, type DetectReport } from './detect';
+import { listMembers, loadDetected, memberModel, siblingOf, type DetectReport } from './detect';
 import type { Level } from './harness';
 import { coolingUntil, loadQuota } from './quota';
 import { agentKind, agentLabel, canTalk, loadRegistry } from './registry';
@@ -25,30 +25,6 @@ export interface MemberInfo extends MemberLike {
   tierSet: boolean;
 }
 
-/**
- * 桌面程序和它的命令行 / 接口是一家：桌面版看不出用的哪个模型，就借同一家的来定强弱（按 siblings 的顺序找）。
- * accept：只借这样的模型（Claude 桌面版用的是官方账号，不会是 Claude Code 被接上的 DeepSeek）。
- */
-const FAMILIES: { app: RegExp; siblings: string[]; accept?: RegExp }[] = [
-  { app: /^cursor$|cursor/i, siblings: ['cursor-agent'] },
-  { app: /zcode/i, siblings: ['zcode-cli', 'zcode'] },
-  { app: /mimo/i, siblings: ['mimo-api'] },
-  { app: /deepseek/i, siblings: ['deepseek-harness', 'deepseek'], accept: /deepseek/i },
-  { app: /chatgpt|^gpt$|codex/i, siblings: ['codex'] },
-  { app: /antigravity/i, siblings: ['agy'] },
-  { app: /^claude(-app)?$/i, siblings: ['claude-official', 'claude'], accept: /claude|opus|sonnet|fable|haiku/i },
-];
-
-function siblingModel(a: AgentConfig, all: MemberInfo[]): string | undefined {
-  const f = FAMILIES.find((x) => x.app.test(a.name) || x.app.test(a.label ?? ''));
-  if (!f) return undefined;
-  for (const name of f.siblings) {
-    const m = all.find((x) => x.kind !== 'app' && x.name === name && x.model);
-    if (m?.model && (!f.accept || f.accept.test(m.model))) return m.model;
-  }
-  return undefined;
-}
-
 export function allMembers(level: Level = 'safe', report: DetectReport | null = loadDetected(), now = new Date()): MemberInfo[] {
   const quota = loadQuota();
   const auto = new Map(listMembers(level, report).map((m) => [m.name, m]));
@@ -70,10 +46,15 @@ export function allMembers(level: Level = 'safe', report: DetectReport | null = 
       out.push({ ...base, kind: 'harness', canWork: false, why: a.harness ? '这台电脑上找不到它' : '不认得这个命令，只能你自己在终端里用' });
     }
   }
-  // 桌面程序没设过强弱：借同一家命令行 / 接口的模型来判断（ZCode 桌面版和 ZCode 命令行用的是同一个 GLM）。
+  // 还没并进同一家的桌面程序（刚加进来、还没识别过）：借那一位的模型来判断强弱（ZCode 桌面版和 ZCode 命令行用的是同一个 GLM）。
   for (const m of out) {
     if (m.kind !== 'app' || m.tierSet || m.model) continue;
-    const sm = siblingModel(m.agent, out);
+    const sib = siblingOf(
+      m.agent,
+      out.map((x) => x.agent),
+      report
+    );
+    const sm = sib && memberModel(sib, report);
     if (!sm) continue;
     m.model = sm;
     m.tier = memberTier(m.agent, sm);
