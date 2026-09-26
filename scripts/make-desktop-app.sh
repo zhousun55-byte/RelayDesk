@@ -63,6 +63,15 @@ trap 'rm -rf "$TMP"' EXIT
 chmod +x "$LAUNCHER"
 mkdir -p "$DEST"
 
+# 先装依赖、编译好（第一次要一两分钟），小程序一启动接力台马上就能用。
+command -v node >/dev/null 2>&1 || { print -u2 "找不到 Node.js（需要 20 或更新的版本）。先到 https://nodejs.org 安装，再执行一次这个脚本。"; exit 1; }
+if [[ ! -d "$DIR/node_modules" ]]; then
+  print "安装依赖……"
+  (cd "$DIR" && npm install --no-audit --no-fund >/dev/null) || { print -u2 "安装依赖失败：在 $DIR 里执行 npm install 看看原因。"; exit 1; }
+fi
+print "编译……"
+(cd "$DIR" && npm run build >/dev/null) || { print -u2 "编译失败：在 $DIR 里执行 npm run build 看看原因。"; exit 1; }
+
 # 0. 旧的先退出；以前放在桌面上的挪进废纸篓。
 quit_app
 if [[ "$OLD_APP" != "$APP" ]] && ours "$OLD_APP"; then
@@ -186,6 +195,22 @@ EOF
 launchctl bootout "gui/$(id -u)/$AGENT_LABEL" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST"
 
+# 6. 等它在后台起来，打开网页（第一次打开会先识别这台电脑上装了哪些 AI，十几秒）。
+url=
+for i in {1..60}; do
+  for p in {7388..7397}; do
+    if curl -s -m 1 "http://127.0.0.1:$p/api/ping" 2>/dev/null | grep -q '"app":"relay"'; then
+      url="http://127.0.0.1:$p/"
+      break 2
+    fi
+  done
+  sleep 1
+done
 print "已生成：$APP"
-print "接力台已经在后台运行，以后登录电脑时也会自己启动；桌面和程序坞上都不会有它的图标。"
-print "打开网页：在启动台或聚焦搜索（⌘ 空格）里打开「接力台」，或者在浏览器里打开 http://127.0.0.1:7388"
+if [[ -n "$url" ]]; then
+  print "接力台已经在后台运行，以后登录电脑时也会自己启动；桌面和程序坞上都不会有它的图标。"
+  [[ -n "${RELAY_NO_BROWSER:-}" ]] || open "$url"
+  print "网页：$url （以后在启动台或聚焦搜索里打开「接力台」就行）"
+else
+  print -u2 "接力台一分钟内没有起来，记录在 ${RELAY_HOME:-$HOME/.relay}/ui.log。在启动台里打开「接力台」再试一次。"
+fi

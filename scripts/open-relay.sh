@@ -5,13 +5,14 @@
 #   open-relay.sh --check       接力台在运行返回 0；你在网页上点了「关闭」返回 3（小程序跟着退出）；没在运行返回 1（小程序重新拉起）。
 #   open-relay.sh --quit        请接力台正常关闭（小程序退出时调用）。
 # 不弹「终端」窗口。接力台的输出记在 ~/.relay/ui.log；出错时把原因写到标准错误，由小程序弹窗告诉你。
-# 设了 RELAY_NO_BROWSER=1 时不开浏览器（测试用）。
+# 设了 RELAY_NO_BROWSER=1 时不开浏览器、不弹通知（测试用）；RELAY_PORT 换端口（默认 7388，被占着时往后顺延）。
 
 DIR="${0:A:h:h}"
 RELAY_DIR="${RELAY_HOME:-$HOME/.relay}"
 LOG="$RELAY_DIR/ui.log"
 # 你在网页上点了「关闭」时，接力台留下的记号（见 src/ops/keeper.ts）。
 STOPPED="$RELAY_DIR/ui-stopped"
+PORT="${RELAY_PORT:-7388}"
 
 fail() {
   print -u2 -r -- "$1"
@@ -19,13 +20,14 @@ fail() {
 }
 
 notify() {
+  [[ -n "${RELAY_NO_BROWSER:-}" ]] && return
   osascript -e "display notification \"$1\" with title \"接力台\"" >/dev/null 2>&1 || true
 }
 
 # 正在运行的接力台在哪个端口（7388 被别的程序占着时它会往后顺延，最多 10 个）。
 running_port() {
   local p
-  for p in {7388..7397}; do
+  for p in {$PORT..$((PORT + 9))}; do
     if curl -s -m 1 "http://127.0.0.1:$p/api/ping" 2>/dev/null | grep -q '"app":"relay"'; then
       print -r -- "$p"
       return 0
@@ -48,7 +50,7 @@ case "${1:-}" in
       running_port >/dev/null && exit 0
       sleep 1
     done
-    pgrep -f 'cli\.js ui --no-open$' >/dev/null 2>&1 && exit 0
+    pgrep -f "cli\\.js ui --no-open( --port $PORT)?\$" >/dev/null 2>&1 && exit 0
     [[ -f "$STOPPED" ]] && exit 3
     exit 1
     ;;
@@ -107,10 +109,10 @@ print -r -- "==== $(date '+%Y-%m-%d %H:%M:%S') 由「接力台」小程序启动
 node -e '
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-const [cli, log] = process.argv.slice(1);
+const [cli, log, port] = process.argv.slice(1);
 const out = fs.openSync(log, "a");
-spawn(process.execPath, [cli, "ui", "--no-open"], { detached: true, stdio: ["ignore", out, out] }).unref();
-' "$DIR/dist/src/cli.js" "$LOG" || fail "启动接力台失败。详情见 $LOG"
+spawn(process.execPath, [cli, "ui", "--no-open", "--port", port], { detached: true, stdio: ["ignore", out, out] }).unref();
+' "$DIR/dist/src/cli.js" "$LOG" "$PORT" || fail "启动接力台失败。详情见 $LOG"
 
 for i in {1..60}; do
   sleep 0.5
