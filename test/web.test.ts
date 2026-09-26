@@ -87,3 +87,82 @@ test('网页的图标：规则里用到的每家都画了，几何图形也都�
   assert.equal(new Set(SHAPES).size, SHAPES.length, '几何图形不重样');
   assert.equal(new Set(Object.values(GLYPHS)).size, Object.keys(GLYPHS).length, '每个图形都不一样');
 });
+
+test('网页：全自动的结果只出现在它开始时的那段对话里（换了任务，上一个任务的「验收通过」不跑到新任务里）', () => {
+  const code = ['msOf', 'rangeOf', 'inRange', 'streamItems'].map(pick).join('\n\n');
+  const ctx: Record<string, unknown> = {};
+  vm.runInNewContext(
+    `
+const t0 = { id: 't0', title: '给 wc.py 加 --json', from: '2026-09-25T13:30:00Z', to: '2026-09-25T14:07:00Z', stints: [] };
+const t1 = { id: 't1', title: '让 wc.py 读标准输入', from: '2026-09-25T14:07:00Z', to: null, stints: [], current: true };
+const S = {
+  st: { project: { task: { title: '让 wc.py 读标准输入', body: '', items: [] }, threads: [t0, t1], lastRollback: null, protocol: 'ok',
+    go: { id: 'g1', status: 'done', startedAt: '2026-09-25T13:42:00Z', updatedAt: '2026-09-25T13:49:36Z', result: '验收通过：清单 2/2 全部打勾' } } },
+  talk: { status: { speaking: [], queue: [] } },
+  dismissed: '',
+};
+const threads = () => S.st.project.threads;
+const threadStints = () => [];
+const threadTalk = () => ({ rows: [], votes: [] });
+const looks = { key: '' };
+${code}
+const has = (t) => streamItems(t).some((it) => String(it.key).startsWith('res:'));
+result = [has(t0), has(t1)];
+S.st.project.go = { ...S.st.project.go, id: 'g2', startedAt: '2026-09-25T14:20:00Z', updatedAt: '2026-09-25T14:30:00Z' };
+result.push(has(t0), has(t1));`,
+    ctx
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.result)), [true, false, false, true], '上一个任务的全自动结果在上一段；新任务里跑的在新的一段');
+});
+
+test('网页设置：各页返回的空位不进页面（以前「项目」页在接力规矩是最新时会显示一个「null」）', () => {
+  const code = ['openSettings', 'settingsBody'].map(pick).join('\n\n');
+  const run = (protocol: string) => {
+    const ctx: Record<string, unknown> = {};
+    vm.runInNewContext(
+      `
+const node = (tag) => ({ tag, kids: [], replaceChildren(...k) { this.kids = k; }, append(...k) { this.kids.push(...k); }, addEventListener() {} });
+const h = (tag, props, ...kids) => { const n = node(tag); n.kids = kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false); return n; };
+const icon = () => 'i';
+let settingsTab = 'members', settingsRender = null;
+let pane = null;
+const sheet = ({ body }) => { pane = body.kids[1]; return () => {}; };
+const savedMark = () => ({ el: 'mark', flash() {} });
+const S = { st: { project: { init: true, protocol: '${protocol}', config: { gate: 'npm test', protectedPaths: [] } } } };
+${code}
+openSettings('project');
+result = pane.kids.map((k) => (k === null ? 'null' : typeof k === 'string' ? k : k.tag));`,
+      ctx
+    );
+    return JSON.parse(JSON.stringify(ctx.result)) as string[];
+  };
+  assert.ok(!run('ok').includes('null'), '接力规矩是最新的：不留空位');
+  assert.equal(run('ok').length, 4, '关闭按钮、标题、检查命令、保护的文件');
+  assert.equal(run('old').length, 5, '接力规矩有新版本：多一行「更新」');
+});
+
+test('网页 ▾ 菜单的「打开」：只列桌面程序，命令行工具不弹终端窗口（在「只做一棒」里由接力台派活）', () => {
+  const code = ['whoMenu'].map(pick).join('\n\n');
+  const ctx: Record<string, unknown> = {};
+  vm.runInNewContext(
+    `
+const list = [
+  { name: 'codex', label: 'Codex', kind: 'harness', agent: { cmd: 'codex' }, canWork: true, tier: 'strong', model: 'gpt-6-sol' },
+  { name: 'cursor', label: 'Cursor', kind: 'app', canWork: false },
+  { name: 'claude', label: 'Claude Code', kind: 'harness', agent: { cmd: 'claude' }, canWork: true, tier: 'weak', model: 'deepseek-flash' },
+  { name: 'gpt', label: 'ChatGPT', kind: 'app', canWork: false },
+];
+const members = () => list;
+const tile = () => null, goWith = () => {}, openIn = () => {}, copyHint = () => {};
+let items = null;
+const openMenu = (_a, it) => { items = it; };
+${code}
+whoMenu(null);
+const at = items.findIndex((x) => x && x.head === '打开');
+result = { work: items.slice(1, at - 1).map((x) => x.label), open: items.slice(at + 1).filter((x) => x && x.label && x.run && x.label !== '复制开场白').map((x) => x.label) };`,
+    ctx
+  );
+  const r = JSON.parse(JSON.stringify(ctx.result)) as { work: string[]; open: string[] };
+  assert.deepEqual(r.work, ['Codex', 'Claude Code'], '命令行工具在「只做一棒」里');
+  assert.deepEqual(r.open, ['Cursor', 'ChatGPT'], '「打开」里只有桌面程序');
+});

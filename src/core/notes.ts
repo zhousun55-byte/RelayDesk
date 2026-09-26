@@ -375,7 +375,13 @@ function bullets(text: string): string[] {
   return out.filter((t) => !/^[（(].*[）)]$/.test(t));
 }
 
-const clip80 = (t: string) => (t.length > 80 ? `${t.slice(0, 80)}…` : t);
+/** 截到 80 个字。正好截在 `代码` 中间的，退到那个没配对的反引号前面再截（不然网页上会露出半个代码块）。 */
+const clip80 = (t: string) => {
+  if (t.length <= 80) return t;
+  let cut = t.slice(0, 80);
+  if ((cut.match(/`/g) ?? []).length % 2) cut = cut.slice(0, cut.lastIndexOf('`'));
+  return `${cut.trimEnd()}…`;
+};
 
 function firstBullet(text: string): string {
   return clip80(bullets(text)[0] ?? '');

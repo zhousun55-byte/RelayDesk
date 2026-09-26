@@ -344,6 +344,11 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
   // DeepSeek Harness 真实的写法（2026-09-25 原生冒烟测试）：一条写成三行，后两行缩进接着写。以前摘要停在「现在改成」
   const wrapped = parseHandoff('# 交接：DeepSeek Harness · deepseek-flash\n\n## 做了什么\n\n- 开工先读了 `.relay/接力本.md`。\n- 改 `slug.py` 的 `slugify`：原来会把汉字一起删掉；现在改成\n  `re.split(r"[\\W_]+", text)` 切段再用 `-` 连接。\n  汉字属于 `\\w`，所以原样保留。\n- 改 `test_slug.py`：新增 5 个测试。\n');
   assert.match(wrapped.summary, /^改 `slug\.py` 的 `slugify`：原来会把汉字一起删掉；现在改成 `re\.split\(r"\[\\W_\]\+", text\)` 切段/);
+  // Cursor Agent 真实的终审交接（2026-09-26 演示时看到）：截到 80 个字正好在 `代码` 中间，以前会露出半个反引号
+  const cut = parseHandoff('# 交接：Cursor Agent · Grok 4.6 Fast\n\n## 做了什么\n\n- 终审全程：对照任务两项；核对快照 `e223a04f00..01784087a2`（`slug.py`、`test_slug.py`、`reports/last-test-run.txt`）的全部差异。\n');
+  assert.ok(cut.summary.endsWith('…'));
+  assert.equal((cut.summary.match(/`/g) ?? []).length % 2, 0, `不留半个代码块：${cut.summary}`);
+  assert.match(cut.summary, /`test_slug\.py`、…$/);
   // Codex 在自己的工具里复核的真实写法（2026-09-25 原生冒烟测试）：以前挑成「没有修改 wc.py 或 test_wc.py。」
   const reviewing = parseHandoff('# 交接：Codex · gpt-6-sol\n\n## 做了什么\n\n- 已读接力本、第 7 棒交接和快照差异，核对了实际改动的三个文件。\n- 复核结论写入 `.relay/复核/第7棒.md`：没问题。\n- 在 `.relay/任务.md` 勾选第 7 棒复核进度。\n- 没有修改 `wc.py` 或 `test_wc.py`。\n');
   assert.equal(reviewing.summary, '复核结论写入 `.relay/复核/第7棒.md`：没问题。');

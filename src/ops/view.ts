@@ -3,7 +3,7 @@ import path from 'node:path';
 import { acceptance, pendingWhy, type Acceptance } from '../core/acceptance';
 import { loadAutoSettings } from '../core/auto-settings';
 import { countedReviews, loadLedger, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
-import { archivedTaskTitles, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
+import { archivedTaskTitles, handoffFilled, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
 import { protocolState } from '../core/protocol';
 import { untilText } from '../core/quota';
 import { goLogTail, loadGoState, type GoState } from './go';
@@ -82,7 +82,30 @@ export interface ProjectView {
   threads: ThreadView[];
 }
 
-function toView(s: Stint, rolledBack: ReadonlySet<number>): StintView {
+/**
+ * 一句话摘要：从交接文件现挑（挑法改进过，旧记录也跟着换）；接力台代写的、读不到的、没写内容的，用账本里记下的。
+ * 按文件和修改时间缓存：网页每隔几秒刷一次，不用每次都读交接文件。
+ */
+const summaryCache = new Map<string, { mtimeMs: number; summary: string }>();
+function liveSummary(root: string, s: Stint): string {
+  const kept = s.summary ?? '';
+  if (!s.handoff || s.ghost) return kept;
+  const file = path.join(root, s.handoff);
+  try {
+    const mtimeMs = fs.statSync(file).mtimeMs;
+    let hit = summaryCache.get(file);
+    if (!hit || hit.mtimeMs !== mtimeMs) {
+      const h = readHandoff(root, s.handoff);
+      hit = { mtimeMs, summary: h && handoffFilled(h) ? h.summary : '' };
+      summaryCache.set(file, hit);
+    }
+    return hit.summary || kept;
+  } catch {
+    return kept;
+  }
+}
+
+function toView(s: Stint, rolledBack: ReadonlySet<number>, summary = s.summary ?? ''): StintView {
   const counted = countedReviews(s, rolledBack).at(-1);
   const warn = s.review === 'needed' && s.status !== 'working' && !s.rolledBack && (!!counted || !!s.factsError);
   const reviewText = s.rolledBack
@@ -115,7 +138,7 @@ function toView(s: Stint, rolledBack: ReadonlySet<number>): StintView {
     statusWord: statusWord(s.status),
     startedAt: s.startedAt,
     ...(s.endedAt ? { endedAt: s.endedAt } : {}),
-    summary: s.summary ?? '',
+    summary,
     ...(s.facts ? { facts: s.facts } : {}),
     ...(s.factsError ? { factsError: s.factsError } : {}),
     ...(s.gate ? { gate: s.gate } : {}),
@@ -203,7 +226,7 @@ export function projectView(root: string): ProjectView {
     now = { kind: 'native', text: `第 ${v.open.id} 棒进行中：${v.open.who.label === '不知道是谁' ? '有 AI 在改文件（还没写交接，不知道是谁）' : `${v.open.who.label} 在做`}`, stint: v.open.id, since: v.open.startedAt };
   }
   const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
-  const views = v.stints.map((x) => toView(x, dropped));
+  const views = v.stints.map((x) => toView(x, dropped, liveSummary(root, x)));
   const lr = v.lastRollback;
   let finalRequired = true;
   try {
@@ -242,7 +265,7 @@ export function stintDetail(root: string, id: number): { stint: StintView; hando
     const r = readReview(root, s.reviewFile);
     if (r) reviews.push({ file: s.reviewFile, text: r.raw, by: s.who.label });
   }
-  return { stint: toView(s, dropped), handoff: h?.raw ?? null, reviews };
+  return { stint: toView(s, dropped, liveSummary(root, s)), handoff: h?.raw ?? null, reviews };
 }
 
 /** 调度日志（相对项目根目录的 .relay/runs/…）。 */

@@ -196,7 +196,8 @@ export function buildBrief(input: BriefInput): string {
             : x.kind === 'final' && x.verdict
               ? `终审结论：${verdictWord(x.verdict)}`
               : '';
-      const what = x.summary || h?.summary || '';
+      // 摘要从交接文件现挑（挑法改进过，旧记录也跟着换）；接力台代写的用记下的。
+      const what = (!x.ghost && h?.summary) || x.summary || '';
       s.push(`- ${stintTitle(x)}（${tierWord(x.who.tier)}）· ${when(x.endedAt)} · ${statusWord(x.status)}${rv ? ` · ${rv}` : ''}${what ? ` · ${what}` : ''}`);
     }
     s.push('');

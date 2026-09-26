@@ -1708,7 +1708,8 @@ async function editStep(body, local) {
 
 function whoMenu(anchor) {
   const drive = members().filter((m) => m.canWork);
-  const self = members().filter((m) => m.kind === 'app' || (m.kind === 'harness' && m.agent && m.agent.cmd));
+  // 自己接着做：只列桌面程序。命令行工具由接力台在后台派活（上面「只做一棒」），不弹终端窗口。
+  const self = members().filter((m) => m.kind === 'app');
   const items = [];
   if (drive.length) {
     items.push({ head: '只做一棒' });
@@ -1718,7 +1719,7 @@ function whoMenu(anchor) {
   }
   if (self.length) {
     items.push('-', { head: '打开' });
-    for (const m of self) items.push({ label: m.label, sub: m.kind === 'harness' ? '终端' : '', tile: tile(m, 's20'), run: () => openIn(m) });
+    for (const m of self) items.push({ label: m.label, tile: tile(m, 's20'), run: () => openIn(m) });
   }
   if (!items.length) items.push({ label: '没有成员', disabled: true });
   items.push('-', { label: '复制开场白', icon: 'copy', run: copyHint });
@@ -1886,8 +1887,9 @@ function streamItems(t) {
   for (const v of talk.votes) items.push({ key: `v:${v.id}`, at: voteBorn(v), sig: JSON.stringify([v, looks.key]), make: () => voteCard(v) });
   const rb = p.lastRollback;
   if (rb && inRange(rangeOf(t), msOf(rb.ts))) items.push({ key: `rb:${rb.ts}`, at: msOf(rb.ts), sig: String(rb.undone), make: () => rollbackLine(rb) });
+  // 全自动的结果：放在它开始时的那段对话里（换了任务之后，上一个任务的「验收通过」不能跑到新任务里）。
   const g = p.go;
-  if (latest && g && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && S.dismissed !== g.id) {
+  if (g && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && S.dismissed !== g.id && inRange(rangeOf(t), msOf(g.startedAt || g.updatedAt))) {
     items.push({ key: `res:${g.id}:${g.status}`, at: msOf(g.updatedAt) || Infinity, sig: g.result, make: () => resultLine(g) });
   }
   items.sort((a, b) => a.at - b.at);
@@ -3595,7 +3597,8 @@ function openSettings(tab) {
         )
       )
     );
-    pane.replaceChildren(h('button', { class: 'icon-btn close', 'aria-label': '关闭', onclick: () => close() }, icon('x')), ...settingsBody(settingsTab, draw));
+    // 各页返回的列表里可能有空位（比如接力规矩是最新的就没有「更新」那一行）：去掉，不然会显示成「null」。
+    pane.replaceChildren(h('button', { class: 'icon-btn close', 'aria-label': '关闭', onclick: () => close() }, icon('x')), ...settingsBody(settingsTab, draw).filter((x) => x !== null && x !== undefined && x !== false));
   };
   const close = sheet({
     title: '设置',

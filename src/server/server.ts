@@ -10,7 +10,7 @@ import { saveRelayConfig } from '../core/config';
 import { enableProvider, loadDetected, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { projectFiles, projectPath, readProjectFile } from '../core/files';
-import { copyToClipboard, fillTemplate, openTerminal, reveal, runOpener, shq, chooseFolder } from '../core/launch';
+import { copyToClipboard, fillTemplate, reveal, runOpener, chooseFolder } from '../core/launch';
 import { loadLedger, saveStint, type Stint } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
 import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
@@ -375,7 +375,7 @@ export function createServer(opts: ServerOptions): http.Server {
       return await trackAndGate(root);
     },
     '/api/open': async (q, b) => {
-      // 你自己接着做：用桌面程序打开这个文件夹 / 在终端里开编程工具，并把第一句话复制好。
+      // 你自己接着做：用桌面程序打开这个文件夹，并把第一句话复制好。命令行工具不弹终端窗口，由接力台在后台派活。
       const root = dirOf(q, b);
       requireProject(root);
       const a = findAgent(str(b.who) ?? '');
@@ -386,12 +386,7 @@ export function createServer(opts: ServerOptions): http.Server {
         if (r.code !== 0 && !r.lingering) throw new RelayError(`打不开：${r.output || `退出码 ${r.code}`}`, 'open-failed');
         return { opened: true, copied, hint: HINT };
       }
-      if (agentKind(a) === 'cli' && a.cmd) {
-        const first = a.prompt?.mode === 'arg' ? ` ${shq(HINT)}` : '';
-        const t = openTerminal(`cd ${shq(root)} && ${a.cmd}${first}`);
-        return { opened: t.ok, copied, hint: HINT, ...(t.ok ? {} : { error: t.error }) };
-      }
-      throw new RelayError('它没有可以打开的程序（接口模型用「让它接着做」）。', 'cannot-open');
+      throw new RelayError('它没有桌面程序可以打开：让接力台派它做一棒（「只做一棒」或「全自动」）。', 'cannot-open');
     },
     '/api/copy-hint': () => ({ copied: copyToClipboard(HINT), hint: HINT }),
     '/api/reveal': (q, b) => {

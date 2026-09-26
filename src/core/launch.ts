@@ -139,18 +139,6 @@ export function copyToClipboard(text: string): boolean {
   return r.status === 0;
 }
 
-/** 在「终端」里开一个新窗口跑命令（macOS）。RELAY_TERMINAL=off 时不开，交给调用方提示人自己跑。 */
-export function openTerminal(shellCmd: string): { ok: boolean; error?: string } {
-  if (process.env.RELAY_TERMINAL === 'off') return { ok: false, error: '没有自动打开终端' };
-  if (process.platform !== 'darwin') return { ok: false, error: '只有 macOS 能自动打开终端' };
-  const esc = shellCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const r = spawnSync('osascript', ['-e', 'tell application "Terminal"', '-e', 'activate', '-e', `do script "${esc}"`, '-e', 'end tell'], {
-    encoding: 'utf8',
-    timeout: 20_000,
-  });
-  return r.status === 0 ? { ok: true } : { ok: false, error: (r.stderr ?? '').trim() || '打不开终端' };
-}
-
 /** 在访达里打开一个文件夹 / 选中一个文件（macOS）。 */
 export function reveal(target: string): boolean {
   if (process.env.RELAY_TERMINAL === 'off' || process.platform !== 'darwin') return false;

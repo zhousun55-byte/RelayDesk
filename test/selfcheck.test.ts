@@ -25,6 +25,7 @@ const { acceptance } = require('../src/core/acceptance') as typeof import('../sr
 const ledger = require('../src/core/ledger') as typeof import('../src/core/ledger');
 const notes = require('../src/core/notes') as typeof import('../src/core/notes');
 const track = require('../src/ops/track') as typeof import('../src/ops/track');
+const view = require('../src/ops/view') as typeof import('../src/ops/view');
 const init = require('../src/ops/init') as typeof import('../src/ops/init');
 const talkMod = require('../src/core/talk') as Record<string, unknown>;
 const talk = talkMod as unknown as typeof import('../src/core/talk');
@@ -179,6 +180,33 @@ test('检查命令往哪写：只认写的位置（> 文件、tee、-o、--junit
   ];
   for (const [c, f] of yes) assert.equal(track.gateWrites(c, f), true, `${c} 写了 ${f}`);
   for (const [c, f] of no) assert.equal(track.gateWrites(c, f), false, `${c} 没写 ${f}`);
+});
+
+test('一句话摘要跟着交接文件：挑法改进之后，旧记录在网页和接力本里也换成新的；接力台代写的不动', () => {
+  registry([CODEX, DSH]);
+  const { root, write } = project('live-summary');
+  write(
+    '.relay/交接/第1棒-0925-1000-dsh.md',
+    '# 交接：DeepSeek Harness · deepseek-flash\n\n- 工具：DeepSeek Harness\n- 模型：deepseek-flash\n- 状态：已交接\n\n## 做了什么\n\n- 读了接力本。\n- 改 `a.txt`：原来是空的；现在改成\n  写了一行 hello。\n'
+  );
+  write('a.txt', 'hello\n');
+  track.track(root);
+  const s1 = ledger.loadLedger(root).stints[0];
+  // 旧代码当时存下的摘要（2026-09-25 的真实例子：停在「现在改成」）
+  ledger.saveStint(root, { ...s1, summary: '改 `a.txt`：原来是空的；现在改成' });
+  const live = '改 `a.txt`：原来是空的；现在改成 写了一行 hello。';
+  assert.equal(view.projectView(root).stints.find((x) => x.id === 1)?.summary, live, '网页');
+  assert.equal(view.stintDetail(root, 1)?.stint.summary, live, '展开的那一棒');
+  track.refreshBrief(root);
+  assert.match(fs.readFileSync(path.join(root, '.relay/接力本.md'), 'utf8'), /现在改成 写了一行 hello/, '接力本');
+
+  // 没留交接、接力台代写的：还是记下的那句
+  write('b.txt', 'x\n');
+  track.track(root);
+  track.track(root, { now: new Date(Date.now() + 2 * track.QUIET_MS_DEFAULT) });
+  const ghost = ledger.loadLedger(root).stints.find((x) => x.ghost);
+  assert.ok(ghost, '接力台替它代写了交接');
+  assert.equal(view.projectView(root).stints.find((x) => x.id === ghost!.id)?.summary, ghost!.summary);
 });
 
 test('只在清单里打勾、一个文件都没改的弱模型，也要复核（关了终审也不会「验收通过」）；强模型只打勾照旧不用复核', () => {
