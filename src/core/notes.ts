@@ -317,13 +317,14 @@ export interface HandoffDoc {
   bornMs?: number;
 }
 
-export function handoffTemplate(who: string, ts: string | Date = new Date()): string {
+/** 交接的格式（写在接力本里给 AI 照着建）。时间留给它自己填：写死当前时间的话，接力本每分钟都得重写一遍。 */
+export function handoffTemplate(who: string): string {
   return [
     `# 交接：${who}`,
     '',
     `- 工具：`,
     `- 模型：`,
-    `- 时间：${stampLocal(ts)}`,
+    `- 时间：YYYY-MM-DD HH:MM（开工的时间）`,
     '- 状态：进行中',
     '',
     '## 做了什么',

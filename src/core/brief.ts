@@ -237,7 +237,7 @@ export function buildBrief(input: BriefInput): string {
   );
   if (input.gateCommand) s.push(`5. 收工前跑一遍检查：\`${input.gateCommand}\`，没通过要写进交接。`);
   if (input.protectedPaths.length) s.push(`- 不许改：${input.protectedPaths.map((p) => `\`${p}\``).join('、')}`);
-  s.push('', '交接格式：', '', '```markdown', handoffTemplate('你的工具 · 你的模型', input.now).trim(), '```', '');
+  s.push('', '交接格式：', '', '```markdown', handoffTemplate('你的工具 · 你的模型').trim(), '```', '');
   s.push(`（这份接力本在 \`${BRIEF_REL}\`，接力台每次记账后都会更新。）`);
   return s.join('\n') + '\n';
 }

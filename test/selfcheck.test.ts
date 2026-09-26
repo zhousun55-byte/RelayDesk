@@ -438,3 +438,18 @@ test('认额度用完只看工具自己报的话：AI 说的话、调用工具�
   assert.match(only, /hit your usage limit/);
   assert.match(only, /结束（success/);
 });
+
+test('接力本只在内容变了时才重写：过几分钟再刷新（接力台开着时每分钟刷一次）不动文件；交接格式里的时间留给 AI 自己填', () => {
+  registry([CODEX, DSH]);
+  const { root, write } = project('brief-still');
+  const brief = path.join(root, '.relay/接力本.md');
+  const t0 = new Date('2026-09-27T00:10:00+08:00');
+  track.refreshBrief(root, t0);
+  const before = fs.readFileSync(brief, 'utf8');
+  assert.match(before, /- 时间：YYYY-MM-DD HH:MM（开工的时间）/);
+  assert.equal(track.refreshBrief(root, new Date(t0.getTime() + 7 * 60_000)), false, '只过了几分钟、别的都没变：不写');
+  assert.equal(fs.readFileSync(brief, 'utf8'), before);
+  write('.relay/任务.md', '# 任务\n\n换一个标题\n\n## 进度\n\n- [ ] 第一步\n');
+  assert.equal(track.refreshBrief(root, new Date(t0.getTime() + 9 * 60_000)), true, '任务变了：照写');
+  assert.match(fs.readFileSync(brief, 'utf8'), /换一个标题/);
+});
