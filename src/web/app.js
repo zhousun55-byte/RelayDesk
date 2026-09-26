@@ -1164,9 +1164,9 @@ function drawLeft() {
   const busy = busyMember();
   const shown = ms.slice(0, 6);
   box.replaceChildren(
-    h('div', { class: 'brand' }, h('b', null, '接力台'), h('span', { class: 'cap' }, String(st.version || '').split('.').slice(0, 2).join('.')), iconBtn('收起', 'sideL', toggleLeft, '⌘B')),
+    h('div', { class: 'brand' }, h('b', null, '接力台'), iconBtn('收起', 'sideL', toggleLeft, '⌘B')),
     h('div', { class: 'acts' }, h('button', { class: 'btn line', onclick: newThread, disabled: !p.init && !st.projects.length }, icon('plus'), '新任务'), h('button', { class: 'find', onclick: () => openPalette() }, icon('search'), '搜索', h('kbd', null, '⌘K'))),
-    h('nav', { class: 'nav', 'aria-label': '项目' }, h('div', { class: 'nav-label' }, h('span', { class: 'cap' }, `项目 · ${pad(st.projects.length)}`), iconBtn('打开文件夹', 'plus', chooseFolder)), projects),
+    h('nav', { class: 'nav', 'aria-label': '项目' }, h('div', { class: 'nav-label' }, h('span', { class: 'cap' }, '项目'), iconBtn('打开文件夹', 'plus', chooseFolder)), projects),
     h(
       'div',
       { class: 'dock' },
@@ -1183,11 +1183,12 @@ function drawLeft() {
   box.querySelector('.nav').scrollTop = keep;
 }
 
-/** 列表里的日期：今天写几点，别的日子写「09·25」。 */
-function shortDay(ms) {
-  const d = new Date(ms);
+/** 哪天几点：今天只写几点，昨天写「昨天 21:43」，更早写「9月25日 21:43」。 */
+function dayClock(ts) {
+  const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return '';
-  return sameDay(d, new Date()) ? clock(ms) : `${pad(d.getMonth() + 1)}·${pad(d.getDate())}`;
+  const w = when(ts);
+  return sameDay(d, new Date()) ? w : `${w} ${clock(ts)}`;
 }
 
 function threadEl(t) {
@@ -1196,7 +1197,7 @@ function threadEl(t) {
     'button',
     { class: 'thread', 'data-id': String(t.id), onclick: () => selectThread(t) },
     h('span', { class: 't' }, t.title || '未命名'),
-    h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : t.pending ? [h('span', { class: 'rd' }), `待核 ${t.pending}`] : shortDay(lastActive(t)))
+    h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : t.pending ? [h('span', { class: 'rd' }), `待复核 ${t.pending}`] : when(lastActive(t)))
   );
 }
 
@@ -1291,7 +1292,7 @@ let streamThread = null;
 let stick = true;
 
 function buildCenter() {
-  CE.offline = h('div', { class: 'offline', hidden: true }, h('span', { class: 'rd' }), '连不上接力台：正在重启的话，几秒后会自己连上；关掉了的话，在启动台或聚焦搜索里打开「接力台」', h('button', { class: 'btn small', onclick: () => refresh(true) }, '重试'));
+  CE.offline = h('div', { class: 'offline', hidden: true }, h('span', { class: 'rd' }), '连不上接力台', h('button', { class: 'btn small', onclick: () => refresh(true) }, '重试'));
   CE.cfgBad = h('div', { class: 'offline cfg-bad', hidden: true });
   CE.bar = h('header', { class: 'bar' });
   CE.tabs = h('div', { class: 'tabs', role: 'tablist', hidden: true });
@@ -1324,7 +1325,7 @@ function renderCenter() {
   CE.cfgBad.hidden = !cfgErr;
   if (cfgErr && CE.cfgBad.dataset.err !== cfgErr) {
     CE.cfgBad.dataset.err = cfgErr;
-    CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': cfgErr }, '配置文件坏了：检查命令、不许改的文件都没法用，全自动不会开工'), h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, '打开'));
+    CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': cfgErr }, '配置文件坏了'), h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, '打开'));
   }
   const mode = centerMode();
   const hero = mode !== 'thread';
@@ -1353,15 +1354,7 @@ function renderCenter() {
   document.title = S.st.project.name ? `${S.st.project.name} · 接力台` : '接力台';
 }
 
-// ----- 空闲：一张带白边的照片，写着「接着［做］」；有没复核的棒，旁边钉一张红点小条 -----
-
-const VERBS = [
-  ['做', 'pencil'],
-  ['复核', 'review'],
-  ['讨论', 'chat'],
-  ['投票', 'ballot'],
-  ['验收', 'check'],
-];
+// ----- 空闲：小标题、要人看的一行、输入框 -----
 
 function renderHero(mode) {
   const p = S.st.project;
@@ -1372,24 +1365,18 @@ function renderHero(mode) {
   if (sig !== heroSig) {
     heroSig = sig;
     const s = pend[0];
-    const print = h(
+    const head = h(
       'div',
-      { class: 'print' },
-      h(
-        'div',
-        { class: 'photo' },
-        h('span', { class: 'cap', 'data-tip': setup ? p.root : null }, setup ? `还没接入 · ${shortPath(p.root)}` : `空闲 · ${p.name}`),
-        h('div', { class: 'keep' }, h('span', { class: 'word' }, setup ? '接入' : '接着'), h('span', { class: 'pill' }, icon(setup ? 'folder' : 'pencil'), h('span', { class: 'v' }, setup ? '这个文件夹' : '做'))),
-        h('span', { class: 'cap' }, setup ? '接入以后，各家 AI 在这个文件夹里按接力规矩交接' : '在任何 AI 工具里打开这个文件夹说「接着做」，或者在下面写下要做的事')
-      ),
-      s ? h('button', { class: 'pin-note', onclick: () => jumpTo(s.id) }, h('span', { class: 'rd' }), h('span', { class: 'cap' }, `第 ${s.id} 棒 · 待复核${pend.length > 1 ? ` · 共 ${pend.length} 棒` : ''}`), s.summary || '还没有强模型看过。') : null
+      { class: 'hero-head' },
+      h('div', null, h('h1', null, setup ? p.name : '新任务'), h('span', { class: 'cap', 'data-tip': setup ? p.root : null }, setup ? `未接入 · ${shortPath(p.root)}` : p.name)),
+      setup ? h('button', { class: 'btn line', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已接入').then(() => loadTree()) }, '接入') : null
     );
-    const under = h(
-      'div',
-      { class: 'under' },
-      setup ? h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已接入').then(() => loadTree()) }, '仅接入') : null,
-      canCancel
-        ? h(
+    const notice = s ? h('button', { class: 'notice', onclick: () => jumpTo(s.id) }, h('span', { class: 'rd' }), h('b', null, `第 ${s.id} 棒待复核${pend.length > 1 ? `（共 ${pend.length} 棒）` : ''}`), h('span', { class: 'ell' }, s.summary || '')) : null;
+    const under = canCancel
+      ? h(
+          'div',
+          { class: 'under' },
+          h(
             'button',
             {
               class: 'link',
@@ -1400,24 +1387,14 @@ function renderHero(mode) {
             },
             '取消'
           )
-        : null
-    );
-    CE.hero.replaceChildren(h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null), h('div', { class: 'hero-in' }, print, C.wrap, under));
+        )
+      : h('div', { class: 'under', hidden: true });
+    CE.hero.replaceChildren(h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null), h('div', { class: 'hero-in' }, head, notice, C.wrap, under));
   } else if (C.wrap.parentNode !== CE.hero.querySelector('.hero-in')) {
     const inner = CE.hero.querySelector('.hero-in');
     inner.insertBefore(C.wrap, inner.querySelector('.under'));
   }
   setComposerKind('task');
-}
-
-/** 照片上「接着［…］」里的词换着出现：做、复核、讨论、投票、验收。 */
-function turnVerb() {
-  const v = !document.hidden && !still() && centerMode() === 'new' && CE.hero.querySelector('.keep .v');
-  if (!v) return;
-  const i = (VERBS.findIndex(([w]) => w === v.textContent) + 1) % VERBS.length;
-  v.textContent = VERBS[i][0];
-  v.previousSibling.replaceWith(icon(VERBS[i][1]));
-  v.animate([{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.7,.2,1)' });
 }
 
 // ----- 顶栏：项目 / 任务几，现在谁在做，待复核，清单，控制 -----
@@ -1455,18 +1432,18 @@ function renderBar(t) {
   if (latest) {
     meta.push(statusEl(run));
     if (p.pending.length) meta.push(h('button', { class: 'meta-btn', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget) }, h('span', { class: 'rd' }), `待复核 ${p.pending.length}`));
-    if (p.task.total) meta.push(h('button', { class: 'meta-btn mono', 'data-tip': '看清单', onclick: () => CE.stream.querySelector('.head')?.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'start' }) }, `清单 ${p.task.done}/${p.task.total}`));
+    if (p.task.total) meta.push(h('button', { class: 'meta-btn', 'data-tip': '清单', onclick: () => CE.stream.querySelector('.head')?.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'start' }) }, `清单 ${p.task.done}/${p.task.total}`));
     if (run.running || run.waiting) {
       ctl.push(h('button', { class: 'btn primary', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), h('span', { class: 'lbl' }, '停止')));
     } else {
-      const why = p.task.empty ? '先写好要做什么' : !ready().length ? '没有可用的成员' : '';
+      const why = p.task.empty ? '还没有任务' : !ready().length ? '没有可用的成员' : '';
       ctl.push(
         h(
           'span',
           { class: 'split' },
           h(
             'button',
-            { class: 'btn primary', disabled: !!why, 'data-tip': why || '换谁接着做都行，做到验收通过为止', onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), '全自动已开始') },
+            { class: 'btn primary', disabled: !!why, 'data-tip': why || null, onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), '全自动已开始') },
             icon('play'),
             h('span', { class: 'lbl' }, '全自动')
           ),
@@ -1548,11 +1525,10 @@ function acceptPanel() {
       'div',
       { class: 'accept-list' },
       a.state === 'accepted' ? h('p', null, a.headline) : null,
-      unread.length ? h('p', null, '这些读不到，没法判断做没做完：') : null,
+      unread.length ? h('p', null, '读不到：') : null,
       unread.length ? list(unread) : null,
-      missing.length ? h('p', null, a.state === 'blocked' ? '清单都打勾了，还差这几项：' : '还差这几项：') : null,
-      missing.length ? list(missing) : null,
-      h('p', { class: 'aside' }, '清单打勾只说明「说做完了」。弱模型的活要强模型复核通过，开着终审要强模型终审通过，配了检查要检查通过，才算验收通过。')
+      missing.length ? h('p', null, '还差：') : null,
+      missing.length ? list(missing) : null
     ),
     foot: [h('button', { class: 'btn primary', autofocus: true, onclick: () => close() }, '知道了')],
   });
@@ -1695,7 +1671,7 @@ async function startWork(path, body) {
     return await api(path, body);
   } catch (e) {
     if (e.code !== 'native-active') throw e;
-    if (!(await confirmSheet('它还在改文件吗？', e.message, '它已经停了，换人'))) throw Object.assign(new Error('没有换人。'), { code: 'cancelled' });
+    if (!(await confirmSheet('有 AI 还在改这个文件夹', e.message, '换人'))) throw Object.assign(new Error('没有换人。'), { code: 'cancelled' });
     return api(path, { ...body, force: true });
   }
 }
@@ -1949,9 +1925,8 @@ function headEl(t, latest) {
   const cut = raw.indexOf('：');
   const [title, lead] = cut > 3 && cut < 40 && cut < raw.length - 1 ? [raw.slice(0, cut), raw.slice(cut + 1)] : [raw, ''];
   const sub = [lead, latest ? task.body.split('\n').slice(1).join('\n').trim() : ''].filter(Boolean).join('\n');
-  const d = new Date(t.from);
-  const bits = [`任务 ${pad(threads().indexOf(t) + 1)}`, `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${clock(t.from)}`];
-  if (latest && task.total) bits.push(`清单 ${task.done} / ${task.total}`);
+  const bits = [dayClock(t.from)];
+  if (latest && task.total) bits.push(`清单 ${task.done}/${task.total}`);
   return h(
     'header',
     { class: 'head' },
@@ -2052,27 +2027,33 @@ function rollbackLine(rb) {
 }
 
 /**
- * 线路的终点。验收是人写的一个词，后面跟机器的标签：通过、没过、没法判断。
- * 轮到人看的时候（通过了、没过）终点是一颗红点。更早的任务没有验收记录，就写当时全自动的结果。
+ * 线路的终点：和别的站一样大的圆圈（通过了是实心的），旁边一行字说结果、一行说还差什么。
+ * 最新的任务看验收；更早的任务没有验收记录，就写当时全自动的结果。
  */
 function verdictEl(g, a) {
   const state = a ? a.state : { done: 'accepted', 'needs-human': 'blocked', failed: 'failed', stopped: 'stopped' }[g.status];
-  const [ic, word] = { accepted: ['check', '通过'], blocked: ['warn', a ? '没过' : '要人看'], unknown: ['warn', '没法判断'], failed: ['warn', '出错了'], stopped: ['stop', '停了'] }[state];
+  const [ic, title] = { accepted: ['check', '验收通过'], blocked: ['warn', a ? '验收没过' : '等人处理'], unknown: ['unknown', '没法验收'], failed: ['warn', '全自动出错'], stopped: ['stop', '全自动停了'] }[state];
   const why = a ? (a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('；')) : g.result.replace(/^验收(通过|没过)：/, '');
-  const pill = [icon(ic), word];
+  const body = [state === 'blocked' || state === 'failed' ? h('span', { class: 'rd' }) : null, title];
   return h(
     'div',
-    { class: `stop verdict${state === 'accepted' || state === 'blocked' || state === 'failed' ? ' hot' : ''}` },
-    h('span', { class: 'pin', 'aria-hidden': 'true' }),
-    h('div', { class: 'v' }, h('span', { class: 'word' }, g && !a && state !== 'accepted' && state !== 'blocked' ? '全自动' : '验收'), a ? h('button', { class: 'pill', 'aria-haspopup': 'dialog', onclick: acceptPanel }, pill) : h('span', { class: 'pill' }, pill)),
+    { class: `stop verdict ${state}` },
+    h('span', { class: 'no', 'aria-hidden': 'true' }, ic === 'unknown' ? '?' : icon(ic)),
+    a ? h('button', { class: 'vt', 'aria-haspopup': 'dialog', onclick: acceptPanel }, body) : h('div', { class: 'vt' }, body),
     why ? h('p', { class: 'why' }, why) : null,
     g ? h('span', { class: 'cap' }, [clock(g.updatedAt), g.mode === 'auto' ? '全自动' : '', g.stints && g.stints.length ? `${g.stints.length} 棒` : '', lasted(g.startedAt, g.updatedAt)].filter(Boolean).join(' · ')) : null,
     g
-      ? iconBtn('收起', 'x', () => {
-          S.dismissed = g.id;
-          store.set('dismissed', g.id);
-          renderCenter();
-        }, '', 'x')
+      ? iconBtn(
+          '收起',
+          'x',
+          () => {
+            S.dismissed = g.id;
+            store.set('dismissed', g.id);
+            renderCenter();
+          },
+          '',
+          'x'
+        )
       : null
   );
 }
@@ -2109,8 +2090,7 @@ function pillOf(s) {
 /** 做了多久：21:43–21:45 · 2 分钟；正在做的一秒一秒走。 */
 function spanOf(s) {
   if (s.status === 'working') return h('span', { class: 'tm', 'data-since': s.startedAt }, elapsed(s.startedAt));
-  const a = msOf(s.startedAt);
-  const from = `${sameDay(new Date(a), new Date()) ? '' : `${shortDay(a)} `}${clock(s.startedAt)}`;
+  const from = dayClock(s.startedAt);
   const to = s.endedAt ? clock(s.endedAt) : '';
   return h('span', { class: 'tm' }, `${from}${to && to !== clock(s.startedAt) ? `–${to}` : ''}${s.endedAt ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}`);
 }
@@ -2151,7 +2131,7 @@ function stintCard(s) {
       },
       oncontextmenu: (e) => ctx(e, stintMenuItems(s)),
     },
-    h('span', { class: 'no', 'aria-hidden': 'true' }, pad(s.id)),
+    h('span', { class: 'no', 'aria-hidden': 'true' }, String(s.id)),
     h(
       'div',
       { class: 'slip' },
@@ -2382,8 +2362,8 @@ async function copyHandoff(s) {
 async function skipReview(btn, s) {
   if (!S.st) return;
   const { root, name } = S.st.project;
-  const who = s.who.tier === 'unknown' ? '不知道是谁做的' : s.who.tier === 'weak' ? '弱模型做的' : '还没复核过';
-  if (!(await confirmSheet(`跳过第 ${s.id} 棒的复核？`, `项目「${name}」：这一棒是${who}。跳过之后它不再等强模型复核，验收也不会因为它卡住。可以撤销。`, '跳过复核'))) return;
+  const who = s.who.tier === 'unknown' ? '身份不明' : s.who.tier === 'weak' ? '弱模型' : '还没复核';
+  if (!(await confirmSheet(`跳过第 ${s.id} 棒的复核？`, `「${name}」第 ${s.id} 棒（${who}）跳过后不再等复核。可以撤销。`, '跳过复核'))) return;
   if (!S.st || S.st.project.root !== root) return toast('项目已经换了，没有跳过。', { bad: true });
   const r = await act(btn, () => api('/api/mark', { dir: root, stint: s.id }));
   if (r) toast(`第 ${s.id} 棒已跳过复核`, { action: { label: '撤销', run: () => act(null, () => api('/api/mark', { dir: root, stint: s.id, review: 'needed' }), '已改回待复核') } });
@@ -2392,7 +2372,7 @@ async function skipReview(btn, s) {
 async function rollbackTo(btn, s) {
   if (!S.st) return;
   const { root, name } = S.st.project;
-  if (!(await confirmSheet(`退回到第 ${s.id} 棒之前？`, `项目「${name}」：第 ${s.id} 棒和之后的改动会作废，任务清单里它们打的勾也会去掉。可以撤销。`, '退回'))) return;
+  if (!(await confirmSheet(`退回到第 ${s.id} 棒之前？`, `「${name}」第 ${s.id} 棒和之后的改动作废，清单里对应的勾去掉。可以撤销。`, '退回'))) return;
   if (!S.st || S.st.project.root !== root) return toast('项目已经换了，没有退回。', { bad: true });
   const r = await act(btn, () => api('/api/rollback', { dir: root, stint: s.id }));
   if (r) {
@@ -2438,7 +2418,7 @@ function voteCard(v) {
   const box = h(
     'div',
     { class: 'vote' },
-    h('span', { class: 'cap' }, v.status === 'proposing' ? ['投票 · 出方案 ', dots] : v.status === 'voting' ? [`投票 · 投票中 ${aiBallots.length}/${v.voters.length} `, dots] : `投票 · ${total} 票`),
+    h('span', { class: 'cap' }, v.status === 'proposing' ? ['投票 · 出方案 ', dots] : v.status === 'voting' ? [`投票中 ${aiBallots.length}/${v.voters.length} `, dots] : `投票 · ${total} 票`),
     h('p', { class: 'q' }, v.question)
   );
   if (v.status === 'proposing') {
@@ -2923,7 +2903,7 @@ function updateComposer() {
       )
     );
   }
-  C.ta.placeholder = task ? '写下要做的事……' : S.slash ? S.slash.placeholder : vote ? '写下要投票的问题……' : '写下要说的话……';
+  C.ta.placeholder = task ? '要做什么' : S.slash ? S.slash.placeholder : vote ? '投票的问题' : '消息';
   // 谁来回答
   const people = talkers();
   if (!S.ask) {
@@ -3093,7 +3073,7 @@ function onComposerKey(e) {
 
 const idleNow = () => !runState().running && !runState().waiting;
 const SLASH = [
-  { key: 'step', label: '加一步', icon: 'plus', needsText: true, placeholder: '这一步要做什么', run: (text) => act(null, () => api('/api/task/edit', { op: 'add', text }), '已加入清单') },
+  { key: 'step', label: '加一步', icon: 'plus', needsText: true, placeholder: '这一步', run: (text) => act(null, () => api('/api/task/edit', { op: 'add', text }), '已加入清单') },
   { key: 'go', label: '接着做', icon: 'play', when: () => idleNow() && !!defaultWorker(), run: goDefault },
   { key: 'auto', label: '全自动', icon: 'bolt', when: () => idleNow() && ready().length > 0, run: () => act(null, () => startWork('/api/auto', {}), '全自动已开始') },
   { key: 'review', label: '复核', icon: 'review', when: () => idleNow() && S.st.project.pending.length > 0 && !!reviewer(), run: reviewNow },
@@ -3407,7 +3387,6 @@ function renderRight(force) {
   treeSig = sig;
   const focused = document.activeElement && RE.tree.contains(document.activeElement) ? document.activeElement.dataset.path : null;
   const files = (S.tree && S.tree.files) || [];
-  RE.title.textContent = S.tree ? `文件 · ${files.length}` : '文件';
   const before = rowTops();
   const have = new Set(files);
   const gone = S.onlyChanged ? [...touched.keys()].filter((f) => !have.has(f)) : [];
@@ -3948,8 +3927,7 @@ function settingsBody(tab, redraw) {
           class: 'btn small',
           onclick: async (e) => {
             const b = e.currentTarget;
-            const later = S.st && S.st.keeper ? '下次打开「接力台」或重新登录电脑时，它会自己启动。' : '';
-            if (!(await confirmSheet('关闭接力台？', `正在进行的调度会停止。${later}`, '关闭'))) return;
+            if (!(await confirmSheet('关闭接力台？', '正在进行的调度会停止。', '关闭'))) return;
             await act(b, () => api('/api/quit', {}), '接力台已关闭');
             setTimeout(() => setOffline(true), 600);
           },
@@ -4372,7 +4350,6 @@ setInterval(() => {
   if (document.hidden) return;
   for (const el of document.querySelectorAll('[data-since]')) el.textContent = elapsed(el.dataset.since);
 }, 1000);
-setInterval(turnVerb, 2600);
 
 mqNarrow.addEventListener('change', () => {
   closeDrawers();

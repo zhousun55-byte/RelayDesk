@@ -1,18 +1,8 @@
 /* 接力台网页。三栏：左边项目和对话、中间对话、右边项目文件。
-   骨架规整（细线、等宽编号），这是「神性」的一半；纸面颗粒、点阵纸、钉上去的细线、一颗红点、人写的字，是「人性」的一半。
-   只有黑白灰，外加一颗红点：全页只有要人管的地方是红的。人写的字用仿宋，机器写的字用黑体，编号和时间用等宽字。
+   骨架规整（细线、线路、编号），这是「神性」的一半；纸面颗粒、点阵纸、钉上去的小条和细线，是「人性」的一半。
+   只有黑白灰，外加一颗小红点：只有要人管的地方是红的。全站一种字（Albert Sans 配苹方），等宽字只给代码。
    动画只动 transform 和 opacity；进来、出去都有过渡，减少动态效果时全部关掉。 */
 
-@font-face {
-  font-family: 'Zhuque Fangsong';
-  src: url('/fonts/zhuque-fangsong.woff2?v=1') format('woff2');
-  font-display: block;
-}
-@font-face {
-  font-family: 'Spectral';
-  src: url('/fonts/spectral.woff2?v=1') format('woff2');
-  font-display: block;
-}
 @font-face {
   font-family: 'Albert Sans';
   src: url('/fonts/albert-sans.woff2?v=1') format('woff2');
@@ -23,19 +13,6 @@
   font-family: 'IBM Plex Mono';
   src: url('/fonts/plex-mono-400.woff2?v=1') format('woff2');
   unicode-range: U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02;
-  font-display: block;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  src: url('/fonts/plex-mono-400-pi.woff2?v=1') format('woff2');
-  unicode-range: U+2190-2199, U+2713, U+2500-259F, U+2070-2089;
-  font-display: block;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  src: url('/fonts/plex-mono-500.woff2?v=1') format('woff2');
-  font-weight: 500 700;
-  unicode-range: U+0020-007E, U+00A0-00FF, U+2013-2014, U+2018-201A, U+201C-201E, U+2026, U+2212;
   font-display: block;
 }
 
@@ -63,7 +40,6 @@
   --grain-op: 0.045;
   --grain-mode: multiply;
   --grain: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
-  --human: 'Spectral', 'Zhuque Fangsong', 'STFangsong', 'FangSong', 'Songti SC', serif;
   --ui: 'Albert Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, 'PingFang SC', monospace;
   --left: 264px;
@@ -182,7 +158,7 @@ code {
   padding: 2px 4px;
 }
 kbd {
-  font: 10.5px/1 var(--mono);
+  font: 10.5px/1 var(--ui);
   color: var(--ink-3);
   border: 1px solid var(--rule);
   border-radius: 4px;
@@ -199,24 +175,14 @@ svg.i {
   stroke-linejoin: round;
 }
 .num,
-.cap,
-.mono {
+.cap {
   font-variant-numeric: tabular-nums;
 }
-.mono {
-  font-family: var(--mono);
-}
-/* 刻度：等宽的小标签 */
+/* 小标签：灰色的小字 */
 .cap {
-  font: 500 10.5px/1.3 var(--mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 12px;
+  line-height: 1.4;
   color: var(--ink-3);
-}
-/* 人写的字 */
-.human {
-  font-family: var(--human);
-  font-weight: 400;
 }
 /* 要人管的地方：一颗红点 */
 .rd {
@@ -449,11 +415,10 @@ svg.i {
   min-height: 34px;
 }
 .brand b {
-  font: 400 25px/1 var(--human);
-  letter-spacing: 0.08em;
-}
-.brand .cap {
   flex: 1;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
 }
 .brand .icon-btn {
   align-self: center;
@@ -602,7 +567,8 @@ svg.i {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: 10.5px/1 var(--mono);
+  font-size: 11.5px;
+  line-height: 1;
   color: var(--ink-3);
   white-space: nowrap;
 }
@@ -637,7 +603,7 @@ svg.i {
   transition-delay: 0.03s;
 }
 .more-n {
-  font: 11px/1 var(--mono);
+  font-size: 11.5px;
   color: var(--ink-3);
 }
 
@@ -702,7 +668,8 @@ svg.i {
   height: 18px;
   border: 1px solid var(--ink);
   border-radius: 50%;
-  font: 400 11px/1 var(--human);
+  font-size: 10px;
+  font-weight: 600;
 }
 .who-tile {
   display: inline-flex;
@@ -1086,9 +1053,6 @@ svg.i {
   background: var(--fog);
   color: var(--ink);
 }
-.meta-btn.mono {
-  font-size: 11.5px;
-}
 .status {
   color: var(--ink);
 }
@@ -1130,7 +1094,7 @@ svg.i {
   max-width: 220px;
   flex: none;
   position: relative;
-  font: 12px/1 var(--mono);
+  font-size: 12.5px;
   color: var(--ink-3);
   white-space: nowrap;
   border-radius: 7px 7px 0 0;
@@ -1166,8 +1130,6 @@ svg.i {
 }
 .tab.chat-tab {
   padding-right: 11px;
-  font-family: var(--ui);
-  font-size: 12.5px;
 }
 .tab svg.i {
   width: 13px;
@@ -1234,7 +1196,10 @@ svg.i {
   background: var(--paper);
   display: grid;
   place-items: center;
-  font: 500 10.5px/1 var(--mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
   color: var(--ink);
   z-index: 1;
   transition: transform 0.24s var(--pop), background 0.2s, color 0.2s;
@@ -1260,16 +1225,16 @@ svg.i {
   max-width: 720px;
 }
 .head .ttl {
-  margin: 8px 0 4px;
-  font: 400 30px/1.32 var(--human);
+  margin: 6px 0 4px;
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.35;
   letter-spacing: 0.01em;
   text-wrap: balance;
   word-break: break-word;
 }
 .head .ttl code {
-  font-size: 0.78em;
-  background: none;
-  padding: 0;
+  font-size: 0.8em;
 }
 .head .ttl[role='button'] {
   cursor: text;
@@ -1291,7 +1256,9 @@ svg.i {
   border-radius: 6px;
   background: var(--slip);
   box-shadow: inset 0 0 0 1.5px var(--ink);
-  font: 400 30px/1.32 var(--human);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.35;
 }
 .head .sub {
   margin: 0;
@@ -1480,7 +1447,7 @@ svg.i {
   flex: 0 1 auto;
 }
 .who .mdl {
-  font: 11.5px/1 var(--mono);
+  font: 12px/1 var(--mono);
   color: var(--ink-3);
   flex-shrink: 100;
 }
@@ -1495,7 +1462,9 @@ svg.i {
 .who .tm {
   margin-left: auto;
   padding-left: 8px;
-  font: 11px/1 var(--mono);
+  font-size: 12px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
   color: var(--ink-3);
   transition: opacity 0.14s;
 }
@@ -1618,8 +1587,8 @@ svg.i {
 }
 .detail h5 {
   margin: 0 0 4px;
-  font: 500 10.5px/1.3 var(--mono);
-  letter-spacing: 0.12em;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--ink-3);
 }
 .detail .acts {
@@ -1646,8 +1615,8 @@ svg.i {
 .form dt {
   padding: 8px 0;
   border-bottom: 1px solid var(--hair);
-  font: 500 10.5px/1.9 var(--mono);
-  letter-spacing: 0.12em;
+  font-size: 12px;
+  line-height: 1.9;
   color: var(--ink-3);
 }
 .form dd {
@@ -1662,7 +1631,8 @@ svg.i {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 16px;
-  font: 12px/1.7 var(--mono);
+  font-size: 12.5px;
+  line-height: 1.8;
   color: var(--ink);
 }
 .form dd.files button {
@@ -1761,57 +1731,46 @@ svg.i {
   animation: shimmer 1.4s linear infinite;
 }
 
-/* 验收：线路的终点。人写的一个词，配一个机器的标签 */
+/* 验收：线路的终点。和别的站一样大的圆圈，通过了是实心的；旁边一行字 */
 .verdict {
-  padding: 2px 0 4px;
+  padding-top: 3px;
 }
-.verdict .pin {
-  position: absolute;
-  left: calc(5px - var(--rail));
-  top: 8px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1.5px solid var(--ink-3);
-  background: var(--paper);
-  z-index: 1;
+.verdict .no .i {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
 }
-.verdict.hot .pin {
-  border: 0;
-  background: var(--red);
-  box-shadow: 0 0 0 5px var(--red-glow);
-  animation: rise 0.4s var(--pop) both;
+.verdict.accepted .no {
+  background: var(--ink);
+  color: var(--paper);
 }
-.verdict .v {
-  display: flex;
+.verdict.unknown .no {
+  border-style: dashed;
+  border-color: var(--ink-3);
+  color: var(--ink-3);
+}
+.verdict .vt {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  min-height: 30px;
+  font-size: 15px;
+  font-weight: 650;
+  border-radius: 6px;
+  transition: color 0.14s;
 }
-.verdict .word {
-  font: 400 30px/1.1 var(--human);
-  letter-spacing: 0.04em;
-}
-.verdict .pill {
-  height: 28px;
-  padding: 0 11px;
-  border-radius: 8px;
-  box-shadow: inset 0 0 0 1px var(--ink);
-  color: var(--ink);
-  font-size: 13.5px;
-  transition: background 0.14s;
-}
-.verdict button.pill:hover {
-  background: var(--slip);
+.verdict button.vt:hover {
+  color: var(--ink-2);
 }
 .verdict .why {
-  margin: 8px 0 0;
+  margin: 2px 0 0;
   max-width: 660px;
-  font-size: 14px;
+  font-size: 13.5px;
   color: var(--ink-2);
 }
 .verdict .cap {
   display: block;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 .verdict .x {
   position: absolute;
@@ -1823,7 +1782,7 @@ svg.i {
   opacity: 1;
 }
 
-/* 人说的话：人写的字，写在一张纸条上 */
+/* 人说的话：右边的一张纸条 */
 .me {
   display: flex;
   flex-direction: column;
@@ -1836,12 +1795,9 @@ svg.i {
   border-radius: 4px;
   padding: 10px 15px;
   box-shadow: inset 0 0 0 1px var(--hair), var(--shadow-slip);
-  font: 400 16px/1.65 var(--human);
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
-}
-.note code {
-  font-size: 0.8em;
 }
 /* AI 说的话 */
 .ai {
@@ -1864,9 +1820,12 @@ svg.i {
 }
 .ai .model,
 .ai .time {
-  font: 11px/1 var(--mono);
+  font-size: 12px;
   opacity: 0;
   transition: opacity 0.16s;
+}
+.ai .model {
+  font-family: var(--mono);
 }
 .ai:hover .model,
 .ai:hover .time {
@@ -1949,8 +1908,10 @@ svg.i {
   border-top: 1px solid var(--rule);
 }
 .vote .q {
-  margin: 6px 0 6px;
-  font: 400 21px/1.45 var(--human);
+  margin: 4px 0 6px;
+  font-size: 15.5px;
+  font-weight: 650;
+  line-height: 1.5;
 }
 .opts {
   display: flex;
@@ -1980,7 +1941,8 @@ svg.i {
   box-shadow: inset 0 0 0 1px var(--ink-3);
   display: grid;
   place-items: center;
-  font: 500 10.5px/1 var(--mono);
+  font-size: 11px;
+  font-weight: 600;
   color: var(--ink-2);
   transition: background 0.2s, color 0.2s;
 }
@@ -2003,7 +1965,9 @@ svg.i {
   animation: pop 0.3s var(--pop) both;
 }
 .opt .n {
-  font: 500 12px/1 var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 .opt .by {
@@ -2066,7 +2030,7 @@ svg.i {
   animation: rise 0.26s var(--ease) both;
 }
 
-/* 最底下的输入框：浮在纸面上的一张磨砂纸，写下的是人的字 */
+/* 最底下的输入框：浮在纸面上的一张磨砂纸 */
 .composer-wrap {
   flex: none;
 }
@@ -2109,7 +2073,6 @@ svg.i {
 .composer .attach .chip,
 .composer .opt-row .chip {
   padding-right: 3px;
-  font: 11.5px/1 var(--mono);
 }
 .composer textarea {
   display: block;
@@ -2121,7 +2084,8 @@ svg.i {
   padding: 13px 16px 4px;
   min-height: 48px;
   max-height: 40vh;
-  font: 400 17px/1.6 var(--human);
+  font-size: 15px;
+  line-height: 1.6;
 }
 .composer textarea::placeholder {
   color: var(--ink-4);
@@ -2248,7 +2212,7 @@ svg.i {
   animation: rise 0.24s var(--pop);
 }
 
-/* ---------- 空闲：一张带白边的照片，写着「接着［做］」 ---------- */
+/* ---------- 空闲：一个小标题、要人看的一行、输入框 ---------- */
 
 .hero {
   flex: 1;
@@ -2257,7 +2221,7 @@ svg.i {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 56px 32px 28px;
+  padding: 56px 32px 40px;
   overflow-y: auto;
 }
 .hero-bar {
@@ -2273,126 +2237,74 @@ svg.i {
 }
 .hero-in {
   width: 100%;
-  max-width: 740px;
+  max-width: 700px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 26px;
+  gap: 14px;
+  animation: rise 0.36s var(--ease) both;
 }
-.print {
-  position: relative;
-  align-self: center;
-  margin-bottom: 16px;
-  width: min(100%, 680px);
-  aspect-ratio: 5 / 3;
-  padding: 11px;
-  background: var(--slip);
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05), 0 28px 48px -32px rgba(0, 0, 0, 0.42);
-  rotate: -0.5deg;
-  animation: rise 0.5s var(--ease) both;
+.hero-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 0 4px;
 }
-.photo {
-  position: relative;
-  height: 100%;
+.hero-head > div {
+  flex: 1;
+  min-width: 0;
+}
+.hero-head h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.35;
   overflow: hidden;
-  isolation: isolate;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  padding: 24px 28px;
-  color: #fbfbf8;
-  background: radial-gradient(70% 58% at 28% 26%, rgba(255, 255, 255, 0.34), transparent 70%), radial-gradient(90% 60% at 82% 100%, rgba(30, 40, 42, 0.22), transparent 70%), linear-gradient(172deg, #aeb5b3 0%, #9ca4a2 48%, #87908e 100%);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.photo::before,
-.photo::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background-image: var(--grain);
-  pointer-events: none;
+.hero-head .cap {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.photo::before {
-  background-size: 140px 140px;
-  opacity: 0.3;
-  mix-blend-mode: overlay;
-}
-.photo::after {
-  background-size: 90px 90px;
-  opacity: 0.07;
-  mix-blend-mode: multiply;
-}
-.photo .cap {
-  color: rgba(251, 251, 248, 0.9);
-  letter-spacing: 0.16em;
-  line-height: 1.6;
-}
-.keep {
-  align-self: center;
-  justify-self: center;
+.notice {
   display: flex;
   align-items: center;
-  gap: 16px;
-}
-.keep .word {
-  font: 400 clamp(40px, 6vw, 62px)/1 var(--human);
-  letter-spacing: 0.05em;
-}
-.keep .pill {
-  height: 46px;
-  padding: 0 16px;
   gap: 9px;
-  border-radius: 12px;
-  box-shadow: inset 0 0 0 1.5px rgba(251, 251, 248, 0.92);
-  color: #fbfbf8;
-  font-size: 21px;
-}
-.keep .pill .i {
-  width: 20px;
-  height: 20px;
-}
-.keep .v {
-  display: inline-block;
-  min-width: 2em;
-  text-align: center;
-}
-.pin-note {
-  position: absolute;
-  right: -18px;
-  bottom: -26px;
-  width: 228px;
-  padding: 11px 14px 11px 30px;
+  padding: 9px 12px;
+  border-radius: 8px;
   background: var(--slip);
-  box-shadow: inset 0 0 0 1px var(--hair), 0 14px 24px -16px rgba(0, 0, 0, 0.32);
-  rotate: 1.4deg;
+  box-shadow: inset 0 0 0 1px var(--hair), var(--shadow-slip);
   text-align: left;
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--ink-2);
-  animation: rise 0.5s 0.18s var(--pop) both;
-  transition: transform 0.24s var(--ease);
+  font-size: 13px;
+  color: var(--ink-3);
+  animation: rise 0.36s 0.06s var(--ease) both;
+  transition: box-shadow 0.18s, transform 0.22s var(--ease);
 }
-.pin-note:hover {
-  transform: translateY(-2px);
+.notice:hover {
+  transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1px var(--rule), 0 14px 24px -18px rgba(0, 0, 0, 0.3);
 }
-.pin-note .rd {
-  position: absolute;
-  left: 12px;
-  top: 16px;
+.notice b {
+  flex: none;
+  font-weight: 600;
+  color: var(--ink);
 }
-.pin-note .cap {
-  display: block;
-  margin-bottom: 2px;
+.notice .ell {
+  flex: 1;
 }
 .hero .composer textarea {
   min-height: 84px;
-  font-size: 18px;
+  font-size: 16px;
   padding: 15px 18px 6px;
 }
 .hero .under {
   display: flex;
   justify-content: flex-end;
   gap: 16px;
-  margin-top: -14px;
   font-size: 12.5px;
   color: var(--ink-3);
 }
@@ -2429,12 +2341,13 @@ svg.i {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  font: 12.5px/1.4 var(--mono);
+  font-size: 13px;
+  line-height: 1.4;
   color: var(--ink-3);
 }
 .crumbs b {
   color: var(--ink);
-  font-weight: 500;
+  font-weight: 600;
 }
 .crumbs svg.i {
   width: 12px;
@@ -2511,7 +2424,7 @@ svg.i {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: 500 12px/1.4 var(--mono);
+  font: 12px/1.4 var(--mono);
 }
 .diff {
   font: 12px/1.6 var(--mono);
@@ -2586,7 +2499,7 @@ svg.i {
   border: 0;
   outline: 0;
   background: transparent;
-  font: 12.5px/1 var(--mono);
+  font-size: 13px;
   color: var(--ink);
 }
 .tree {
@@ -2604,7 +2517,8 @@ svg.i {
   height: 28px;
   padding: 0 10px 0 calc(8px + var(--d) * 14px);
   border-radius: 6px;
-  font: 12.5px/1 var(--mono);
+  font-size: 13px;
+  line-height: 1;
   color: var(--ink-2);
   white-space: nowrap;
   cursor: pointer;
@@ -2743,7 +2657,7 @@ svg.i {
   border-radius: 6px;
   background: var(--ink);
   color: var(--paper);
-  font: 12px var(--mono);
+  font-size: 12px;
 }
 
 /* 连线：停在一棒上，细线连到它改过的文件（实验笔记拼贴那种线） */
@@ -2839,13 +2753,13 @@ svg.i {
 .mi .r {
   margin-left: auto;
   flex: none;
-  font: 11px/1 var(--mono);
+  font-size: 11.5px;
   color: var(--ink-3);
 }
 .mh {
   padding: 8px 9px 4px;
-  font: 500 10.5px/1.3 var(--mono);
-  letter-spacing: 0.12em;
+  font-size: 11.5px;
+  font-weight: 600;
   color: var(--ink-3);
 }
 .menu hr {
@@ -2997,8 +2911,8 @@ svg.i {
 }
 .settings nav h3 {
   margin: 0 8px 14px;
-  font: 400 21px/1.2 var(--human);
-  letter-spacing: 0.06em;
+  font-size: 15px;
+  font-weight: 650;
 }
 .settings nav button {
   display: flex;
@@ -3115,7 +3029,7 @@ svg.i {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: 11.5px/1.5 var(--mono);
+  font-size: 12px;
   color: var(--ink-3);
 }
 .member.drag-over {
@@ -3154,9 +3068,7 @@ svg.i {
   background: var(--slip);
   box-shadow: inset 0 0 0 1.5px var(--ink);
 }
-.input.mono,
-.tags input,
-.tags .chip {
+.input.mono {
   font: 12.5px/1 var(--mono);
 }
 .tags {
@@ -3205,7 +3117,8 @@ svg.i {
   outline: 0;
   background: transparent;
   text-align: center;
-  font: 500 13px/1 var(--mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   -moz-appearance: textfield;
 }
 .stepper input::-webkit-inner-spin-button {
@@ -3275,7 +3188,7 @@ svg.i {
   border: 0;
   outline: 0;
   background: transparent;
-  font: 400 18px/1 var(--human);
+  font-size: 16px;
   color: var(--ink);
 }
 .palette .pin input::placeholder {
@@ -3302,7 +3215,7 @@ svg.i {
   flex: none;
   max-width: 50%;
   margin-left: auto;
-  font: 11px/1.4 var(--mono);
+  font-size: 12px;
 }
 .palette .mi kbd {
   margin-left: 8px;
@@ -3374,7 +3287,7 @@ svg.i {
   }
   .head .ttl,
   .title-input {
-    font-size: 24px;
+    font-size: 20px;
   }
   .settings {
     grid-template-columns: 1fr;
@@ -3387,9 +3300,6 @@ svg.i {
   }
   .settings nav h3 {
     display: none;
-  }
-  .pin-note {
-    right: 8px;
   }
   /* 窄的时候小条上只留名字和状态 */
   .who .mdl,
@@ -3406,16 +3316,6 @@ svg.i {
     animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-}
-
-/* 暗房里的照片暗一点，不刺眼 */
-:root[data-theme='dark'] .photo {
-  filter: brightness(0.8);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .photo {
-    filter: brightness(0.8);
   }
 }
 

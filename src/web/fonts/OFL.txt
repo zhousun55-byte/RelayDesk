@@ -1,15 +1,9 @@
 接力台网页用到的字体，都按 SIL Open Font License 1.1 发布（全文见下）。
 
-- 朱雀仿宋 Zhuque Fangsong（zhuque-fangsong.woff2）
-  Copyright 2023 JadeFoci  https://github.com/TrionesType/zhuque
-  只留了常用的约 4000 个字（GB 2312 一级字表加界面用到的字和标点），转成 woff2。
-- Spectral（spectral.woff2）
-  Copyright 2017 The Spectral Project Authors  https://github.com/productiontype/Spectral
-  拉丁字符子集（取自 Google Fonts）。
-- Albert Sans（albert-sans.woff2）
+- Albert Sans（albert-sans.woff2）：界面的字（中文用系统自带的苹方）
   Copyright 2021 The Albert Sans Project Authors  https://github.com/usted/Albert-Sans
   拉丁字符子集（取自 Google Fonts）。
-- IBM Plex Mono（plex-mono-400.woff2、plex-mono-400-pi.woff2、plex-mono-500.woff2）
+- IBM Plex Mono（plex-mono-400.woff2）：代码
   Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"  https://github.com/IBM/plex
   IBM 官方发布的分包文件，未做改动。
 
