@@ -1801,8 +1801,9 @@ function streamItems(t) {
   const rb = p.lastRollback;
   if (rb && inRange(rangeOf(t), msOf(rb.ts))) items.push({ key: `rb:${rb.ts}`, at: msOf(rb.ts), sig: String(rb.undone), make: () => rollbackLine(rb) });
   // 线路的终点：最新的任务看验收；全自动的结果放在它开始时的那段对话里（换了任务之后，上一个任务的「验收通过」不能跑到新任务里）。
+  // 只做一棒停了、出错，那一棒的小条上已经写了，不再画终点。
   const g = p.go;
-  const res = g && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && S.dismissed !== g.id && inRange(rangeOf(t), msOf(g.startedAt || g.updatedAt)) ? g : null;
+  const res = g && g.mode === 'auto' && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && S.dismissed !== g.id && inRange(rangeOf(t), msOf(g.startedAt || g.updatedAt)) ? g : null;
   const a = latest && p.acceptance && p.acceptance.state !== 'working' ? p.acceptance : null;
   if (res || a) {
     const last = stints.length ? Math.max(...stints.map((s) => msOf(s.endedAt || s.startedAt))) : msOf(t.from);
@@ -2033,7 +2034,7 @@ function rollbackLine(rb) {
 function verdictEl(g, a) {
   const state = a ? a.state : { done: 'accepted', 'needs-human': 'blocked', failed: 'failed', stopped: 'stopped' }[g.status];
   const [ic, title] = { accepted: ['check', '验收通过'], blocked: ['warn', a ? '验收没过' : '等人处理'], unknown: ['unknown', '没法验收'], failed: ['warn', '全自动出错'], stopped: ['stop', '全自动停了'] }[state];
-  const why = (a ? (a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('；')) : g.result).replace(/^验收(通过|没过)：/, '');
+  const why = (a ? (a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('；')) : g.result).replace(/^(验收(通过|没过)：|已停止。)/, '');
   const body = [state === 'blocked' || state === 'failed' ? h('span', { class: 'rd' }) : null, title];
   return h(
     'div',

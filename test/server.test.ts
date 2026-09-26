@@ -198,6 +198,7 @@ test('网页接口：强弱可以改；投票出结果后采纳，写进任务�
     const ad = await ui.call('/api/vote/adopt', { dir: s.repo, id, key: done.leaders[0] });
     assert.equal(ad.status, 200, JSON.stringify(ad.json));
     assert.match(s.read('.relay/任务.md'), /导出什么格式？ → 采用方案/);
+    assert.match(s.read('.relay/任务.md'), /票，[^）]*[A-Za-z0-9] 出的）/, '英文名后面空一格；中文名（「我出的」）不空');
     assert.match(s.read('.relay/接力本.md'), /采用方案/, '接力本里也能看到约定');
   } finally {
     ui.child.kill();

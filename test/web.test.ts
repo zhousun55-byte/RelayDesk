@@ -97,7 +97,7 @@ const t0 = { id: 't0', title: '给 wc.py 加 --json', from: '2026-09-25T13:30:00
 const t1 = { id: 't1', title: '让 wc.py 读标准输入', from: '2026-09-25T14:07:00Z', to: null, stints: [], current: true };
 const S = {
   st: { project: { task: { title: '让 wc.py 读标准输入', body: '', items: [] }, threads: [t0, t1], lastRollback: null, protocol: 'ok',
-    go: { id: 'g1', status: 'done', startedAt: '2026-09-25T13:42:00Z', updatedAt: '2026-09-25T13:49:36Z', result: '验收通过：清单 2/2 全部打勾' } } },
+    go: { id: 'g1', mode: 'auto', status: 'done', startedAt: '2026-09-25T13:42:00Z', updatedAt: '2026-09-25T13:49:36Z', result: '验收通过：清单 2/2 全部打勾' } } },
   talk: { status: { speaking: [], queue: [] } },
   dismissed: '',
 };
@@ -217,10 +217,11 @@ result = [ends(t0), ends(t1)];`,
     );
     return JSON.parse(JSON.stringify(ctx.result)) as string[][];
   };
-  const oldGo = { id: 'g1', status: 'done', startedAt: '2026-09-25T13:42:00Z', updatedAt: '2026-09-25T13:49:00Z', result: '验收通过：清单 2/2' };
+  const oldGo = { id: 'g1', mode: 'auto', status: 'done', startedAt: '2026-09-25T13:42:00Z', updatedAt: '2026-09-25T13:49:00Z', result: '验收通过：清单 2/2' };
   assert.deepEqual(run({ state: 'blocked', headline: '', items: [{ text: '第 9 棒待复核' }] }, oldGo), [['res'], ['acc']], '旧任务：全自动的结果；新任务：验收没过');
   assert.deepEqual(run({ state: 'working', headline: '', items: [] }, oldGo), [['res'], []], '新任务还在做：没有终点');
   assert.deepEqual(run(null, null), [[], []]);
+  assert.deepEqual(run(null, { ...oldGo, mode: 'single', status: 'stopped', result: '已停止。' }), [[], []], '只做一棒停了：那一棒的小条上写了，不画终点');
 });
 
 test('网页交接单：交接的每一节是一行（做了、没做完、拿不准、验证），「状态」写在右上角；没按格式写的整篇放一行', () => {

@@ -286,7 +286,8 @@ export function adoptOption(root: string, id: string, key: string): Vote {
   const o = v.options.find((x) => x.key === key);
   if (!o) throw new RelayError(`没有方案 ${key}。`, 'bad-key');
   const count = v.counts?.[key] ?? 0;
-  appendRule(root, `${v.question.replace(/\s+/g, ' ').slice(0, 60)} → 采用方案 ${key}（${count} 票，${o.authorLabel} 出的）：${firstLine(o.text)}`);
+  const by = /[\u4e00-\u9fff]$/.test(o.authorLabel) ? `${o.authorLabel}出的` : `${o.authorLabel} 出的`;
+  appendRule(root, `${v.question.replace(/\s+/g, ' ').slice(0, 60)} → 采用方案 ${key}（${count} 票，${by}）：${firstLine(o.text)}`);
   return save(root, { ...v, adopted: { key, at: new Date().toISOString() } });
 }
 
