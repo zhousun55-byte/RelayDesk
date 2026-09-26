@@ -143,13 +143,14 @@ PLIST="$APP/Contents/Info.plist"
 # 不在程序坞里挂图标、没有菜单栏：它只是在后台看着接力台。
 /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$PLIST"
 
-# 2. 图标：把 scripts/icon.svg 画成各种尺寸，做成 icns（启动台和聚焦搜索里看得到）。做不出来就用系统默认图标。
-if qlmanage -t -s 1024 -o "$TMP" "$DIR/scripts/icon.svg" >/dev/null 2>&1 && [[ -f "$TMP/icon.svg.png" ]]; then
+# 2. 图标：把 scripts/icon.png（1024 像素、透明底，由 scripts/icon.svg 画出来）缩成各种尺寸，做成 icns（启动台和聚焦搜索里看得到）。
+#    不在这里现画 SVG：快速查看画出来是白底，图标四角会是白的。做不出来就用系统默认图标。
+if [[ -f "$DIR/scripts/icon.png" ]]; then
   ICONSET="$TMP/applet.iconset"
   mkdir "$ICONSET"
   for s in 16 32 128 256 512; do
-    sips -z $s $s "$TMP/icon.svg.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-    sips -z $((s * 2)) $((s * 2)) "$TMP/icon.svg.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+    sips -z $s $s "$DIR/scripts/icon.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    sips -z $((s * 2)) $((s * 2)) "$DIR/scripts/icon.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
   done
   iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/applet.icns"
   # 新版系统优先用 Assets.car 里的图标；去掉它，让上面的 icns 生效。
