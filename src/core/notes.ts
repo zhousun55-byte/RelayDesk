@@ -401,7 +401,18 @@ function workBullet(text: string): string {
   const nothing = /^(没有|没|未|并未)(修改|改动|改|动)/;
   const pick = (skip: RegExp[]) => all.findIndex((t) => !skip.some((re) => re.test(t)));
   let i = pick([reading, bookkeeping, nothing]);
-  if (i < 0) i = pick([reading, bookkeeping]);
+  if (i < 0) {
+    // 每一条都以读、核对、记账开头：结论常写在分号后面（「核对全部差异；实现和测试符合任务，未发现问题」），用那半句。
+    for (const t of all) {
+      const part = t
+        .split(/[；;]/)
+        .slice(1)
+        .map((x) => x.trim())
+        .find((x) => x && ![reading, bookkeeping, nothing].some((re) => re.test(x)));
+      if (part) return clip80(part);
+    }
+    i = pick([reading, bookkeeping]);
+  }
   if (i < 0) return clip80(all[0] ?? '');
   const t = all[i];
   return clip80(/[:：]$/.test(t) && all[i + 1] ? `${t}${all[i + 1]}` : t);

@@ -2033,7 +2033,7 @@ function rollbackLine(rb) {
 function verdictEl(g, a) {
   const state = a ? a.state : { done: 'accepted', 'needs-human': 'blocked', failed: 'failed', stopped: 'stopped' }[g.status];
   const [ic, title] = { accepted: ['check', '验收通过'], blocked: ['warn', a ? '验收没过' : '等人处理'], unknown: ['unknown', '没法验收'], failed: ['warn', '全自动出错'], stopped: ['stop', '全自动停了'] }[state];
-  const why = a ? (a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('；')) : g.result.replace(/^验收(通过|没过)：/, '');
+  const why = (a ? (a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('；')) : g.result).replace(/^验收(通过|没过)：/, '');
   const body = [state === 'blocked' || state === 'failed' ? h('span', { class: 'rd' }) : null, title];
   return h(
     'div',
@@ -3480,7 +3480,7 @@ function renderGate(p) {
   RE.gate.replaceChildren(
     h('span', { class: 'cap' }, '检查'),
     h('code', null, cmd),
-    g && g.status ? h('span', { class: 'res' }, g.status === 'pass' ? icon('check') : h('span', { class: 'rd' }), [g.text, g.stint ? `第 ${g.stint} 棒` : ''].filter(Boolean).join(' · ')) : null
+    g && g.status ? h('span', { class: 'res' }, g.status === 'pass' ? icon('check') : g.status === 'fail' || g.status === 'error' ? h('span', { class: 'rd' }) : null, [g.text, g.stint ? `第 ${g.stint} 棒` : ''].filter(Boolean).join(' · ')) : null
   );
 }
 

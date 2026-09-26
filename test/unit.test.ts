@@ -354,6 +354,9 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
   assert.equal(reviewing.summary, '复核结论写入 `.relay/复核/第7棒.md`：没问题。');
   assert.equal(parseHandoff('# 交接：x\n\n## 做了什么\n\n- 没有修改 `wc.py`。\n- README.md 补了从标准输入读的用法。\n').summary, 'README.md 补了从标准输入读的用法。');
   assert.equal(parseHandoff('# 交接：x\n\n## 做了什么\n\n- 读了接力本。\n- 没有修改代码，只跑了检查。\n').summary, '没有修改代码，只跑了检查。', '别的都是准备时还是用它');
+  // Codex 终审的真实写法（2026-09-26 界面实测）：三条都以读、核对、记账开头，以前挑成「已读接力本……」
+  const final = parseHandoff('# 交接：Codex · gpt-6-sol\n\n## 做了什么\n\n- 已读接力本、任务清单、前两棒交接及复核记录。\n- 核对 `b3c24c1c73 → 1e88667341` 的全部源码差异与当前文件；search 实现和测试符合任务，未发现需修复的问题。\n- 写入 `.relay/复核/终审-第3棒-0926-1750.md`，结论「没问题」；终审步骤已在任务清单打勾。\n');
+  assert.equal(final.summary, 'search 实现和测试符合任务，未发现需修复的问题。');
 });
 
 test('复核结论：认出复核的是第几棒、结论是哪一种', () => {

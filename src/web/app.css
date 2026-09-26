@@ -760,15 +760,15 @@ svg.i {
   width: 14px;
   height: 14px;
 }
-.busy {
+button.busy {
   pointer-events: none;
   position: relative;
   color: transparent !important;
 }
-.busy > * {
+button.busy > * {
   visibility: hidden;
 }
-.busy::after {
+button.busy::after {
   content: '';
   position: absolute;
   inset: 0;
