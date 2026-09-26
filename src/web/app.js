@@ -4224,6 +4224,9 @@ function paletteItems(query, scope) {
     const files = ((S.tree && S.tree.files) || []).map((f) => ({ label: basename(f), alt: f, sub: f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '', icon: 'file', run: () => openFile(f) }));
     pick(files, '文件', scope === 'files' ? 40 : 10);
   }
+  // 输入的正好是一个文件名：文件排在最前面
+  const fg = groups.find((g) => g.label === '文件');
+  if (fg && fg.items.some((it) => it.label.toLowerCase() === qy)) groups.unshift(...groups.splice(groups.indexOf(fg), 1));
   return groups;
 }
 

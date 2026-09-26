@@ -1454,7 +1454,7 @@ button.busy::after {
 .who .say {
   font-size: 13px;
   color: var(--ink-3);
-  flex: 0 1 auto;
+  flex: 0 20 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
