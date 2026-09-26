@@ -117,7 +117,8 @@ zsh scripts/make-desktop-app.sh
 | ZCode | 桌面版自带的命令行内核 | `--mode edit` |
 | DeepSeek Harness | 桌面版自带的 `dsh --profile headless --json`（没装 `dsh` 命令也行），用桌面版登录的账号和选的模型 | `workspace-write`：只能写项目文件夹，要审批的操作一律拒绝 |
 | 只有接口的模型（DeepSeek、Kimi、通义、智谱、MiMo……任何 OpenAI 兼容接口） | 接力台内置的小代理：只能列文件、读文件、写文件、精确替换、搜索、跑检查命令 | 不能跑任意命令；按真实路径判断，经过链接指到项目外面的不能碰，`.git`、`.relay`、不许改的文件换个大小写也拦得住 |
-| Gemini CLI、Qwen Code、OpenCode、Droid、Copilot CLI、Grok CLI、Antigravity | 各自的非交互参数 | 部分只有「完全放开」档能用 |
+| Antigravity | `agy -p --output-format stream-json`（1.1.12 以上） | 自动接受改文件；命令在它自己的沙箱里跑（只能写项目文件夹、不能联网），它设置里没放行的命令和出沙箱一律拒绝 |
+| Gemini CLI、Qwen Code、OpenCode、Droid、Copilot CLI、Grok CLI | 各自的非交互参数 | OpenCode、Copilot CLI 只有「完全放开」档能用 |
 
 「完全放开」档（设置里改）让工具不再拦任何操作，能装依赖、能联网，风险自负。
 

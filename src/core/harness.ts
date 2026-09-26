@@ -745,8 +745,9 @@ const antigravity: HarnessSpec = {
   label: 'Antigravity',
   vendor: 'Google',
   rank: 50,
-  // 它的「接受改动」模式一遇到要确认的命令就整段停下，只有完全放开才能无人值守地干活。
-  workLevels: ['full'],
+  // 安全档：改文件自动接受，命令放进它自己的沙箱（只能写项目文件夹和临时目录，不能联网）；
+  // 要人点头的（它设置里没放行的命令、出沙箱）无界面模式下直接拒绝、接着干。1.1.12 起 -p 才认 --mode，更早的会整段停下。
+  workLevels: ['safe', 'full'],
   canReview: true,
   tested: 'partial',
   loginHint: '在终端运行 agy，按提示用 Google 账号登录。',
@@ -762,8 +763,7 @@ const antigravity: HarnessSpec = {
   invoke(loc, i) {
     const a = [...loc.exec, '-p', i.prompt, '--output-format', 'stream-json'];
     if (i.readOnly) a.push('--mode', 'plan');
-    else if (i.level === 'full') a.push('--dangerously-skip-permissions', '--sandbox');
-    else a.push('--mode', 'accept-edits');
+    else a.push(...(i.level === 'full' ? ['--dangerously-skip-permissions'] : ['--mode', 'accept-edits']), '--sandbox');
     if (i.model) a.push('--model', i.model);
     if (i.effort) a.push('--effort', i.effort);
     return { argv: a, format: 'agy' };

@@ -43,7 +43,11 @@ test('工具调用参数：安全档 / 完全放开 / 只读，各家都按无�
 
   const zcode = findHarness('zcode')!.invoke(loc, { ...base, level: 'safe', readOnly: false });
   assert.deepEqual(zcode.argv.slice(1), ['-p', 'P', '--cwd', '/wt', '--mode', 'edit', '--no-color']);
-  assert.deepEqual(findHarness('agy')!.workLevels, ['full'], 'Antigravity 只有完全放开才能无人值守');
+  // Antigravity：安全档接受改文件 + 沙箱（没有 --dangerously-skip-permissions，出沙箱要人点头、没人就拒绝）
+  const agy = (level: 'safe' | 'full', readOnly = false) => findHarness('agy')!.invoke(loc, { ...base, level, readOnly }).argv.slice(1);
+  assert.deepEqual(agy('safe'), ['-p', 'P', '--output-format', 'stream-json', '--mode', 'accept-edits', '--sandbox']);
+  assert.deepEqual(agy('full'), ['-p', 'P', '--output-format', 'stream-json', '--dangerously-skip-permissions', '--sandbox']);
+  assert.deepEqual(agy('safe', true), ['-p', 'P', '--output-format', 'stream-json', '--mode', 'plan']);
   assert.equal(harnessForCommand('claude --foo')!.id, 'claude');
   assert.equal(harnessForCommand('/Users/x/.npm-global/bin/codex')!.id, 'codex');
   assert.equal(harnessForCommand('open -a Cursor {{worktree}}'), null);
