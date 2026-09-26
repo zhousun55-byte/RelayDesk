@@ -200,7 +200,8 @@ export function syncRegistry(report: DetectReport): string[] {
     }
   }
 
-  for (const h of report.harnesses) {
+  // 按排序先后加：同一个工具同一个模型的两份（桌面版自带的 Claude Code 和终端里的）留排在前面的那份
+  for (const h of [...report.harnesses].sort((x, y) => (findHarness(x.id)?.rank ?? 99) - (findHarness(y.id)?.rank ?? 99))) {
     if (h.login.state === 'no') continue;
     const spec = findHarness(h.id)!;
     const loc = locateCached(spec);
@@ -357,6 +358,8 @@ export function enableProvider(report: DetectReport, id: string, name?: string):
   reg.agents.push(agent);
   backupRegistryOnce();
   saveRegistry(reg);
+  // 同一家的桌面程序之前没处挂、单独占着一位：现在记到它名下
+  tidyRegistry(report);
   return agent;
 }
 

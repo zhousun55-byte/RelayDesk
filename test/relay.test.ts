@@ -324,9 +324,10 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   const reg = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'agents.json'), 'utf8')) as { agents: { name: string; cmd?: string }[] };
   assert.deepEqual(
     reg.agents.map((a) => a.name),
-    ['claude', 'claude-official', 'codex']
+    ['claude-official', 'claude', 'codex'],
+    '按排序先后加：官方账号在前'
   );
-  assert.match(reg.agents[1].cmd ?? '', /claude --setting-sources project,local$/, '你自己在终端里开官方账号的命令');
+  assert.match(reg.agents[0].cmd ?? '', /claude --setting-sources project,local$/, '你自己在终端里开官方账号的命令');
   s.relay(['workers', 'add', 'claude-app', '--kind', 'app', '--cmd', 'open -a Claude {{dir}}', '--label', 'Claude']);
   s.relay(['init']);
   s.relay(['task', '做两步', '--step', '第一步', '第二步']);

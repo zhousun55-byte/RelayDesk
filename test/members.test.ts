@@ -252,3 +252,37 @@ test('Antigravity 安全档：它的设置允许读写项目外的文件就不�
   assert.equal(agy('safe').why, undefined);
   assert.equal(harness.findHarness('agy')!.model({ exec: [], version: '', where: '' }).label, 'Gemini 3.8 Flash (High)');
 });
+
+test('新装识别：桌面版自带的 Claude Code 排在终端的前面（同一个账号、同一个模型只留它，名字带版本）；同意用 MiMo 的密钥后，单独占着的 MiMo 桌面版记到它名下', () => {
+  const PATH = process.env.PATH;
+  process.env.PATH = '/usr/bin:/bin';
+  try {
+    writeJson(home('auto.json'), { order: [] });
+    writeJson(home('agents.json'), { agents: [] });
+    const h = (id: string, model: string) => ({ id, label: id, vendor: '', version: '1', where: '', login: { state: 'ok' as const, detail: '' }, model: { model, label: model }, workLevels: ['safe' as const], canReview: true, tested: 'yes' as const, loginHint: '' });
+    const mimo = { id: 'mimocode:xiaomi', label: 'MiMo', format: 'openai' as const, baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', keyFrom: 'mimocode', needsConsent: true, models: ['mimo-v2.6-pro'], model: 'mimo-v2.6-pro', state: 'ok' as const, detail: '', source: 'mimocode' as const };
+    const report = { at: '', harnesses: [h('claude', 'opus'), h('claude-official', 'claude-opus-5-5')], providers: [mimo], apps: [{ name: 'Claude', hint: '' }, { name: 'Xiaomi MiMo', hint: '' }], unknownKeys: [] };
+
+    detect.syncRegistry(report);
+    let reg = registry.loadRegistry();
+    assert.deepEqual(
+      reg.agents.map((a) => a.name),
+      ['claude-official', 'mimo'],
+      '终端里的 Claude Code 是同一个账号、同一个模型，不再加一位；MiMo 的密钥还没同意，桌面版先单独一位'
+    );
+    assert.equal(reg.agents[0].app, 'open -a Claude {{dir}}');
+
+    detect.enableProvider(report, mimo.id);
+    reg = registry.loadRegistry();
+    assert.deepEqual(
+      reg.agents.map((a) => [a.name, a.app ?? '']),
+      [
+        ['claude-official', 'open -a Claude {{dir}}'],
+        ['mimo-api', 'open -a "Xiaomi MiMo" {{dir}}'],
+      ],
+      '同意之后桌面版记在接口名下，不再单独一位'
+    );
+  } finally {
+    process.env.PATH = PATH;
+  }
+});
