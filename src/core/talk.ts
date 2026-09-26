@@ -27,13 +27,13 @@ export interface TalkRow {
   text: string;
   /** 这条是「没回上来」的说明。 */
   error?: boolean;
-  /** 「各自先想」：同一轮的几条（互相看不到）。 */
+  /** 「对比」：同一轮的几条（互相看不到）。 */
   round?: string;
-  /** 这句话后面是怎么请 AI 回答的：turn 轮流说 / solo 各自先想。 */
+  /** 这句话后面是怎么请 AI 回答的：turn 讨论（轮流说）/ solo 对比（同时答）。 */
   mode?: TalkMode;
 }
 
-/** turn = 轮流说（后面的看得到前面的）；solo = 各自先想（同时问，互相看不到）。 */
+/** turn = 讨论：轮流说（后面的看得到前面的）；solo = 对比：同时问，互相看不到，回答并排放。 */
 export type TalkMode = 'turn' | 'solo';
 
 export function talkPath(root: string): string {
@@ -197,7 +197,7 @@ function hhmm(ts: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** 拼给某个 AI 的发言提示：规则 + 项目背景 + 最近的讨论记录。纯函数。solo = 各自先想（这一轮别人的回答不给它看）。 */
+/** 拼给某个 AI 的发言提示：规则 + 项目背景 + 最近的讨论记录。纯函数。solo = 对比（这一轮别人的回答不给它看）。 */
 export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean }): string {
   const max = input.maxChars ?? 24_000;
   const lines = input.rows
@@ -222,11 +222,12 @@ export function buildTalkPrompt(input: { speaker: string; root: string; rows: Ta
       '- 直接给出你的判断和理由，不客套，不复述别人已经说过的话。',
       '- 可以点名回应别人的观点：同意还是不同意，为什么。你有不同的想法就直说，不要因为对方是更强的模型就附和。',
       '- 一般控制在 300 字以内；被要求详细时再展开。',
+      '- 消息里用反引号括起来的路径是提到的文件；.relay/uploads/ 下的是人传上来的附件（图片、文档……），需要就自己打开看，图片用你能看图的工具打开。',
       '- 用中文。只输出你要说的话本身。',
     ].join('\n'),
     `讨论记录（${kept.length < lines.length ? '较早的已省略，' : ''}最新的在最后）：\n${kept.join('\n\n') || '（还没有人说话）'}`,
     input.solo
-      ? `这一轮是「各自先想」：几个 AI 同时回答最后那个问题，互相看不到。请给出你自己独立的判断，不用顾及别人会怎么说。现在请你（${input.speaker}）回答。`
+      ? `这一轮是「对比」：几个 AI 同时回答最后那个问题，互相看不到，回答会并排放在一起给人对比。请给出你自己独立的判断，不用顾及别人会怎么说。现在请你（${input.speaker}）回答。`
       : `现在轮到你（${input.speaker}）发言。`,
   ];
   return redactSecrets(parts.join('\n\n'));
@@ -337,11 +338,11 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
 
 interface Round {
   queue: string[];
-  /** 正在说的（各自先想时好几个同时说）。 */
+  /** 正在说的（对比时好几个同时说）。 */
   current: Set<string>;
   since: string | null;
   running: Promise<void> | null;
-  /** 排队的「各自先想」轮：同一轮的人一起问。 */
+  /** 排队的「对比」轮：同一轮的人一起问。 */
   soloQueue: { id: string; names: string[] }[];
 }
 
@@ -431,7 +432,7 @@ async function runRound(root: string, context: () => TalkContext): Promise<void>
   for (;;) {
     const solo = r.soloQueue.shift();
     if (solo) {
-      // 各自先想：大家看到的记录都停在这一刻，互相看不到这一轮别人的回答。
+      // 对比：大家看到的记录都停在这一刻，互相看不到这一轮别人的回答。
       const rows = readTalk(root, 80);
       r.since = new Date().toISOString();
       for (const n of solo.names) r.current.add(n);
@@ -465,7 +466,7 @@ export function checkSpeakers(ask: string[]): string[] {
 
 /**
  * 人说一句，并请几位 AI 回应。立即返回；回答在后台陆续写进记录。
- * turn：一个接一个，后面的看得到前面的；solo：同时问，互相看不到（各自先想）。
+ * turn：一个接一个，后面的看得到前面的；solo：同时问，互相看不到（对比）。
  * 已经有一轮在跑时，新请的人排到后面（他们发言时会看到这句话）。
  */
 export function say(root: string, text: string, ask: string[], context: () => TalkContext = () => ({}), mode: TalkMode = 'turn'): { row: TalkRow; queued: string[]; done: Promise<void> } {

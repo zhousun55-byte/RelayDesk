@@ -547,7 +547,17 @@ svg.i {
 }
 .threads > div {
   overflow: hidden;
-  padding: 2px 0 6px 10px;
+  padding-left: 10px;
+}
+/* 上下的空隙放在里面、跟着一起收起（放在外面的内边距收不掉，会露出第一行的白底） */
+.threads > div::before,
+.threads > div::after {
+  content: '';
+  display: block;
+  height: 2px;
+}
+.threads > div::after {
+  height: 6px;
 }
 .thread {
   display: flex;
@@ -600,12 +610,11 @@ svg.i {
   border-top: 1px solid var(--rule);
 }
 .team {
-  flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
   padding: 4px 6px;
-  margin: -4px 0 -4px -6px;
+  margin: -4px auto -4px -6px;
   border-radius: 8px;
   transition: background 0.14s;
 }
@@ -1849,6 +1858,35 @@ button.busy::after {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* 人带上的文件：图片是缩略图，点开看原图；别的是文件小条 */
+.me .att {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: min(78%, 600px);
+}
+.shot {
+  display: block;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--hair), var(--shadow-slip);
+  transition: transform 0.24s var(--pop);
+  animation: pop 0.26s var(--pop);
+}
+.shot:hover {
+  transform: scale(1.02);
+}
+.shot img {
+  display: block;
+  max-width: 220px;
+  max-height: 160px;
+  object-fit: cover;
+}
+.me .att .chip {
+  cursor: pointer;
+}
 /* AI 说的话 */
 .ai {
   display: grid;
@@ -2118,6 +2156,35 @@ button.busy::after {
 .composer .attach .chip,
 .composer .opt-row .chip {
   padding-right: 3px;
+}
+/* 带上的图片：小条里一枚缩略图；正在传的转圈 */
+.chip .thumb {
+  width: 16px;
+  height: 16px;
+  margin-left: -3px;
+  border-radius: 3px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px var(--hair);
+}
+.chip.busy {
+  color: var(--ink-3);
+}
+.chip .spin {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink-3);
+  border-right-color: transparent;
+  animation: spin 0.7s linear infinite;
+}
+.tools .plus-btn {
+  margin-left: -4px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--rule);
+  transition: background 0.14s, color 0.14s, transform 0.24s var(--pop);
+}
+.tools .plus-btn:hover {
+  transform: rotate(90deg);
 }
 .composer textarea {
   display: block;

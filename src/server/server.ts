@@ -9,7 +9,7 @@ import { loadAutoSettings, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
 import { enableProvider, loadDetected, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
-import { projectFiles, projectPath, readProjectFile } from '../core/files';
+import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
 import { copyToClipboard, fillTemplate, reveal, runOpener, chooseFolder } from '../core/launch';
 import { loadLedger, saveStint, type Stint } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
@@ -190,10 +190,10 @@ function strList(v: unknown): string[] {
 }
 
 /**
- * 防 DNS 重绑定和跨站请求：只认本机地址 + 本端口；POST 必须是 JSON。
+ * 防 DNS 重绑定和跨站请求：只认本机地址 + 本端口；POST 必须是 JSON（传文件是 octet-stream：别的网站发这两种都要先预检，过不来）。
  * 别的网站里的一张图片、一个链接也会带着本机地址来请求（不带 Origin）：浏览器标明是从别的网站来的（Sec-Fetch-Site: cross-site / same-site），一律不认。
  */
-function trusted(req: http.IncomingMessage): boolean {
+function trusted(req: http.IncomingMessage, pathname: string): boolean {
   const port = req.socket.localPort;
   const okHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
   if (!okHosts.has(String(req.headers.host ?? ''))) return false;
@@ -201,7 +201,7 @@ function trusted(req: http.IncomingMessage): boolean {
   if (origin && !okHosts.has(origin.replace(/^http:\/\//, ''))) return false;
   const site = String(req.headers['sec-fetch-site'] ?? '');
   if (site && site !== 'same-origin' && site !== 'none') return false;
-  if (req.method === 'POST' && !String(req.headers['content-type'] ?? '').includes('application/json')) return false;
+  if (req.method === 'POST' && !String(req.headers['content-type'] ?? '').includes(pathname === '/api/upload' ? 'application/octet-stream' : 'application/json')) return false;
   return true;
 }
 
@@ -551,8 +551,20 @@ export function createServer(opts: ServerOptions): http.Server {
     void (async () => {
       try {
         const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-        if (!trusted(req)) {
+        if (!trusted(req, url.pathname)) {
           send(res, 403, { ok: false, error: '只接受本机接力台页面的请求。', code: 'forbidden' });
+          return;
+        }
+        // 传文件：请求体就是文件本身，边收边写进项目的 .relay/uploads
+        if (req.method === 'POST' && url.pathname === '/api/upload') {
+          const root = resolveDir(url.searchParams.get('dir') ?? undefined, fallbackDir());
+          requireProject(root);
+          if (Number(req.headers['content-length'] ?? 0) > UPLOAD_MAX) throw new RelayError(`文件太大，上限 ${UPLOAD_MAX / 1024 / 1024} MB。`, 'too-large');
+          send(res, 200, { ok: true, path: await saveUpload(root, url.searchParams.get('name') ?? '', req) });
+          return;
+        }
+        if (req.method === 'GET' && url.pathname === '/api/raw') {
+          serveRaw(resolveDir(url.searchParams.get('dir') ?? undefined, fallbackDir()), url.searchParams.get('path') ?? '', res);
           return;
         }
         if (url.pathname.startsWith('/api/')) {
@@ -578,6 +590,43 @@ export function createServer(opts: ServerOptions): http.Server {
     if (opts.watch) unwatchAll();
   });
   return server;
+}
+
+/** 项目里一个文件的原样内容（图片的缩略图、点开看原图）。 */
+const RAW_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+function serveRaw(root: string, rel: string, res: http.ServerResponse): void {
+  const { clean, real } = projectPath(root, rel);
+  if (!fs.statSync(real).isFile()) throw new RelayError('不是文件。', 'no-file');
+  const type = RAW_TYPES[path.extname(real).toLowerCase()];
+  res.writeHead(200, {
+    'Content-Type': type ?? 'application/octet-stream',
+    'Content-Disposition': type ? 'inline' : `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(real))}`,
+    // 传上来的文件名字带时间、不会再变：浏览器记住，缩略图不用每次重新读
+    'Cache-Control': clean.startsWith(`${UPLOAD_REL}/`) ? 'private, max-age=31536000, immutable' : 'no-cache',
+    'X-Content-Type-Options': 'nosniff',
+    // 项目里的文件不能在接力台的网址下跑脚本（比如带脚本的 svg）；pdf 交给浏览器自己的阅读器（加了 sandbox 它打不开）
+    ...(type === 'application/pdf' ? {} : { 'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'" }),
+  });
+  fs.createReadStream(real)
+    .on('error', () => res.destroy())
+    .pipe(res);
 }
 
 function serveStatic(pathname: string, res: http.ServerResponse): void {

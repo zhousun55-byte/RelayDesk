@@ -32,7 +32,7 @@ export function talkCommand(): Command {
     .description('群聊：问一句，请几个 AI 回答（只说话、不改文件）。不带话就显示最近的记录')
     .argument('[话...]', '要说的话')
     .option('--ask <名字>', '请谁回答，逗号分隔（默认：所有能参加群聊的）')
-    .option('--solo', '各自先想：同时问，互相看不到别人的回答')
+    .option('--solo', '对比：同时问，互相看不到别人的回答，回答并排放')
     .option('--clear', '清空群聊（旧记录改名存档）')
     .action(async (words: string[], opts: { ask?: string; solo?: boolean; clear?: boolean }) => {
       const root = findRoot();
@@ -50,7 +50,7 @@ export function talkCommand(): Command {
       }
       const before = readTalk(root, 100000).length;
       const r = say(root, text, speakers(opts.ask), talkContext(root), opts.solo ? 'solo' : 'turn');
-      console.log(c.dim(`请 ${r.queued.join('、')} ${opts.solo ? '各自先想' : '依次回答'}，稍等……`));
+      console.log(c.dim(`请 ${r.queued.join('、')} ${opts.solo ? '同时回答（对比）' : '依次回答'}，稍等……`));
       await r.done;
       for (const row of readTalk(root, 100000).slice(before + 1)) console.log(`\n${c.bold(row.who)}：${row.text}`);
     });

@@ -642,7 +642,7 @@ test('采纳方案：写进任务的「约定」，模板里的占位去掉；�
   assert.match(parseTask(fs.readFileSync(path.join(d2, '.relay', '任务.md'), 'utf8')).rules, /规则一/);
 });
 
-test('群聊提示：带规则、任务背景和记录；太长时丢掉最早的；各自先想时说明互相看不到', () => {
+test('群聊提示：带规则、任务背景和记录；太长时丢掉最早的；对比时说明互相看不到', () => {
   const rows: TalkRow[] = Array.from({ length: 50 }, (_, i) => ({ ts: T, kind: i % 2 ? 'ai' : 'human', who: i % 2 ? 'Claude' : '我', text: `第${i}句 ` + 'x'.repeat(200) }));
   const p = buildTalkPrompt({ speaker: 'DeepSeek', root: '/p', rows, context: { task: { title: '做滤镜', phaseText: '在干活', changes: ['a.xmp'] } }, maxChars: 3000 });
   assert.ok(p.includes('你是「DeepSeek」'));
@@ -650,9 +650,10 @@ test('群聊提示：带规则、任务背景和记录；太长时丢掉最早�
   assert.ok(p.includes('第49句'));
   assert.ok(!p.includes('第0句'));
   assert.ok(p.includes('不要因为对方是更强的模型就附和'));
+  assert.ok(p.includes('.relay/uploads/ 下的是人传上来的附件'), '告诉 AI 附件在哪、自己打开看');
   assert.ok(p.endsWith('现在轮到你（DeepSeek）发言。'));
   const solo = buildTalkPrompt({ speaker: 'DeepSeek', root: '/p', rows: rows.slice(0, 2), solo: true });
-  assert.match(solo, /各自先想/);
+  assert.match(solo, /这一轮是「对比」/);
 });
 
 test('群聊记录：兼容旧格式，跳过旧版残留的「正在说」和投票行', () => {

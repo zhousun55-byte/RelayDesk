@@ -93,7 +93,7 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '    say "投票：$pick\\n理由：$NAME 觉得这个更稳"',
     "  elif grep -q '请给出你的方案' \"$P\"; then",
     '    say "$NAME 的方案：先做最小能用的版本\\n理由：快，出问题好退回"',
-    "  elif grep -q '各自先想' \"$P\"; then",
+    "  elif grep -q '这一轮是「对比」' \"$P\"; then",
     '    say "$NAME 独立想了想：可以"',
     '  else',
     '    say "$NAME 的看法：同意"',

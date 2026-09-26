@@ -52,6 +52,7 @@ const ICONS = {
   trash: '<path d="M2.75 4.25h10.5M6.25 4.25v-1.5h3.5v1.5M4.25 4.25l.7 9h6.1l.7-9"/>',
   grip: '<path d="M6 4h.01M10 4h.01M6 8h.01M10 8h.01M6 12h.01M10 12h.01" stroke-width="2.2"/>',
   fold: '<path d="m5 3.25 3 3 3-3M5 12.75l3-3 3 3"/>',
+  unfold: '<path d="m5 5.75 3-3 3 3M5 10.25l3 3 3-3"/>',
   review: '<path d="M8 1.75 13 3.6v3.9c0 3.1-2.1 5.3-5 6.75-2.9-1.45-5-3.65-5-6.75V3.6z"/><path d="m5.75 7.9 1.6 1.6 3-3.2"/>',
   warn: '<path d="M8 2.25 14.25 13H1.75z"/><path d="M8 6.5v3M8 11.25v.01"/>',
   power: '<path d="M8 1.75v5.5"/><path d="M4.5 4a5.25 5.25 0 1 0 7 0"/>',
@@ -382,6 +383,8 @@ const S = {
   atUsed: false,
   mode: 'turn',
   files: [],
+  /** 正在传的文件：传完换成它在项目里的路径，放进 files。 */
+  uploading: [],
   options: [],
   slash: null,
   autoAfter: false,
@@ -1303,9 +1306,10 @@ function drawLeft() {
     projects.push(h('div', { class: `proj${cur ? ' current' : ''}${cur && !S.fold ? ' open' : ''}` }, row, cur ? h('div', { class: 'threads' }, h('div', null, list)) : null));
   }
   if (!st.projects.length) projects.push(h('div', { class: 'proj' }, h('div', { class: 'proj-row' }, h('button', { class: 'pmain', onclick: chooseFolder }, icon('folder'), h('span', { class: 'name' }, '打开文件夹')))));
-  // 成员叠成一叠：在干活的那位放最上面
+  // 成员收成一小叠（在干活的那位放最上面），点开是名单
   const busy = busyMember();
   const team = [...members()].sort((a, b) => Number(b.name === busy) - Number(a.name === busy));
+  const look = (m) => (m.name === busy ? 'busy' : m.cooling ? 'cooling' : '');
   LE.body.replaceChildren(
     h(
       'div',
@@ -1321,8 +1325,26 @@ function drawLeft() {
       { class: 'dock' },
       h(
         'button',
-        { class: 'team', 'aria-label': '成员', 'data-tip': team.length ? team.map(memberName).join('、') : '成员', onclick: () => openSettings('members') },
-        team.length ? stack(team, (m) => (m.name === busy ? 'busy' : m.cooling ? 'cooling' : ''), 8) : h('span', { class: 'more-n' }, '成员')
+        {
+          class: 'team',
+          'aria-label': '成员',
+          'aria-haspopup': 'menu',
+          onclick: (e) =>
+            openMenu(
+              e.currentTarget,
+              [
+                ...team.map((m) => ({
+                  label: memberName(m),
+                  sub: [m.tool, m.name === busy ? '干活中' : m.cooling ? `额度用完 · ${m.coolingText}` : !m.canWork && m.kind !== 'app' ? '不可调度' : ''].filter(Boolean).join(' · '),
+                  tile: tile(m, 's20', look(m)),
+                  right: m.tier === 'strong' ? '强' : '弱',
+                  run: () => openSettings('members'),
+                })),
+              ],
+              { side: 'top' }
+            ),
+        },
+        team.length ? stack(team, look, 3) : h('span', { class: 'more-n' }, '成员')
       ),
       iconBtn('设置', 'sliders', () => openSettings())
     )
@@ -2121,7 +2143,14 @@ function checklist(task) {
 
 function talkRow(r) {
   if (r.kind === 'human') {
-    return h('div', { class: 'me' }, h('span', { class: 'cap' }, [r.mode === 'solo' ? '各自' : '', clock(r.ts)].filter(Boolean).join(' · ')), h('div', { class: 'note', html: inline(esc(r.text)) }));
+    const { body, files } = splitFiles(r.text);
+    return h(
+      'div',
+      { class: 'me' },
+      h('span', { class: 'cap' }, [r.mode === 'solo' ? '对比' : '', clock(r.ts)].filter(Boolean).join(' · ')),
+      body ? h('div', { class: 'note', html: inline(esc(body)) }) : null,
+      files.length ? h('div', { class: 'att' }, files.map(fileEl)) : null
+    );
   }
   if (r.kind === 'system') return h('div', { class: 'sys' }, r.text);
   return aiRow(r);
@@ -2139,7 +2168,7 @@ function aiRow(r, compact) {
 }
 
 function roundBox(rows) {
-  return h('div', { class: 'round' }, h('span', { class: 'cap' }, `各自 · ${rows.length}`), h('div', { class: 'round-cols' }, rows.map((r) => aiRow(r, true))));
+  return h('div', { class: 'round' }, h('span', { class: 'cap' }, `对比 · ${rows.length}`), h('div', { class: 'round-cols' }, rows.map((r) => aiRow(r, true))));
 }
 
 function typingLine(st) {
@@ -2621,7 +2650,7 @@ function chatMode() {
   return S.chat || talkHas(S.talk) || talkLive() ? 'chat' : 'chat-new';
 }
 
-/** 群聊里的每一项：人说的、AI 说的、「各自」那一轮、投票，按时间排；正在用的那段最后是谁在输入。 */
+/** 群聊里的每一项：人说的、AI 说的、「对比」那一轮、投票，按时间排；正在用的那段最后是谁在输入。 */
 function chatItems(d, live) {
   const items = [];
   const rounds = new Map();
@@ -3020,7 +3049,17 @@ const C = {};
 function buildComposer() {
   C.attach = h('div', { class: 'attach' });
   C.pill = h('span', { class: 'slash-pill', hidden: true });
-  C.ta = h('textarea', { rows: '1', 'aria-label': '输入', oninput: onComposerInput, onkeydown: onComposerKey, onclick: updateSuggest });
+  C.ta = h('textarea', { rows: '1', 'aria-label': '输入', oninput: onComposerInput, onkeydown: onComposerKey, onclick: updateSuggest, onpaste: onComposerPaste });
+  C.fileIn = h('input', {
+    type: 'file',
+    multiple: true,
+    hidden: true,
+    onchange: () => {
+      uploadFiles([...C.fileIn.files]);
+      C.fileIn.value = '';
+    },
+  });
+  C.plus = iconBtn('上传文件', 'plus', () => C.fileIn.click(), '', 'plus-btn');
   C.optInput = h('input', {
     type: 'text',
     placeholder: '加选项',
@@ -3046,14 +3085,15 @@ function buildComposer() {
     'div',
     { class: 'seg ink', role: 'group', 'aria-label': '方式' },
     [
-      ['turn', '讨论'],
-      ['solo', '各自'],
-      ['vote', '投票'],
-    ].map(([k, label]) =>
+      ['turn', '讨论', '轮流回答，后面的看得到前面的'],
+      ['solo', '对比', '同时回答，互相看不到，并排放'],
+      ['vote', '投票', '各出方案，匿名投票'],
+    ].map(([k, label, tip]) =>
       h(
         'button',
         {
           'data-mode': k,
+          'data-tip': tip,
           'aria-pressed': String(S.mode === k),
           onclick: () => {
             S.mode = k;
@@ -3082,13 +3122,14 @@ function buildComposer() {
     '全自动'
   );
   C.send = h('button', { class: 'send', 'aria-label': '发送', 'data-tip': '发送', 'data-kbd': '↵', onclick: send }, icon('up'));
-  C.tools = h('div', { class: 'tools' }, C.seg, C.auto, C.pick, h('span', { class: 'sp' }), C.send);
+  C.tools = h('div', { class: 'tools' }, C.plus, C.seg, C.auto, C.pick, h('span', { class: 'sp' }), C.send);
   C.box = h(
     'div',
     {
       class: 'composer',
       ondragover: (e) => {
-        if (![...e.dataTransfer.types].includes('application/x-relay-path')) return;
+        const types = [...e.dataTransfer.types];
+        if (!types.includes('application/x-relay-path') && !types.includes('Files')) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
         C.box.classList.add('drop');
@@ -3099,11 +3140,13 @@ function buildComposer() {
       ondrop: (e) => {
         const p = e.dataTransfer.getData('application/x-relay-path');
         C.box.classList.remove('drop');
-        if (!p) return;
+        if (!p && !e.dataTransfer.files.length) return;
         e.preventDefault();
-        addFile(p);
+        if (p) addFile(p);
+        else uploadFiles([...e.dataTransfer.files]);
       },
     },
+    C.fileIn,
     C.attach,
     C.pill,
     C.ta,
@@ -3161,6 +3204,7 @@ function updateComposer() {
   const vote = !task && S.mode === 'vote';
   C.seg.hidden = task || !!S.slash;
   C.pick.hidden = task || !!S.slash;
+  C.plus.hidden = !!S.slash;
   C.auto.hidden = !task;
   C.auto.setAttribute('aria-checked', String(S.autoAfter));
   C.optRow.hidden = !vote || !!S.slash;
@@ -3199,32 +3243,39 @@ function updateComposer() {
     C.pick.replaceChildren(chosen.length ? stack(chosen, (m) => (m.cooling ? 'cooling' : ''), 6) : h('span', { class: 'none' }, '成员'), icon('down', 'caret'));
     C.pick.dataset.tip = chosen.length ? chosen.map(memberName).join('、') : '成员';
   }
-  C.attach.replaceChildren(
-    ...S.files.map((f, i) =>
-      h(
-        'span',
-        { class: 'chip', 'data-tip': f },
-        icon('file'),
-        h('span', { class: 'ell' }, basename(f)),
+  // 带上的文件：图片是缩略图；正在传的转圈（只在变了的时候重画，缩略图不会每打一个字就重新读）
+  const attSig = JSON.stringify([S.files, S.uploading.map((u) => u.name)]);
+  if (C.attach.dataset.sig !== attSig) {
+    C.attach.dataset.sig = attSig;
+    C.attach.replaceChildren(
+      ...S.files.map((f, i) =>
         h(
-          'button',
-          {
-            class: 'x',
-            'aria-label': '去掉',
-            onclick: () => {
-              S.files.splice(i, 1);
-              updateComposer();
+          'span',
+          { class: 'chip', 'data-tip': f },
+          isShot(f) ? h('img', { class: 'thumb', src: rawUrl(f), alt: '' }) : icon('file'),
+          h('span', { class: 'ell' }, fileLabel(f)),
+          h(
+            'button',
+            {
+              class: 'x',
+              'aria-label': '去掉',
+              onclick: () => {
+                S.files.splice(i, 1);
+                updateComposer();
+              },
             },
-          },
-          icon('x')
+            icon('x')
+          )
         )
-      )
-    )
-  );
+      ),
+      ...S.uploading.map((u) => h('span', { class: 'chip busy', 'data-tip': '上传中' }, h('span', { class: 'spin' }), h('span', { class: 'ell' }, u.name)))
+    );
+  }
   const text = C.ta.value.trim();
   const asked = [...S.ask].filter((n) => people.some((m) => m.name === n));
   let ok;
-  if (task) ok = !!text;
+  if (S.uploading.length) ok = false;
+  else if (task) ok = !!text;
   else if (S.slash) ok = !S.slash.needsText || !!text;
   else if (vote) ok = !!text && asked.length >= 2 && S.options.length !== 1;
   else ok = (!!text || S.files.length > 0) && asked.length > 0;
@@ -3299,6 +3350,69 @@ function addFile(p) {
   }
   updateComposer();
   C.ta.focus();
+}
+
+// 传文件：+ 号、粘贴、从访达拖进来都走这里。存进项目的 .relay/uploads，AI 按路径打开
+
+const UPLOADS = '.relay/uploads/';
+const rawUrl = (p) => q(`/api/raw?path=${encodeURIComponent(p)}`);
+/** 传上来的图片（画缩略图）。 */
+const isShot = (p) => p.startsWith(UPLOADS) && /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(p);
+/** 传上来的文件显示原来的名字（去掉前面加的「0926-2310-」）。 */
+const fileLabel = (p) => (p.startsWith(UPLOADS) ? basename(p).replace(/^\d{4}-\d{4}-/, '') : basename(p));
+
+async function uploadFiles(files) {
+  if (!files.length) return;
+  if (!C.wrap.isConnected) setView('chat');
+  try {
+    if (!S.st.project.init) {
+      await api('/api/init', {});
+      await refresh(true);
+    }
+  } catch (e) {
+    return toast(e.message, { bad: true });
+  }
+  await Promise.all(
+    files.map(async (f) => {
+      const job = { name: f.name || '图片' };
+      S.uploading.push(job);
+      updateComposer();
+      try {
+        const r = await fetch(q(`/api/upload?name=${encodeURIComponent(job.name)}`), { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: f });
+        const j = await r.json().catch(() => ({ ok: false, error: `传不上去（${r.status}）` }));
+        if (!j.ok) throw new Error(j.error || '传不上去');
+        if (!S.files.includes(j.path)) S.files.push(j.path);
+      } catch (e) {
+        toast(`${job.name}：${e.message}`, { bad: true });
+      } finally {
+        S.uploading = S.uploading.filter((x) => x !== job);
+        updateComposer();
+      }
+    })
+  );
+  C.ta.focus();
+}
+
+/** 粘贴截图、从访达复制的文件：传上去。带格式的文字（网页、文档里复制的）照常粘贴成字。 */
+function onComposerPaste(e) {
+  const files = [...(e.clipboardData?.files || [])];
+  if (!files.length || e.clipboardData.types.includes('text/html')) return;
+  e.preventDefault();
+  uploadFiles(files);
+}
+
+/** 人说的话最后一段全是反引号括起来的路径：那是带上的文件，画成缩略图和文件小条。 */
+function splitFiles(text) {
+  const m = text.match(/(?:^|\n\n)((?:`[^`\n]+`[ \t]*)+)$/);
+  const files = m ? [...m[1].matchAll(/`([^`\n]+)`/g)].map((x) => x[1]) : [];
+  if (!files.length || !files.every((f) => /[/.]/.test(f))) return { body: text, files: [] };
+  return { body: text.slice(0, m.index).trimEnd(), files };
+}
+
+function fileEl(f) {
+  if (isShot(f)) return h('a', { class: 'shot', href: rawUrl(f), target: '_blank', rel: 'noopener', 'data-tip': fileLabel(f) }, h('img', { src: rawUrl(f), alt: fileLabel(f), loading: 'lazy' }));
+  const up = f.startsWith(UPLOADS);
+  return h('button', { class: 'chip line', 'data-tip': f, onclick: () => (up ? window.open(rawUrl(f), '_blank', 'noopener') : openFile(f)) }, icon('file'), h('span', { class: 'ell' }, fileLabel(f)));
 }
 
 function onComposerKey(e) {
@@ -3377,16 +3491,18 @@ function updateSuggest() {
     kind = 'at';
     SUG.start = pos - at[2].length - 1;
     const qy = at[2].toLowerCase();
-    items = [
-      ...talkers()
-        .filter((m) => !qy || memberName(m).toLowerCase().includes(qy) || m.name.includes(qy))
-        .slice(0, 6)
-        .map((m) => ({ label: memberName(m), sub: m.tool || '', tile: tile(m, 's20'), member: m })),
-      ...((S.tree && S.tree.files) || [])
-        .filter((f) => !qy || f.toLowerCase().includes(qy))
-        .slice(0, qy ? 8 : 4)
-        .map((f) => ({ label: basename(f), sub: f, icon: 'file', file: f })),
-    ];
+    // AI 和文件分成两组，各有一行小标题
+    const ais = talkers()
+      .filter((m) => !qy || memberName(m).toLowerCase().includes(qy) || m.name.includes(qy))
+      .slice(0, 6)
+      .map((m) => ({ label: memberName(m), sub: m.tool || '', tile: tile(m, 's20'), member: m }));
+    const files = ((S.tree && S.tree.files) || [])
+      .filter((f) => !qy || f.toLowerCase().includes(qy))
+      .slice(0, qy ? 8 : 4)
+      .map((f) => ({ label: basename(f), sub: f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '', icon: 'file', file: f }));
+    if (ais.length) ais[0].head = 'AI';
+    if (files.length) files[0].head = '文件';
+    items = [...ais, ...files];
   }
   if (!items.length) return closeSuggest();
   SUG.kind = kind;
@@ -3397,7 +3513,8 @@ function updateSuggest() {
     layer.append(SUG.menu);
   }
   SUG.menu.replaceChildren(
-    ...items.map((it, i) =>
+    ...items.map((it, i) => [
+      it.head ? h('div', { class: 'mh' }, it.head) : null,
       h(
         'button',
         {
@@ -3409,8 +3526,10 @@ function updateSuggest() {
         },
         it.tile || icon(it.icon),
         h('span', { class: 'grow' }, h('span', null, it.label), it.sub ? h('span', { class: 'sub' }, it.sub) : null)
-      )
-    )
+      ),
+    ])
+      .flat()
+      .filter(Boolean)
   );
   const r = C.box.getBoundingClientRect();
   SUG.menu.style.left = `${r.left + 8}px`;
@@ -3419,8 +3538,9 @@ function updateSuggest() {
 
 function moveSuggest(d) {
   SUG.hot = (SUG.hot + d + SUG.items.length) % SUG.items.length;
-  [...SUG.menu.children].forEach((b, i) => b.classList.toggle('hot', i === SUG.hot));
-  SUG.menu.children[SUG.hot]?.scrollIntoView({ block: 'nearest' });
+  const rows = SUG.menu.querySelectorAll('.mi');
+  rows.forEach((b, i) => b.classList.toggle('hot', i === SUG.hot));
+  rows[SUG.hot]?.scrollIntoView({ block: 'nearest' });
 }
 
 function pickSuggest(i) {
@@ -3489,12 +3609,10 @@ async function send() {
       S.archive = null;
     }
     const ask = [...S.ask].filter((n) => talkers().some((m) => m.name === n));
-    if (S.mode === 'vote') {
-      await api('/api/vote/start', { question: text, voters: ask, options: S.options });
-    } else {
-      const full = S.files.length ? `${text}${text ? '\n\n' : ''}${S.files.map((f) => `\`${f}\``).join(' ')}` : text;
-      await api('/api/talk/say', { text: full, ask, mode: S.mode });
-    }
+    // 带上的文件写在最后一段（反引号括起来），AI 按路径打开；网页上画成缩略图和文件小条
+    const full = S.files.length ? `${text}${text ? '\n\n' : ''}${S.files.map((f) => `\`${f}\``).join(' ')}` : text;
+    if (S.mode === 'vote') await api('/api/vote/start', { question: full, voters: ask, options: S.options });
+    else await api('/api/talk/say', { text: full, ask, mode: S.mode });
     clear();
     if (setup) await refresh(true);
     await loadTalk();
@@ -3555,8 +3673,11 @@ function buildRight() {
     h('span', { class: 'track' }),
     '只看改过的'
   );
-  RE.foldBtn = iconBtn('全部收起', 'fold', () => {
-    S.treeOpen.clear();
+  // 全部展开 / 全部收起：按现在是不是全开着，点一下换一边
+  RE.foldBtn = iconBtn('全部展开', 'unfold', () => {
+    const dirs = treeDirs();
+    if (dirs.every((d) => S.treeOpen.has(d))) S.treeOpen.clear();
+    else for (const d of dirs) S.treeOpen.add(d);
     saveTreeOpen();
     renderRight(true);
   });
@@ -3610,6 +3731,27 @@ function saveTreeOpen() {
   store.set(`open:${S.dir}`, JSON.stringify([...S.treeOpen].slice(-300)));
 }
 
+/** 项目里所有的文件夹（按文件的路径算）。 */
+function treeDirs() {
+  const out = new Set();
+  for (const f of (S.tree && S.tree.files) || []) for (let i = f.indexOf('/'); i > 0; i = f.indexOf('/', i + 1)) out.add(f.slice(0, i));
+  return [...out];
+}
+
+/** 展开 / 收起按钮跟着现在的样子换：全开着就是「全部收起」；没有文件夹就不出来。 */
+function syncFoldBtn() {
+  const dirs = treeDirs();
+  const all = dirs.length > 0 && dirs.every((d) => S.treeOpen.has(d));
+  RE.foldBtn.hidden = !dirs.length;
+  const label = all ? '全部收起' : '全部展开';
+  if (RE.foldBtn.dataset.tip === label) return;
+  RE.foldBtn.dataset.tip = label;
+  RE.foldBtn.setAttribute('aria-label', label);
+  const svg = RE.foldBtn.firstChild;
+  svg.innerHTML = ICONS[all ? 'fold' : 'unfold'];
+  if (!still()) svg.animate([{ transform: 'scaleY(0.2)', opacity: 0.3 }, { transform: 'none', opacity: 1 }], { duration: 220, easing: 'cubic-bezier(.2,.7,.2,1)' });
+}
+
 /** 这段对话里每个文件：最后是谁改的、有没有待复核的棒改过它。 */
 function touchedMap() {
   const map = new Map();
@@ -3658,6 +3800,7 @@ function renderRight(force) {
   const p = S.st.project;
   RE.changedBtn.setAttribute('aria-checked', String(S.onlyChanged));
   renderGate(p);
+  syncFoldBtn();
   const touched = touchedMap();
   const sig = JSON.stringify([S.treeRev, !!S.tree, [...touched].map(([k, v]) => [k, v.looks, v.pending]), [...S.treeOpen], S.treeFilter, S.onlyChanged, S.treeSel, looks.key]);
   if (!force && sig === treeSig) return;

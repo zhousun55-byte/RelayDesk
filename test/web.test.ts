@@ -242,3 +242,20 @@ result = { status: f.kids[0].kids[1] ? f.kids[0].kids[1].kids[0] : '', rows: dl.
   assert.deepEqual(run(handoff), { status: '全部完成', rows: ['做了', '没做完', '拿不准', '验证', '改了'] });
   assert.deepEqual(run('随手写的一段话，没按格式'), { status: '', rows: ['交接', '改了'] });
 });
+
+test('网页：人带上的文件——最后一段全是反引号括起来的路径才算附件；传上来的图片画缩略图，名字去掉前面加的时间', () => {
+  const code = ['basename', 'UPLOADS', 'isShot', 'fileLabel', 'splitFiles'].map(pick).join('\n');
+  const ctx: Record<string, unknown> = {};
+  vm.runInNewContext(`${code}\nresult = { isShot, fileLabel, splitFiles };`, ctx);
+  const { isShot, fileLabel, splitFiles } = ctx.result as { isShot: (p: string) => boolean; fileLabel: (p: string) => string; splitFiles: (t: string) => { body: string; files: string[] } };
+  const up = '.relay/uploads/0926-2310-截屏 2026-09-26 22.39.31.png';
+  assert.deepEqual(JSON.parse(JSON.stringify(splitFiles(`图里是什么？\n\n\`${up}\` \`src/a.py\``))), { body: '图里是什么？', files: [up, 'src/a.py'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(splitFiles(`\`${up}\``))), { body: '', files: [up] }, '只传了图没写字');
+  assert.deepEqual(JSON.parse(JSON.stringify(splitFiles('跑一下 `npm test`'))).files, [], '句子里的代码不是附件');
+  assert.deepEqual(JSON.parse(JSON.stringify(splitFiles('第一段\n\n`npm test`'))).files, [], '不像路径的不算');
+  assert.equal(isShot(up), true);
+  assert.equal(isShot('src/logo.png'), false, '项目里本来的图片不画缩略图（点开是文件）');
+  assert.equal(isShot('.relay/uploads/0926-2310-说明.pdf'), false);
+  assert.equal(fileLabel(up), '截屏 2026-09-26 22.39.31.png');
+  assert.equal(fileLabel('docs/0926-2310-x.md'), '0926-2310-x.md', '只去掉传上来的文件前面加的时间');
+});

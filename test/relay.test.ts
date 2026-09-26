@@ -445,7 +445,7 @@ test('你自己在各家工具里做的棒：拿 Claude Code 自己的记录核�
   assert.equal(second.review, 'skip', '强模型自己交接的，不用复核');
 });
 
-test('群聊：轮流说、各自先想；投票不投自己，一个 AI 一票', async () => {
+test('群聊：讨论（轮流说）、对比（同时答）；投票不投自己，一个 AI 一票', async () => {
   const s = prepared('talk');
   s.relay(['init', '做滤镜']);
   const t1 = s.relay(['talk', '先做哪个？', '--ask', 'claude,codex']);

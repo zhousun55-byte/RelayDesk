@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { Transform, type Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { RelayError } from './errors';
 import { isInside } from './paths';
 import { workFiles } from './snap';
@@ -90,4 +92,39 @@ export function readProjectFile(root: string, rel: string, maxBytes = 512 * 1024
   }
   const binary = buf.subarray(0, 8000).includes(0);
   return { path: clean, size: st.size, binary, truncated: st.size > maxBytes, text: binary ? '' : buf.toString('utf8') };
+}
+
+/** 群聊、新任务里传上来的文件：放在项目里（AI 在项目里就打得开），不进快照，也不进你的 git。 */
+export const UPLOAD_REL = '.relay/uploads';
+export const UPLOAD_MAX = 200 * 1024 * 1024;
+
+/** 存一个传上来的文件，返回它在项目里的路径：.relay/uploads/0926-2310-原来的名字。 */
+export async function saveUpload(root: string, name: string, body: Readable, max = UPLOAD_MAX): Promise<string> {
+  const dir = path.join(root, UPLOAD_REL);
+  fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(path.join(dir, '.gitignore'))) fs.writeFileSync(path.join(dir, '.gitignore'), '*\n');
+  const base = path.basename(String(name).replace(/\\/g, '/')).replace(/[\u0000-\u001f\u007f]/g, '').trim() || '文件';
+  const ext = path.extname(base).slice(0, 16);
+  const stem = base.slice(0, base.length - path.extname(base).length).slice(0, 80) || '文件';
+  const d = new Date();
+  const two = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
+  let file = `${stamp}-${stem}${ext}`;
+  for (let i = 2; fs.existsSync(path.join(dir, file)); i++) file = `${stamp}-${stem}-${i}${ext}`;
+  const dest = path.join(dir, file);
+  let n = 0;
+  const cap = new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      n += chunk.length;
+      done(n > max ? new RelayError(`文件太大，上限 ${max / 1024 / 1024} MB。`, 'too-large') : null, chunk);
+    },
+  });
+  try {
+    await pipeline(body, cap, fs.createWriteStream(`${dest}.tmp`));
+    fs.renameSync(`${dest}.tmp`, dest);
+  } catch (e) {
+    fs.rmSync(`${dest}.tmp`, { force: true });
+    throw e;
+  }
+  return `${UPLOAD_REL}/${file}`;
 }
