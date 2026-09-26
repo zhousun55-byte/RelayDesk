@@ -114,12 +114,6 @@ export function watchProject(root: string, onChange?: (root: string, r: TrackRes
   return w;
 }
 
-export function unwatchProject(root: string): void {
-  const key = path.resolve(root);
-  watchers.get(key)?.close();
-  watchers.delete(key);
-}
-
 export function unwatchAll(): void {
   for (const w of watchers.values()) w.close();
   watchers.clear();

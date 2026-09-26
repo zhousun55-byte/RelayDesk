@@ -17,7 +17,7 @@ import { redactSecrets } from '../src/core/redact';
 import { makeParser } from '../src/core/runner';
 import { cliTooOld } from '../src/core/harness';
 import { normalizeAgent } from '../src/core/registry';
-import { restoreFile, restoreSnapshot, snapChanges, snapFile, takeSnapshot } from '../src/core/snap';
+import { restoreSnapshot, snapChanges, snapFile, takeSnapshot } from '../src/core/snap';
 import { parseNameStatusZ, parseNumstatZ } from '../src/core/status';
 import { buildTalkPrompt, readTalk, type TalkRow } from '../src/core/talk';
 import { memberTier, modelFromLabel, resolveWho, sameModel, tierForModel, type MemberLike } from '../src/core/tier';
@@ -478,10 +478,6 @@ test('快照：不碰你自己的 git；改过的改回去、删掉的找回来�
   restoreSnapshot(dir, r.safety);
   assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), '2\n', '退回也能撤销');
   assert.equal(fs.readFileSync(path.join(dir, 'new', 'b.txt'), 'utf8'), 'b\n');
-  restoreFile(dir, s1.sha, 'a.txt');
-  assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), '1\n');
-  restoreFile(dir, s1.sha, 'new/b.txt');
-  assert.ok(!fs.existsSync(path.join(dir, 'new', 'b.txt')));
 });
 
 test('快照：在你的 git 仓库里也不留痕迹（不改索引、不提交）', () => {

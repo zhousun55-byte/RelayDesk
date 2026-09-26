@@ -102,12 +102,6 @@ export function findAgent(name: string): AgentConfig | null {
   return loadRegistry().agents.find((a) => a.name === name) ?? null;
 }
 
-export function requireAgent(name: string): AgentConfig {
-  const a = findAgent(name);
-  if (!a) throw new RelayError(`工人名单里没有「${name}」。在设置里添加，或 relay workers add。`, 'no-agent');
-  return a;
-}
-
 function optText(v: unknown, field: string, max = 200): string | undefined {
   if (v === undefined || v === null) return undefined;
   if (typeof v !== 'string') throw new RelayError(`${field} 必须是文字。`, 'bad-agent');

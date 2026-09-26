@@ -54,11 +54,6 @@ export function scanApps(): boolean {
   return process.env.RELAY_SCAN_APPS !== 'off';
 }
 
-/** 测试用：清掉缓存。 */
-export function resetEnvCache(): void {
-  loginCache = null;
-}
-
 /** 接力台是不是从某个 AI 工具的会话里启动的（那样的话进程里有它的会话凭据）。 */
 export function insideAgentHost(): boolean {
   return !!(process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT || process.env.CLAUDE_CODE_SESSION_ID || process.env.CODEX_SANDBOX || process.env.CURSOR_AGENT);

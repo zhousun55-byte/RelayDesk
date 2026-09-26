@@ -251,10 +251,6 @@ export function readLedger(root: string): LedgerEvent[] {
   return readLedgerFull(root).events;
 }
 
-export function isInitialized(root: string): boolean {
-  return readLedger(root).some((e) => e.type === 'init');
-}
-
 export interface LedgerView {
   events: LedgerEvent[];
   init: InitEvent | null;

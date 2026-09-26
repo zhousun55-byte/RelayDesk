@@ -1,7 +1,7 @@
 import { RelayError } from '../core/errors';
 import { appendLedger, findStint, loadLedger, requireInit, type Stint } from '../core/ledger';
 import { readTaskCopy, restoreTaskChecks, saveTaskCopy } from '../core/notes';
-import { restoreFile, restoreSnapshot, snapExists } from '../core/snap';
+import { restoreSnapshot, snapExists } from '../core/snap';
 import { refreshBrief, relayBusy, track } from './track';
 
 /**
@@ -89,12 +89,4 @@ export function undoRollback(root: string): RollbackResult {
   });
   refreshBrief(root);
   return { label, dropped: [], files: r.files, task: { ...t, missing: old === null } };
-}
-
-/** 只把一个文件恢复成第 N 棒之前的样子（复核时觉得某个文件被改坏了）。 */
-export function restoreFileBefore(root: string, stintId: number, file: string): void {
-  const v = requireInit(root);
-  const s = findStint(v, stintId);
-  if (!s) throw new RelayError(`没有第 ${stintId} 棒。`, 'no-stint');
-  restoreFile(root, s.from, file);
 }

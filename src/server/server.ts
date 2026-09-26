@@ -562,7 +562,8 @@ function serveStatic(pathname: string, res: http.ServerResponse): void {
     ext === '.css' ? 'text/css; charset=utf-8' : ext === '.js' ? 'text/javascript; charset=utf-8' : ext === '.svg' ? 'image/svg+xml' : ext === '.woff2' ? 'font/woff2' : 'text/html; charset=utf-8';
   res.writeHead(200, {
     'Content-Type': type,
-    'Cache-Control': 'no-store',
+    // 字体很大又不常变：浏览器记住就行（换字体时改网址后面的 ?v=）；别的每次都拿最新的
+    'Cache-Control': ext === '.woff2' ? 'public, max-age=31536000, immutable' : 'no-store',
     'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
   });

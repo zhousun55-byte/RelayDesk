@@ -128,6 +128,7 @@ let settingsTab = 'members', settingsRender = null;
 let pane = null;
 const sheet = ({ body }) => { pane = body.kids[1]; return () => {}; };
 const savedMark = () => ({ el: 'mark', flash() {} });
+const syncSegs = () => {};
 const S = { st: { project: { init: true, protocol: '${protocol}', config: { gate: 'npm test', protectedPaths: [] } } } };
 ${code}
 openSettings('project');
@@ -165,4 +166,81 @@ result = { work: items.slice(1, at - 1).map((x) => x.label), open: items.slice(a
   const r = JSON.parse(JSON.stringify(ctx.result)) as { work: string[]; open: string[] };
   assert.deepEqual(r.work, ['Codex', 'Claude Code'], '命令行工具在「只做一棒」里');
   assert.deepEqual(r.open, ['Cursor', 'ChatGPT'], '「打开」里只有桌面程序');
+});
+
+test('网页定时刷新：和上次拿到的一字不差就不解析、不重画；换了项目从头来；操作之后一定按最新状态重画', async () => {
+  const code = ['api'].map(pick).join('\n\n');
+  const ctx: Record<string, unknown> = {};
+  const out: unknown[] = [];
+  await new Promise<void>((resolve) => {
+    vm.runInNewContext(
+      `
+let body = '{"ok":true,"n":1}';
+let fetches = 0;
+const fetch = async () => { fetches++; return { status: 200, text: async () => body }; };
+const S = { dir: 'A', raw: {} };
+${code}
+(async () => {
+  const a = await api('/api/state', undefined, 'state');
+  const b = await api('/api/state', undefined, 'state');
+  const c = await api('/api/state');
+  body = '{"ok":true,"n":2}';
+  const d = await api('/api/state', undefined, 'state');
+  S.raw = {};
+  const e = await api('/api/state', undefined, 'state');
+  out([a && a.n, b, c && c.n, d && d.n, e && e.n, fetches]);
+  done();
+})();`,
+      Object.assign(ctx, { out: (x: unknown) => out.push(x), done: resolve })
+    );
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(out[0])), [1, null, 1, 2, 2, 5], '没变：null；不带记号的请求照常解析；变了、换了项目：照常解析');
+});
+
+test('网页线路的终点：最新的任务看验收（做着的时候没有终点）；更早的任务看当时全自动的结果', () => {
+  const code = ['msOf', 'rangeOf', 'inRange', 'streamItems'].map(pick).join('\n\n');
+  const run = (acceptance: unknown, go: unknown) => {
+    const ctx: Record<string, unknown> = {};
+    vm.runInNewContext(
+      `
+const t0 = { id: 't0', title: '旧任务', from: '2026-09-25T13:30:00Z', to: '2026-09-25T14:07:00Z', stints: [] };
+const t1 = { id: 't1', title: '新任务', from: '2026-09-25T14:07:00Z', to: null, stints: [], current: true };
+const S = { st: { project: { task: { title: '新任务', body: '', items: [] }, threads: [t0, t1], lastRollback: null, protocol: 'ok', go: ${JSON.stringify(go)}, acceptance: ${JSON.stringify(acceptance)} } }, talk: { status: { speaking: [], queue: [] } }, dismissed: '' };
+const threads = () => S.st.project.threads;
+const threadStints = () => [];
+const threadTalk = () => ({ rows: [], votes: [] });
+const looks = { key: '' };
+${code}
+const ends = (t) => streamItems(t).filter((it) => it.stop).map((it) => String(it.key).split(':')[0]);
+result = [ends(t0), ends(t1)];`,
+      ctx
+    );
+    return JSON.parse(JSON.stringify(ctx.result)) as string[][];
+  };
+  const oldGo = { id: 'g1', status: 'done', startedAt: '2026-09-25T13:42:00Z', updatedAt: '2026-09-25T13:49:00Z', result: '验收通过：清单 2/2' };
+  assert.deepEqual(run({ state: 'blocked', headline: '', items: [{ text: '第 9 棒待复核' }] }, oldGo), [['res'], ['acc']], '旧任务：全自动的结果；新任务：验收没过');
+  assert.deepEqual(run({ state: 'working', headline: '', items: [] }, oldGo), [['res'], []], '新任务还在做：没有终点');
+  assert.deepEqual(run(null, null), [[], []]);
+});
+
+test('网页交接单：交接的每一节是一行（做了、没做完、拿不准、验证），「状态」写在右上角；没按格式写的整篇放一行', () => {
+  const code = ['SECTION', 'handoffForm'].map(pick).join('\n\n');
+  const run = (text: string) => {
+    const ctx: Record<string, unknown> = {};
+    vm.runInNewContext(
+      `
+const h = (tag, props, ...kids) => ({ tag, props, kids: kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false) });
+const md = (t) => t;
+const openDiff = () => {}, lightPaths = () => {}, lightStint = () => {};
+${code}
+const f = handoffForm({ id: 5, ghost: false, facts: { files: 2, added: 55, removed: 7, paths: ['wc.py', 'test_wc.py'] } }, ${JSON.stringify(text)});
+const dl = f.kids[1];
+result = { status: f.kids[0].kids[1] ? f.kids[0].kids[1].kids[0] : '', rows: dl.kids.filter((k) => k.tag === 'dt').map((k) => k.kids[0]) };`,
+      ctx
+    );
+    return JSON.parse(JSON.stringify(ctx.result)) as { status: string; rows: string[] };
+  };
+  const handoff = ['# 交接：Codex · gpt-6-astra', '', '- 工具：Codex', '- 状态：全部完成', '', '## 做了什么', '', '- 已实现 --json', '', '## 没做完 / 下一步', '', '- 无', '', '## 不确定、可能有错的地方', '', '- 第 4 棒没有交接', '', '## 怎么验证', '', '- 跑了检查命令'].join('\n');
+  assert.deepEqual(run(handoff), { status: '全部完成', rows: ['做了', '没做完', '拿不准', '验证', '改了'] });
+  assert.deepEqual(run('随手写的一段话，没按格式'), { status: '', rows: ['交接', '改了'] });
 });

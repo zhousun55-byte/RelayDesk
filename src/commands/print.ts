@@ -27,10 +27,3 @@ export function info(msg: string): void {
 export function notes(list: string[]): void {
   for (const n of list) warn(n);
 }
-
-export function localTime(ts: string): string {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}

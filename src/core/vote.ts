@@ -323,7 +323,3 @@ export function appendRule(root: string, line: string): void {
 export function voteBusy(): boolean {
   return running.size > 0;
 }
-
-export function voteRunning(id: string): boolean {
-  return running.has(id);
-}

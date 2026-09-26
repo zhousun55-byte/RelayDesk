@@ -60,7 +60,8 @@ const ICONS = {
   book: '<path d="M2.75 3.25h3.5A1.75 1.75 0 0 1 8 5v8.25a1.5 1.5 0 0 0-1.5-1.5H2.75zM13.25 3.25h-3.5A1.75 1.75 0 0 0 8 5v8.25a1.5 1.5 0 0 1 1.5-1.5h3.75z"/>',
   pencil: '<path d="M10.25 2.75 13.25 5.75 5.5 13.5H2.5v-3z"/>',
   minus: '<path d="M3.25 8h9.5"/>',
-  compose: '<path d="M13.25 8.75v3.5a1.5 1.5 0 0 1-1.5 1.5h-8a1.5 1.5 0 0 1-1.5-1.5v-8a1.5 1.5 0 0 1 1.5-1.5h3.5"/><path d="M11.6 2.15a1.2 1.2 0 0 1 1.7 0l.55.55a1.2 1.2 0 0 1 0 1.7L8.5 9.75l-2.6.35.35-2.6z"/>',
+  arrow: '<path d="M3 8h10M9.25 4.25 13 8l-3.75 3.75"/>',
+  ballot: '<path d="M2.75 8h10.5v5.25H2.75zM5.5 8V3h5v5M6.75 5.5h2.5"/>',
 };
 
 function icon(name, cls = '') {
@@ -70,6 +71,33 @@ function icon(name, cls = '') {
   s.setAttribute('aria-hidden', 'true');
   s.innerHTML = ICONS[name] || '';
   return s;
+}
+
+/** 只有图标的按钮：悬停写出它是做什么的。 */
+function iconBtn(label, name, onclick, kbd, cls = '') {
+  return h('button', { class: `icon-btn ${cls}`.trim(), 'aria-label': label, 'data-tip': label, 'data-kbd': kbd || null, onclick }, icon(name));
+}
+
+const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** 退场：先放完淡出的动画再拿掉，不是一下子消失。 */
+function leave(el) {
+  if (!el || !el.isConnected || el.classList.contains('leave')) return;
+  if (still()) return el.remove();
+  el.classList.add('leave');
+  el.addEventListener('animationend', () => el.remove(), { once: true });
+  setTimeout(() => el.remove(), 260);
+}
+
+/** 分段按钮：选中的那一块滑到按下的按钮下面。 */
+function syncSegs(root = document) {
+  for (const seg of root.querySelectorAll('.seg')) {
+    const on = seg.querySelector('[aria-pressed="true"]');
+    if (!on || !on.offsetWidth) continue;
+    seg.style.setProperty('--tx', `${on.offsetLeft - 2}px`);
+    seg.style.setProperty('--tw', `${on.offsetWidth}px`);
+    if (!seg.classList.contains('ready')) requestAnimationFrame(() => seg.classList.add('ready'));
+  }
 }
 
 function esc(s) {
@@ -190,14 +218,6 @@ function when(ts) {
   if (sameDay(d, y)) return '昨天';
   if (now - d < 6 * 86400000) return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()];
   return `${d.getMonth() + 1}月${d.getDate()}日`;
-}
-
-/** 卡片上的时间：今天只写几点。 */
-function stamp(ts) {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return '';
-  const w = when(ts);
-  return sameDay(d, new Date()) ? w : `${w} ${clock(ts)}`;
 }
 
 function elapsed(ts) {
@@ -324,6 +344,8 @@ const S = {
   gen: 0,
   /** 每类请求发到第几次了：回来的不是最新那次就丢掉。 */
   seq: {},
+  /** 定时刷新时上次拿到的原文（没变就不解析、不重画）；换项目时清空。 */
+  raw: {},
   editingTitle: false,
   dismissed: store.get('dismissed') || '',
 };
@@ -340,12 +362,18 @@ const layer = $('#layer');
 const mqNarrow = matchMedia('(max-width: 860px)');
 const narrow = () => mqNarrow.matches;
 
-async function api(path, body) {
+/** same：定时刷新用。和上次拿到的一字不差就返回 null，省掉解析和重画。 */
+async function api(path, body, same) {
   const init = body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dir: S.dir || undefined, ...body }) };
   const res = await fetch(path, init);
+  const text = await res.text();
+  if (same) {
+    if (S.raw[same] === text) return null;
+    S.raw[same] = text;
+  }
   let j;
   try {
-    j = await res.json();
+    j = JSON.parse(text);
   } catch {
     throw new Error(`接力台返回了看不懂的内容（${res.status}）`);
   }
@@ -381,7 +409,7 @@ async function act(btn, fn, okText) {
       const t = typeof okText === 'function' ? okText(r) : okText;
       if (t) toast(t);
     }
-    await refresh();
+    await refresh(true);
     schedule();
     return r;
   } catch (e) {
@@ -583,7 +611,7 @@ let tipFor = null;
 
 function hideTip() {
   clearTimeout(tipTimer);
-  tipEl?.remove();
+  leave(tipEl);
   tipEl = null;
   tipFor = null;
 }
@@ -623,12 +651,15 @@ function place(el, anchor, opts = {}) {
   x = clamp(x, 8, innerWidth - w - 8);
   el.style.left = `${x}px`;
   el.style.top = `${y}px`;
+  // 从按钮那一边长出来
+  el.style.setProperty('--ox', opts.align === 'end' ? '100%' : '0');
+  el.style.setProperty('--oy', y < r.top ? '100%' : '0');
 }
 
 function closeMenus() {
-  for (const m of layer.querySelectorAll('.menu, .pop-panel')) m.remove();
-  S.stepsPanel = null;
-  closeSuggest();
+  for (const m of layer.querySelectorAll('.menu:not(.leave)')) leave(m);
+  SUG.menu = null;
+  SUG.items = [];
 }
 
 /** 菜单：items 里是 {label, sub, icon, tile, right, disabled, run} / '-' / {head}。 */
@@ -690,8 +721,8 @@ function menuKeys(e, m) {
 document.addEventListener(
   'pointerdown',
   (e) => {
-    if (e.target.closest('.menu, .pop-panel')) return;
-    if (layer.querySelector('.menu, .pop-panel')) closeMenus();
+    if (e.target.closest('.menu')) return;
+    if (layer.querySelector('.menu:not(.leave)')) closeMenus();
   },
   true
 );
@@ -713,8 +744,8 @@ function sheet({ title, body, foot, wide, bare, onClose }) {
   const close = () => {
     if (closed) return;
     closed = true;
-    scrim.remove();
-    box.remove();
+    leave(scrim);
+    leave(box);
     sheetStack = sheetStack.filter((x) => x !== close);
     if (prev && prev.isConnected) prev.focus({ preventScroll: true });
     onClose && onClose();
@@ -767,12 +798,12 @@ function confirmSheet(title, text, okLabel) {
 let toastTimer = null;
 
 function toast(text, opts = {}) {
-  $('.toast')?.remove();
+  leave($('.toast:not(.leave)'));
   clearTimeout(toastTimer);
   const t = h(
     'div',
     { class: `toast${opts.action ? '' : ' plain'}`, role: 'status' },
-    opts.bad ? icon('warn') : null,
+    opts.bad ? h('span', { class: 'rd' }) : null,
     h('span', null, text),
     opts.action
       ? h(
@@ -780,7 +811,7 @@ function toast(text, opts = {}) {
           {
             class: 'btn small',
             onclick: () => {
-              t.remove();
+              leave(t);
               opts.action.run();
             },
           },
@@ -789,7 +820,12 @@ function toast(text, opts = {}) {
       : null
   );
   document.body.append(t);
-  toastTimer = setTimeout(() => t.remove(), opts.bad || opts.action ? 6000 : 2400);
+  toastTimer = setTimeout(() => leave(t), opts.bad || opts.action ? 6000 : 2400);
+}
+
+/** 复制，然后说一声。 */
+function copyToast(text) {
+  return copyText(text).then((ok) => toast(ok ? '已复制' : '没能复制', { bad: !ok }));
 }
 
 // ---------- 布局：三栏、拖动改宽度、收起 ----------
@@ -803,7 +839,7 @@ function applyLayout() {
 
 function closeDrawers() {
   app.classList.remove('drawer-left', 'drawer-right');
-  $('.drawer-scrim')?.remove();
+  leave($('.drawer-scrim:not(.leave)'));
 }
 
 function drawer(side) {
@@ -864,17 +900,7 @@ for (const g of document.querySelectorAll('.grip')) {
 }
 
 function sideBtn(side) {
-  return h(
-    'button',
-    {
-      class: 'icon-btn',
-      'aria-label': side === 'left' ? '左栏' : '右栏',
-      'data-tip': side === 'left' ? '项目和对话' : '文件',
-      'data-kbd': side === 'left' ? '⌘B' : '⌥⌘B',
-      onclick: side === 'left' ? toggleLeft : toggleRight,
-    },
-    icon(side === 'left' ? 'sideL' : 'sideR')
-  );
+  return side === 'left' ? iconBtn('项目和对话', 'sideL', toggleLeft, '⌘B') : iconBtn('文件', 'sideR', toggleRight, '⌥⌘B');
 }
 
 // ---------- 数据 ----------
@@ -885,11 +911,13 @@ function setOffline(v) {
   if (CE.offline) CE.offline.hidden = !v;
 }
 
-async function refresh() {
+/** force：刚做完一个操作，一定要按接力台的最新状态重画（定时刷新时没变就什么都不做）。 */
+async function refresh(force) {
   const t = ticket('state');
   try {
-    const st = await api(q('/api/state'));
+    const st = await api(q('/api/state'), undefined, force || !S.st ? '' : 'state');
     if (stale(t)) return;
+    if (!st) return setOffline(false);
     S.st = st;
     if (!S.dir) S.dir = st.project.root;
     setOffline(false);
@@ -912,8 +940,8 @@ async function loadTalk() {
   if (!S.dir) return;
   const t = ticket('talk');
   try {
-    const talk = await api(q('/api/talk'));
-    if (stale(t)) return;
+    const talk = await api(q('/api/talk'), undefined, 'talk');
+    if (stale(t) || !talk) return;
     S.talk = talk;
     if (S.st) renderCenter();
   } catch (e) {
@@ -927,8 +955,8 @@ async function loadTree() {
   if (!S.dir) return;
   const tk = ticket('tree');
   try {
-    const t = await api(q('/api/tree'));
-    if (stale(tk)) return;
+    const t = await api(q('/api/tree'), undefined, 'tree');
+    if (stale(tk) || !t) return;
     const k = t.files.join('\0');
     if (k !== treeKey) {
       treeKey = k;
@@ -1069,6 +1097,7 @@ function orderedProjects() {
   return [...list].sort((a, b) => projOrder.indexOf(a.root) - projOrder.indexOf(b.root));
 }
 
+/** 结构变了（项目、对话、成员）才重画左栏；只是换了选中的那一段，原地改标记，让过渡动画接得上。 */
 function renderLeft() {
   const st = S.st;
   const p = st.project;
@@ -1076,26 +1105,37 @@ function renderLeft() {
   const sig = JSON.stringify([
     st.projects,
     p.root,
+    p.init,
     ts.map((t) => [t.id, t.title, t.stints, t.pending, lastActive(t), blank(t)]),
     p.stints.filter((s) => s.status === 'working').map((s) => s.id),
-    S.thread,
-    S.draft,
-    S.fold,
-    centerMode(),
-    members().map((m) => [m.name, m.label, m.cooling, m.canWork]),
+    S.draft || blank(ts[ts.length - 1]),
+    members().map((m) => [m.name, m.label, m.cooling, m.canWork, m.tier]),
     busyMember(),
     looks.key,
   ]);
-  if (sig === leftSig) return;
-  leftSig = sig;
+  if (sig !== leftSig) {
+    leftSig = sig;
+    drawLeft();
+  }
+  const mode = centerMode();
+  const on = mode === 'new' ? 'draft' : mode === 'thread' ? String((selectedThread() || {}).id) : '';
+  for (const el of $('#left-in').querySelectorAll('.thread')) el.setAttribute('aria-current', String(el.dataset.id === on));
+}
+
+function drawLeft() {
+  const st = S.st;
+  const p = st.project;
+  const ts = threads();
   const box = $('#left-in');
   const keep = box.querySelector('.nav')?.scrollTop || 0;
-  const mode = centerMode();
-
   const projects = [];
   for (const pr of orderedProjects()) {
     const cur = pr.current;
-    const open = cur && !S.fold;
+    const list = [];
+    if (cur && p.init) {
+      if (S.draft || blank(ts[ts.length - 1])) list.push(h('button', { class: 'thread draft', 'data-id': 'draft', onclick: newThread }, h('span', { class: 't' }, '新任务'), h('span', { class: 'when' }, '现在')));
+      for (const t of [...ts].reverse()) if (!blank(t)) list.push(threadEl(t));
+    }
     const row = h(
       'div',
       { class: 'proj-row', oncontextmenu: (e) => ctx(e, projMenuItems(pr)) },
@@ -1103,43 +1143,30 @@ function renderLeft() {
         'button',
         {
           class: 'pmain',
-          'aria-expanded': cur ? String(open) : null,
-          onclick: () => {
-            if (cur) {
-              S.fold = !S.fold;
-              renderLeft();
-            } else switchProject(pr.root);
+          'aria-expanded': cur ? String(!S.fold) : null,
+          onclick: (e) => {
+            if (!cur) return switchProject(pr.root);
+            S.fold = !S.fold;
+            e.currentTarget.setAttribute('aria-expanded', String(!S.fold));
+            e.currentTarget.closest('.proj').classList.toggle('open', !S.fold);
           },
         },
         icon('chev', 'caret'),
         h('span', { class: 'name' }, pr.name),
-        pr.live ? h('span', { class: 'dot live' }) : pr.pending ? h('span', { class: 'count' }, String(pr.pending)) : null
+        pr.live ? h('span', { class: 'dot live' }) : pr.pending ? h('span', { class: 'rd', 'data-tip': `${pr.pending} 棒待复核` }) : null
       ),
-      h('button', { class: 'icon-btn more', 'aria-label': `${pr.name} 更多`, onclick: (e) => openMenu(e.currentTarget, projMenuItems(pr)) }, icon('more'))
+      iconBtn(`${pr.name} 更多`, 'more', (e) => openMenu(e.currentTarget, projMenuItems(pr)), '', 'more')
     );
-    const list = [];
-    if (cur && p.init) {
-      const latest = ts[ts.length - 1];
-      if (S.draft || blank(latest)) list.push(threadEl(null, mode === 'new'));
-      for (const t of [...ts].reverse()) if (!blank(t)) list.push(threadEl(t, mode === 'thread' && selectedThread() === t));
-    }
-    projects.push(h('div', { class: `proj${open ? ' open' : ''}` }, row, cur ? h('div', { class: 'threads' }, h('div', null, list)) : null));
+    projects.push(h('div', { class: `proj${cur ? ' current' : ''}${cur && !S.fold ? ' open' : ''}` }, row, cur ? h('div', { class: 'threads' }, h('div', null, list)) : null));
   }
   if (!st.projects.length) projects.push(h('div', { class: 'proj' }, h('div', { class: 'proj-row' }, h('button', { class: 'pmain', onclick: chooseFolder }, icon('folder'), h('span', { class: 'name' }, '打开文件夹')))));
-
   const ms = members();
   const busy = busyMember();
   const shown = ms.slice(0, 6);
   box.replaceChildren(
-    h('div', { class: 'brand' }, h('span', { class: 'mark', 'aria-hidden': 'true' }), h('b', null, '接力台'), h('button', { class: 'icon-btn', 'aria-label': '收起左栏', 'data-tip': '收起', 'data-kbd': '⌘B', onclick: toggleLeft }, icon('sideL'))),
-    h('button', { class: 'side-item strong', onclick: newThread, disabled: !p.init && !st.projects.length }, icon('compose'), '新任务'),
-    h('button', { class: 'side-item', onclick: () => openPalette() }, icon('search'), '搜索', h('kbd', null, '⌘K')),
-    h(
-      'nav',
-      { class: 'nav', 'aria-label': '项目' },
-      h('div', { class: 'nav-label' }, h('span', null, '项目'), h('button', { class: 'icon-btn', 'aria-label': '打开文件夹', 'data-tip': '打开文件夹', onclick: chooseFolder }, icon('plus'))),
-      projects
-    ),
+    h('div', { class: 'brand' }, h('b', null, '接力台'), h('span', { class: 'cap' }, String(st.version || '').split('.').slice(0, 2).join('.')), iconBtn('收起', 'sideL', toggleLeft, '⌘B')),
+    h('div', { class: 'acts' }, h('button', { class: 'btn line', onclick: newThread, disabled: !p.init && !st.projects.length }, icon('plus'), '新任务'), h('button', { class: 'find', onclick: () => openPalette() }, icon('search'), '搜索', h('kbd', null, '⌘K'))),
+    h('nav', { class: 'nav', 'aria-label': '项目' }, h('div', { class: 'nav-label' }, h('span', { class: 'cap' }, `项目 · ${pad(st.projects.length)}`), iconBtn('打开文件夹', 'plus', chooseFolder)), projects),
     h(
       'div',
       { class: 'dock' },
@@ -1150,30 +1177,33 @@ function renderLeft() {
         ms.length > shown.length ? h('span', { class: 'more-n' }, `+${ms.length - shown.length}`) : null,
         !ms.length ? h('span', { class: 'more-n' }, '成员') : null
       ),
-      h('button', { class: 'icon-btn', 'aria-label': '设置', 'data-tip': '设置', onclick: () => openSettings() }, icon('sliders'))
+      iconBtn('设置', 'sliders', () => openSettings())
     )
   );
-  const nav = box.querySelector('.nav');
-  if (nav) nav.scrollTop = keep;
+  box.querySelector('.nav').scrollTop = keep;
 }
 
-function threadEl(t, on) {
-  if (!t) {
-    return h('button', { class: 'thread draft', 'aria-current': on ? 'true' : null, onclick: newThread }, h('span', { class: 't' }, '新任务'), h('span', { class: 'when' }));
-  }
+/** 列表里的日期：今天写几点，别的日子写「09·25」。 */
+function shortDay(ms) {
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return '';
+  return sameDay(d, new Date()) ? clock(ms) : `${pad(d.getMonth() + 1)}·${pad(d.getDate())}`;
+}
+
+function threadEl(t) {
   const live = threadStints(t).some((s) => s.status === 'working');
   return h(
     'button',
-    { class: 'thread', 'aria-current': on ? 'true' : null, onclick: () => selectThread(t) },
+    { class: 'thread', 'data-id': String(t.id), onclick: () => selectThread(t) },
     h('span', { class: 't' }, t.title || '未命名'),
-    h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : t.pending ? h('span', { class: 'count' }, String(t.pending)) : when(lastActive(t)))
+    h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : t.pending ? [h('span', { class: 'rd' }), `待核 ${t.pending}`] : shortDay(lastActive(t)))
   );
 }
 
 function projMenuItems(pr) {
   return [
     { label: '在访达中显示', icon: 'folder', run: () => reveal('', pr.root) },
-    { label: '复制路径', icon: 'copy', run: () => copyText(pr.root).then((ok) => toast(ok ? '已复制' : pr.root)) },
+    { label: '复制路径', icon: 'copy', run: () => copyToast(pr.root) },
     '-',
     { label: '移出列表', icon: 'x', run: () => forget(pr) },
   ];
@@ -1212,6 +1242,7 @@ function switchProject(root) {
   S.treeFilter = '';
   S.onlyChanged = false;
   S.talk = { rows: [], votes: [], status: { speaking: [], queue: [] } };
+  S.raw = {};
   treeKey = '';
   stintsKey = '';
   streamThread = null;
@@ -1260,7 +1291,7 @@ let streamThread = null;
 let stick = true;
 
 function buildCenter() {
-  CE.offline = h('div', { class: 'offline', hidden: true }, icon('warn'), '连不上接力台：正在重启的话，几秒后会自己连上；关掉了的话，在启动台或聚焦搜索里打开「接力台」', h('button', { class: 'btn small', onclick: () => refresh() }, '重试'));
+  CE.offline = h('div', { class: 'offline', hidden: true }, h('span', { class: 'rd' }), '连不上接力台：正在重启的话，几秒后会自己连上；关掉了的话，在启动台或聚焦搜索里打开「接力台」', h('button', { class: 'btn small', onclick: () => refresh(true) }, '重试'));
   CE.cfgBad = h('div', { class: 'offline cfg-bad', hidden: true });
   CE.bar = h('header', { class: 'bar' });
   CE.tabs = h('div', { class: 'tabs', role: 'tablist', hidden: true });
@@ -1277,6 +1308,7 @@ function onScroll() {
   const s = CE.scroll;
   stick = s.scrollHeight - s.scrollTop - s.clientHeight < 80;
   if (stick) CE.toBottom.hidden = true;
+  if (WIRE.card) drawWires();
 }
 
 function scrollBottom(smooth) {
@@ -1292,7 +1324,7 @@ function renderCenter() {
   CE.cfgBad.hidden = !cfgErr;
   if (cfgErr && CE.cfgBad.dataset.err !== cfgErr) {
     CE.cfgBad.dataset.err = cfgErr;
-    CE.cfgBad.replaceChildren(icon('warn'), h('span', { class: 'ell', 'data-tip': cfgErr }, '配置文件坏了：检查命令、不许改的文件都没法用，全自动不会开工'), h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, '打开'));
+    CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': cfgErr }, '配置文件坏了：检查命令、不许改的文件都没法用，全自动不会开工'), h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, '打开'));
   }
   const mode = centerMode();
   const hero = mode !== 'thread';
@@ -1313,23 +1345,50 @@ function renderCenter() {
     if (t.current) {
       if (C.wrap.parentNode !== CE.chat) CE.chat.append(C.wrap);
       setComposerKind('talk');
-    } else C.wrap.remove();
+    } else {
+      C.wrap.remove();
+      CE.chat.style.setProperty('--compose-h', '0px');
+    }
   }
   document.title = S.st.project.name ? `${S.st.project.name} · 接力台` : '接力台';
 }
 
-// ----- 空的时候：大标题 + 团队 + 输入框 -----
+// ----- 空闲：一张带白边的照片，写着「接着［做］」；有没复核的棒，旁边钉一张红点小条 -----
+
+const VERBS = [
+  ['做', 'pencil'],
+  ['复核', 'review'],
+  ['讨论', 'chat'],
+  ['投票', 'ballot'],
+  ['验收', 'check'],
+];
 
 function renderHero(mode) {
   const p = S.st.project;
-  const sig = JSON.stringify([mode, p.root, members().map((m) => [m.name, m.label, m.cooling]), UI.noLeft, UI.noRight, narrow(), threads().length, looks.key]);
+  const setup = mode === 'setup';
+  const pend = setup ? [] : p.pending;
+  const canCancel = !setup && S.draft && threads().some((t) => !blank(t));
+  const sig = JSON.stringify([mode, p.root, p.name, pend.map((s) => [s.id, s.summary]), UI.noLeft, UI.noRight, narrow(), canCancel]);
   if (sig !== heroSig) {
     heroSig = sig;
+    const s = pend[0];
+    const print = h(
+      'div',
+      { class: 'print' },
+      h(
+        'div',
+        { class: 'photo' },
+        h('span', { class: 'cap', 'data-tip': setup ? p.root : null }, setup ? `还没接入 · ${shortPath(p.root)}` : `空闲 · ${p.name}`),
+        h('div', { class: 'keep' }, h('span', { class: 'word' }, setup ? '接入' : '接着'), h('span', { class: 'pill' }, icon(setup ? 'folder' : 'pencil'), h('span', { class: 'v' }, setup ? '这个文件夹' : '做'))),
+        h('span', { class: 'cap' }, setup ? '接入以后，各家 AI 在这个文件夹里按接力规矩交接' : '在任何 AI 工具里打开这个文件夹说「接着做」，或者在下面写下要做的事')
+      ),
+      s ? h('button', { class: 'pin-note', onclick: () => jumpTo(s.id) }, h('span', { class: 'rd' }), h('span', { class: 'cap' }, `第 ${s.id} 棒 · 待复核${pend.length > 1 ? ` · 共 ${pend.length} 棒` : ''}`), s.summary || '还没有强模型看过。') : null
+    );
     const under = h(
       'div',
       { class: 'under' },
-      mode === 'setup' ? h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已接入').then(() => loadTree()) }, '仅接入') : null,
-      mode === 'new' && S.draft && threads().some((t) => !blank(t))
+      setup ? h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已接入').then(() => loadTree()) }, '仅接入') : null,
+      canCancel
         ? h(
             'button',
             {
@@ -1343,15 +1402,7 @@ function renderHero(mode) {
           )
         : null
     );
-    const inner = h(
-      'div',
-      { class: 'hero-in' },
-      h('h1', null, h('span', { 'data-tip': mode === 'setup' ? p.root : null }, mode === 'setup' ? shortPath(p.root) : p.name), mode === 'setup' ? p.name : '新任务'),
-      members().length ? h('div', { class: 'team-row' }, members().map((m) => h('span', { 'data-tip': memberTip(m) }, tile(m, 's44', m.cooling ? 'cooling' : '')))) : null,
-      C.wrap,
-      under
-    );
-    CE.hero.replaceChildren(h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null), inner);
+    CE.hero.replaceChildren(h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null), h('div', { class: 'hero-in' }, print, C.wrap, under));
   } else if (C.wrap.parentNode !== CE.hero.querySelector('.hero-in')) {
     const inner = CE.hero.querySelector('.hero-in');
     inner.insertBefore(C.wrap, inner.querySelector('.under'));
@@ -1359,52 +1410,52 @@ function renderHero(mode) {
   setComposerKind('task');
 }
 
-// ----- 顶栏：标题、接力条、控制 -----
+/** 照片上「接着［…］」里的词换着出现：做、复核、讨论、投票、验收。 */
+function turnVerb() {
+  const v = !document.hidden && !still() && centerMode() === 'new' && CE.hero.querySelector('.keep .v');
+  if (!v) return;
+  const i = (VERBS.findIndex(([w]) => w === v.textContent) + 1) % VERBS.length;
+  v.textContent = VERBS[i][0];
+  v.previousSibling.replaceWith(icon(VERBS[i][1]));
+  v.animate([{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.7,.2,1)' });
+}
+
+// ----- 顶栏：项目 / 任务几，现在谁在做，待复核，清单，控制 -----
 
 const KIND_WORD = { work: '干活中', review: '复核中', final: '终审中' };
 
 function renderBar(t) {
-  if (S.editingTitle) return;
   const p = S.st.project;
   const run = runState();
   const g = run.g;
   const latest = !!t.current;
+  const n = threads().indexOf(t) + 1;
   const sig = JSON.stringify([
     t.id,
-    t.title,
+    n,
     latest,
-    latest && p.task.title,
+    p.name,
     p.task.done,
     p.task.total,
+    p.task.empty,
     p.now.kind,
     p.now.stint,
-    g && [g.id, g.status, g.mode, g.current && g.current.stint, g.current && g.current.kind, g.waitingUntil],
+    g && [g.id, g.status, g.mode, g.current && g.current.stint, g.current && g.current.kind, g.current && g.current.label, g.waitingUntil],
     p.pending.map((s) => s.id),
-    p.acceptance && [p.acceptance.state, p.acceptance.headline],
-    members().map((m) => [m.name, m.cooling, m.canWork, m.tier, m.label]),
+    members().map((m) => [m.name, m.cooling, m.canWork]),
     UI.noLeft,
     UI.noRight,
     narrow(),
-    threadStints(t).map((s) => [s.id, s.status, s.review, s.rolledBack, s.endedAt, s.kind, s.who.label]),
-    p.protocol,
     looks.key,
   ]);
   if (sig === barSig) return;
   barSig = sig;
-
-  const title = latest
-    ? h('button', { class: 'title', 'data-tip': '改标题', onclick: editTitle }, p.task.title || t.title || '未命名')
-    : h('span', { class: 'title' }, t.title || '未命名');
   const meta = [];
   const ctl = [];
   if (latest) {
     meta.push(statusEl(run));
-    if (p.pending.length) {
-      meta.push(h('button', { class: 'meta-btn', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget) }, h('span', { class: 'ring-dot' }), `待复核 ${p.pending.length}`));
-    }
-    // 验收通过 / 没过时清单一定全打勾了，只留验收那一个
-    const a = p.acceptance;
-    meta.push(a && (a.state === 'accepted' || a.state === 'blocked') ? null : progressEl(p.task), acceptEl(a));
+    if (p.pending.length) meta.push(h('button', { class: 'meta-btn', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget) }, h('span', { class: 'rd' }), `待复核 ${p.pending.length}`));
+    if (p.task.total) meta.push(h('button', { class: 'meta-btn mono', 'data-tip': '看清单', onclick: () => CE.stream.querySelector('.head')?.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'start' }) }, `清单 ${p.task.done}/${p.task.total}`));
     if (run.running || run.waiting) {
       ctl.push(h('button', { class: 'btn primary', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), h('span', { class: 'lbl' }, '停止')));
     } else {
@@ -1423,18 +1474,13 @@ function renderBar(t) {
         )
       );
     }
-    ctl.push(h('button', { class: 'icon-btn', 'aria-label': '更多', 'aria-haspopup': 'menu', onclick: (e) => barMenu(e.currentTarget) }, icon('more')));
+    ctl.push(iconBtn('更多', 'more', (e) => barMenu(e.currentTarget)));
   }
   if (UI.noRight || narrow()) ctl.push(sideBtn('right'));
   CE.bar.replaceChildren(
-    h(
-      'div',
-      { class: 'bar-top' },
-      h('div', { class: 'bar-title' }, UI.noLeft || narrow() ? sideBtn('left') : null, title),
-      h('div', { class: 'bar-meta' }, meta),
-      h('div', { class: 'bar-ctl' }, ctl)
-    ),
-    stripEl(t)
+    h('div', { class: 'bar-l' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'crumb cap' }, p.name, h('i', null, '/'), `任务 ${n}`)),
+    h('div', { class: 'bar-m' }, meta),
+    h('div', { class: 'bar-ctl' }, ctl)
   );
 }
 
@@ -1463,68 +1509,6 @@ function statusEl(run) {
     return h('span', { class: 'status live', 'data-tip': known ? s.who.label : null }, h('span', { class: 'dot' }), known ? tile(s.who, 's16') : null, h('span', { class: 'w' }, '进行中'));
   }
   return null;
-}
-
-function stintMinutes(s) {
-  const a = msOf(s.startedAt);
-  const b = s.endedAt ? msOf(s.endedAt) : Date.now();
-  return Math.max(0.5, (b - a) / 60000);
-}
-
-function stintWord(s) {
-  if (s.status === 'working') return s.via === 'relay' ? KIND_WORD[s.kind] : '进行中';
-  if (s.rolledBack) return '作废';
-  const base = { handed: '已交接', unfinished: '没留交接', quota: '额度用完', failed: '出错', stopped: '已停止' }[s.status] || '';
-  if (s.review === 'needed') return `${base} · 待复核`;
-  return base;
-}
-
-function stripEl(t) {
-  const list = threadStints(t);
-  const strip = h('div', { class: 'strip', role: 'list', 'aria-label': '接力' });
-  for (const s of list) {
-    const pending = s.review === 'needed' && s.status !== 'working' && !s.rolledBack;
-    strip.append(
-      h('i', {
-        role: 'listitem',
-        class: [lookOf(s.who).tier, s.kind !== 'work' ? s.kind : '', s.status === 'working' ? 'live' : '', pending ? 'pending' : '', s.rolledBack ? 'void' : ''].filter(Boolean).join(' '),
-        style: `--g:${Math.min(6, Math.sqrt(stintMinutes(s))).toFixed(2)}`,
-        'data-stint': String(s.id),
-        'data-tip': `第 ${s.id} 棒 · ${s.who.label === '不知道是谁' ? '身份不明' : s.who.label}\n${stintWord(s)}${s.status !== 'working' ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}`,
-        onclick: () => jumpTo(s.id),
-        onmouseenter: () => lightStint(s),
-        onmouseleave: unlight,
-      })
-    );
-  }
-  return strip;
-}
-
-function progressEl(task) {
-  if (task.empty) return null;
-  const pct = task.total ? Math.round((task.done / task.total) * 100) : 0;
-  return h(
-    'button',
-    { class: 'progress', 'aria-haspopup': 'dialog', 'data-tip': '步骤', onclick: (e) => stepsPanel(e.currentTarget) },
-    task.total ? h('span', { class: 'ring', style: `--p:${pct}` }) : icon('plus'),
-    task.total ? h('span', { class: 'num' }, `${task.done}/${task.total}`) : '步骤'
-  );
-}
-
-/**
- * 验收：清单打勾只说明「说做完了」，这里说能不能算做完。清单还没打完时不显示（进度旁边已经有了）。
- * 通过、没过、没法判断用文字和形状分开（实心 / 描边 / 虚线），不只靠颜色深浅。
- */
-function acceptEl(a) {
-  if (!a || a.state === 'working') return null;
-  const word = { accepted: '验收通过', blocked: '验收没过', unknown: '没法验收' }[a.state];
-  return h(
-    'button',
-    { class: `accept ${a.state}`, 'aria-haspopup': 'dialog', 'data-tip': a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('\n'), onclick: acceptPanel },
-    icon(a.state === 'accepted' ? 'check' : 'warn'),
-    h('span', { class: 'w' }, word),
-    a.state !== 'accepted' && a.items.length ? h('span', { class: 'num' }, String(a.items.length)) : null
-  );
 }
 
 function acceptPanel() {
@@ -1574,17 +1558,19 @@ function acceptPanel() {
   });
 }
 
+/** 点任务标题就地改：回车存，Esc 放弃。改的时候定时刷新不动它。 */
 function editTitle() {
   const p = S.st.project;
-  const btn = CE.bar.querySelector('.title');
-  if (!btn) return;
+  const ttl = CE.stream.querySelector('.head .ttl');
+  if (!ttl) return;
   S.editingTitle = true;
   let done = false;
   const finish = () => {
     if (done) return;
     done = true;
     S.editingTitle = false;
-    barSig = '';
+    const head = input.closest('.head');
+    if (head) head.dataset.sig = '';
     renderCenter();
   };
   const input = h('input', {
@@ -1607,101 +1593,49 @@ function editTitle() {
     if (done) return;
     const v = input.value.trim();
     if (!v || v === p.task.title) return finish();
-    done = true;
-    S.editingTitle = false;
     await act(null, () => api('/api/task/edit', { op: 'title', text: v }), '已保存');
-    barSig = '';
-    renderCenter();
+    finish();
   }
-  btn.replaceWith(input);
+  ttl.replaceWith(input);
   input.focus();
   input.select();
-}
-
-// ----- 步骤（清单）面板 -----
-
-function stepsPanel(anchor) {
-  closeMenus();
-  const list = h('div', { class: 'steps-list' });
-  const rules = h('div');
-  const input = h('input', {
-    type: 'text',
-    placeholder: '加一步',
-    'aria-label': '加一步',
-    onkeydown: async (e) => {
-      if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        closeMenus();
-        return;
-      }
-      if (e.key !== 'Enter' || !input.value.trim()) return;
-      const text = input.value.trim();
-      input.value = '';
-      await editStep({ op: 'add', text }, () => S.st.project.task.items.push({ done: false, text }));
-    },
-  });
-  const panel = h('div', { class: 'pop-panel', role: 'dialog', 'aria-label': '步骤' }, list, h('div', { class: 'add-step' }, icon('plus'), input), rules);
-  const draw = () => {
-    const t = S.st.project.task;
-    let marked = false;
-    list.replaceChildren(
-      ...t.items.map((it, i) => {
-        const next = !it.done && !marked;
-        if (next) marked = true;
-        return h(
-          'div',
-          { class: `step${it.done ? ' done' : ''}${next ? ' next' : ''}` },
-          h(
-            'button',
-            {
-              class: 'check',
-              role: 'checkbox',
-              'aria-checked': String(it.done),
-              'aria-label': it.text,
-              onclick: () =>
-                editStep({ op: 'toggle', index: i, done: !it.done }, () => {
-                  S.st.project.task.items[i].done = !it.done;
-                }),
-            },
-            icon('check')
-          ),
-          h('span', { class: 'st' }, it.text),
-          h('button', { class: 'icon-btn rm', 'aria-label': '删除这一步', 'data-tip': '删除', onclick: () => editStep({ op: 'remove', index: i }, () => S.st.project.task.items.splice(i, 1)) }, icon('x'))
-        );
-      })
-    );
-    rules.replaceChildren(t.rules ? h('div', { class: 'rules' }, h('h6', null, '约定'), h('div', { class: 'doc-md', html: md(t.rules) })) : '');
-  };
-  panel.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      closeMenus();
-    }
-  });
-  layer.append(panel);
-  draw();
-  place(panel, anchor, { align: 'end' });
-  S.stepsPanel = { draw, panel, anchor };
-  if (!S.st.project.task.items.length) input.focus();
 }
 
 /** 先在页面上改好（勾一下马上看到），再存；存失败就以接力台为准刷新回来。 */
 async function editStep(body, local) {
   const t = S.st.project.task;
+  const typing = body.op === 'add';
   local();
   t.done = t.items.filter((i) => i.done).length;
   t.total = t.items.length;
-  S.stepsPanel && S.stepsPanel.draw();
-  barSig = '';
+  const again = () => typing && CE.stream.querySelector('.head .add input')?.focus();
+  if (body.op === 'toggle') keepHead();
   renderCenter();
+  again();
   try {
     await api('/api/task/edit', body);
   } catch (e) {
     toast(e.message, { bad: true });
   }
-  await refresh();
-  S.stepsPanel && S.stepsPanel.draw();
+  await refresh(true);
+  again();
+}
+
+/** 打勾时不重画整个标题：原地改掉勾和刻度，让打勾的动画放完。 */
+function keepHead() {
+  const head = CE.stream.querySelector('.head');
+  const it = head && streamItems(selectedThread()).find((x) => x.key === head.dataset.key);
+  if (!it) return;
+  const fresh = it.make();
+  const was = head.querySelectorAll('.checks li');
+  const now = fresh.querySelectorAll('.checks li');
+  if (was.length !== now.length) return;
+  was.forEach((li, k) => {
+    li.className = now[k].className;
+    li.querySelector('.box')?.setAttribute('aria-checked', now[k].querySelector('.box')?.getAttribute('aria-checked'));
+  });
+  head.querySelector('.cap').textContent = fresh.querySelector('.cap').textContent;
+  head.dataset.sig = it.sig;
 }
 
 // ----- 菜单：派谁、待复核、更多 -----
@@ -1865,11 +1799,14 @@ function streamItems(t) {
   const latest = !!t.current;
   const items = [];
   const title = latest ? p.task.title : t.title;
+  const n = threads().indexOf(t) + 1;
   if (title) {
-    items.push({ key: `task:${t.id}`, at: -Infinity, sig: JSON.stringify(latest ? [title, p.task.body, p.task.items, t.from] : [title, t.from]), make: () => taskBubble(t, latest) });
+    // 正在改标题：定时刷新不重画它
+    items.push({ key: `task:${t.id}`, at: -Infinity, keep: latest && S.editingTitle, sig: JSON.stringify(latest ? [title, p.task.body, p.task.items, p.task.rules, t.from, n] : [title, t.from, n]), make: () => headEl(t, latest) });
   }
   // 这一棒变了（交接写完了、有了复核……）：展开的全文也要重新取，不能一直显示第一次展开时的样子。
-  for (const s of threadStints(t)) items.push({ key: `s${s.id}`, at: msOf(s.startedAt), sig: stintSig(s), make: () => stintCard(s), changed: () => S.detail.delete(s.id) });
+  const stints = threadStints(t);
+  for (const s of stints) items.push({ key: `s${s.id}`, at: msOf(s.startedAt), stop: true, sig: stintSig(s), make: () => stintCard(s), changed: () => S.detail.delete(s.id) });
   const talk = threadTalk(t);
   const rounds = new Map();
   for (const r of talk.rows) {
@@ -1887,10 +1824,13 @@ function streamItems(t) {
   for (const v of talk.votes) items.push({ key: `v:${v.id}`, at: voteBorn(v), sig: JSON.stringify([v, looks.key]), make: () => voteCard(v) });
   const rb = p.lastRollback;
   if (rb && inRange(rangeOf(t), msOf(rb.ts))) items.push({ key: `rb:${rb.ts}`, at: msOf(rb.ts), sig: String(rb.undone), make: () => rollbackLine(rb) });
-  // 全自动的结果：放在它开始时的那段对话里（换了任务之后，上一个任务的「验收通过」不能跑到新任务里）。
+  // 线路的终点：最新的任务看验收；全自动的结果放在它开始时的那段对话里（换了任务之后，上一个任务的「验收通过」不能跑到新任务里）。
   const g = p.go;
-  if (g && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && S.dismissed !== g.id && inRange(rangeOf(t), msOf(g.startedAt || g.updatedAt))) {
-    items.push({ key: `res:${g.id}:${g.status}`, at: msOf(g.updatedAt) || Infinity, sig: g.result, make: () => resultLine(g) });
+  const res = g && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && S.dismissed !== g.id && inRange(rangeOf(t), msOf(g.startedAt || g.updatedAt)) ? g : null;
+  const a = latest && p.acceptance && p.acceptance.state !== 'working' ? p.acceptance : null;
+  if (res || a) {
+    const last = stints.length ? Math.max(...stints.map((s) => msOf(s.endedAt || s.startedAt))) : msOf(t.from);
+    items.push({ key: res ? `res:${res.id}:${res.status}` : `acc:${t.id}`, at: res ? msOf(res.updatedAt) || Infinity : last + 1, stop: true, sig: JSON.stringify([res && res.result, a && [a.state, a.headline, a.items]]), make: () => verdictEl(res, a) });
   }
   items.sort((a, b) => a.at - b.at);
   if (latest) {
@@ -1901,7 +1841,21 @@ function streamItems(t) {
   return items;
 }
 
-/** 按 key 对齐：没变的不动，变了的换掉，新来的加进来（带一点动画）。 */
+/** 新来的一项：从下面浮上来；一批一起来的，一个接一个。放完就把动画拿掉（切回对话时不再重放）。 */
+function enterAnim(el, i) {
+  if (still()) return;
+  el.style.setProperty('--i', String(i));
+  el.classList.add('enter');
+  const done = (e) => {
+    if (e.target !== el) return;
+    el.classList.remove('enter');
+    el.style.removeProperty('--i');
+    el.removeEventListener('animationend', done);
+  };
+  el.addEventListener('animationend', done);
+}
+
+/** 按 key 对齐：没变的不动，变了的换掉，新来的加进来（带一点动画）。keep：正在编辑，先别动。 */
 function syncList(box, items, animate) {
   const old = new Map();
   for (const el of [...box.children]) {
@@ -1912,7 +1866,7 @@ function syncList(box, items, animate) {
   let added = 0;
   for (const it of items) {
     let el = old.get(it.key);
-    if (el && el.dataset.sig !== it.sig) {
+    if (el && el.dataset.sig !== it.sig && !it.keep) {
       if (it.changed) it.changed();
       const fresh = it.make();
       fresh.dataset.key = it.key;
@@ -1923,7 +1877,7 @@ function syncList(box, items, animate) {
       el = it.make();
       el.dataset.key = it.key;
       el.dataset.sig = it.sig;
-      if (animate) el.classList.add('enter');
+      if (animate) enterAnim(el, added);
       added++;
     }
     old.delete(it.key);
@@ -1935,6 +1889,22 @@ function syncList(box, items, animate) {
   return added;
 }
 
+/** 线路：第一站到终点之间夹着的对话，线从旁边穿过去；最后一站下面不再画线。 */
+function railMarks() {
+  const kids = [...CE.stream.children];
+  let first = -1;
+  let last = -1;
+  kids.forEach((el, i) => {
+    if (!el.classList.contains('stop')) return;
+    if (first < 0) first = i;
+    last = i;
+  });
+  kids.forEach((el, i) => {
+    el.classList.toggle('via', i > first && i < last && !el.classList.contains('stop'));
+    el.classList.toggle('last', i === last);
+  });
+}
+
 function renderStream(t) {
   const fresh = streamThread !== t.id;
   if (fresh) {
@@ -1944,6 +1914,9 @@ function renderStream(t) {
   }
   const wasStuck = stick;
   const added = syncList(CE.stream, streamItems(t), !fresh);
+  railMarks();
+  // 换到另一段对话：看得见的最后几项依次浮上来
+  if (fresh) [...CE.stream.children].slice(-8).forEach((el, i) => enterAnim(el, i));
   updateLive();
   for (const el of CE.stream.querySelectorAll('.card.open')) {
     const s = stintById(Number(el.dataset.stint));
@@ -1969,29 +1942,80 @@ function updateLive() {
   }
 }
 
-function taskBubble(t, latest) {
-  const p = S.st.project;
-  const title = latest ? p.task.title : t.title;
-  const body = latest ? p.task.body.split('\n').slice(1).join('\n').trim() : '';
-  const items = latest ? p.task.items : [];
+/** 任务：日子、第几个任务、清单进度是刻度；标题是人写的字（写在「：」前面的是标题，后面的是说明）。 */
+function headEl(t, latest) {
+  const task = S.st.project.task;
+  const raw = latest ? task.title : t.title;
+  const cut = raw.indexOf('：');
+  const [title, lead] = cut > 3 && cut < 40 && cut < raw.length - 1 ? [raw.slice(0, cut), raw.slice(cut + 1)] : [raw, ''];
+  const sub = [lead, latest ? task.body.split('\n').slice(1).join('\n').trim() : ''].filter(Boolean).join('\n');
+  const d = new Date(t.from);
+  const bits = [`任务 ${pad(threads().indexOf(t) + 1)}`, `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${clock(t.from)}`];
+  if (latest && task.total) bits.push(`清单 ${task.done} / ${task.total}`);
   return h(
-    'div',
-    { class: 'me task' },
-    h('span', { class: 'tag' }, stamp(t.from)),
+    'header',
+    { class: 'head' },
+    h('div', { class: 'cap' }, bits.join(' · ')),
+    latest ? h('h2', { class: 'ttl', role: 'button', tabindex: '0', 'data-tip': '改标题', html: inline(esc(title)), onclick: editTitle, onkeydown: (e) => e.key === 'Enter' && editTitle() }) : h('h2', { class: 'ttl', html: inline(esc(title)) }),
+    sub ? h('p', { class: 'sub' }, sub.length > 400 ? `${sub.slice(0, 400)}…` : sub) : null,
+    latest ? checklist(task) : null,
+    latest && task.rules ? h('details', { class: 'rules' }, h('summary', { class: 'link' }, '约定'), h('div', { class: 'doc-md', html: md(task.rules) })) : null,
+    latest ? iconBtn('编辑任务', 'pencil', editTaskRaw, '', 'edit') : null
+  );
+}
+
+/** 清单：点方框打勾，悬停出现删除，最后一行直接写下一步。 */
+function checklist(task) {
+  let marked = false;
+  return h(
+    'ul',
+    { class: 'checks' },
+    task.items.map((it, i) => {
+      const next = !it.done && !marked;
+      if (next) marked = true;
+      return h(
+        'li',
+        { class: it.done ? 'done' : next ? 'next' : null },
+        h(
+          'button',
+          {
+            class: 'box',
+            role: 'checkbox',
+            'aria-checked': String(it.done),
+            'aria-label': it.text,
+            onclick: () => {
+              const cur = S.st.project.task.items[i];
+              editStep({ op: 'toggle', index: i, done: !cur.done }, () => (cur.done = !cur.done));
+            },
+          },
+          icon('check')
+        ),
+        h('span', { class: 'st' }, it.text),
+        h('button', { class: 'x', 'aria-label': '删除这一步', 'data-tip': '删除', onclick: () => editStep({ op: 'remove', index: i }, () => S.st.project.task.items.splice(i, 1)) }, icon('x'))
+      );
+    }),
     h(
-      'div',
-      { class: 'bubble' },
-      h('b', null, title),
-      body ? h('div', { class: 'body' }, body.length > 400 ? `${body.slice(0, 400)}…` : body) : null,
-      items.length ? h('ul', { class: 'steps' }, items.map((i) => h('li', { class: i.done ? 'done' : '' }, i.text))) : null
-    ),
-    latest ? h('button', { class: 'icon-btn edit', 'aria-label': '编辑任务', 'data-tip': '编辑任务', onclick: editTaskRaw }, icon('pencil')) : null
+      'li',
+      { class: 'add' },
+      icon('plus'),
+      h('input', {
+        type: 'text',
+        placeholder: '加一步',
+        'aria-label': '加一步',
+        onkeydown: (e) => {
+          if (e.isComposing || e.keyCode === 229 || e.key !== 'Enter' || !e.target.value.trim()) return;
+          const text = e.target.value.trim();
+          e.target.value = '';
+          editStep({ op: 'add', text }, () => S.st.project.task.items.push({ done: false, text }));
+        },
+      })
+    )
   );
 }
 
 function talkRow(r) {
   if (r.kind === 'human') {
-    return h('div', { class: 'me' }, r.mode === 'solo' ? h('span', { class: 'tag' }, '各自') : null, h('div', { class: 'bubble', html: inline(esc(r.text)) }));
+    return h('div', { class: 'me' }, h('span', { class: 'cap' }, [r.mode === 'solo' ? '各自' : '', clock(r.ts)].filter(Boolean).join(' · ')), h('div', { class: 'note', html: inline(esc(r.text)) }));
   }
   if (r.kind === 'system') return h('div', { class: 'sys' }, r.text);
   return aiRow(r);
@@ -2002,19 +2026,14 @@ function aiRow(r, compact) {
   return h(
     'div',
     { class: 'ai' },
-    h('span', { class: 'who-tile', 'data-tip': memberByName(r.agent) ? memberTip(memberByName(r.agent)) : r.who }, tile({ agent: r.agent, label: r.who }, compact ? 's20' : '')),
-    h(
-      'div',
-      null,
-      h('div', { class: 'who' }, h('b', null, name), model ? h('span', { class: 'model' }, model) : null, compact ? null : h('span', { class: 'time' }, clock(r.ts))),
-      h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) })
-    ),
-    compact ? null : h('div', { class: 'hover-acts' }, h('button', { class: 'icon-btn', 'aria-label': '复制', 'data-tip': '复制', onclick: () => copyText(r.text).then((ok) => ok && toast('已复制')) }, icon('copy')))
+    h('span', { class: 'who-tile', 'data-tip': memberByName(r.agent) ? memberTip(memberByName(r.agent)) : r.who }, tile({ agent: r.agent, label: r.who })),
+    h('div', null, h('div', { class: 'who' }, h('b', null, name), model ? h('span', { class: 'model' }, model) : null, compact ? null : h('span', { class: 'time' }, clock(r.ts))), h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) })),
+    compact ? null : h('div', { class: 'hover-acts' }, iconBtn('复制', 'copy', () => copyToast(r.text)))
   );
 }
 
 function roundBox(rows) {
-  return h('div', { class: 'round' }, h('div', { class: 'round-label' }, `各自 · ${rows.length}`), h('div', { class: 'round-cols' }, rows.map((r) => aiRow(r, true))));
+  return h('div', { class: 'round' }, h('span', { class: 'cap' }, `各自 · ${rows.length}`), h('div', { class: 'round-cols' }, rows.map((r) => aiRow(r, true))));
 }
 
 function typingLine(st) {
@@ -2022,47 +2041,39 @@ function typingLine(st) {
   return h(
     'div',
     { class: 'typing' },
-    h(
-      'span',
-      { class: 'tiles' },
-      st.speaking.map((x) => tile({ agent: x.agent, label: x.label }, 's20')),
-      st.queue.map((x) => tile({ agent: x.agent, label: x.label }, 's20', 'cooling'))
-    ),
+    h('span', { class: 'tiles' }, st.speaking.map((x) => tile({ agent: x.agent, label: x.label })), st.queue.map((x) => tile({ agent: x.agent, label: x.label }, '', 'cooling'))),
     h('span', { class: 'dots' }, h('i'), h('i'), h('i')),
     names.length ? `${names.join('、')} 正在输入` : '排队中'
   );
 }
 
 function rollbackLine(rb) {
-  return h(
-    'div',
-    { class: 'sys' },
-    icon('undo'),
-    `${clock(rb.ts)} 退回到${rb.label} · 第 ${rb.dropped.join('、')} 棒作废`,
-    rb.undone ? '· 已撤销' : h('button', { class: 'link', onclick: (e) => undoRollback(e.currentTarget) }, '撤销')
-  );
+  return h('div', { class: 'sys' }, icon('undo'), `${clock(rb.ts)} 退回到${rb.label} · 第 ${rb.dropped.join('、')} 棒作废`, rb.undone ? '· 已撤销' : h('button', { class: 'link', onclick: (e) => undoRollback(e.currentTarget) }, '撤销'));
 }
 
-function resultLine(g) {
-  const ok = g.status === 'done';
+/**
+ * 线路的终点。验收是人写的一个词，后面跟机器的标签：通过、没过、没法判断。
+ * 轮到人看的时候（通过了、没过）终点是一颗红点。更早的任务没有验收记录，就写当时全自动的结果。
+ */
+function verdictEl(g, a) {
+  const state = a ? a.state : { done: 'accepted', 'needs-human': 'blocked', failed: 'failed', stopped: 'stopped' }[g.status];
+  const [ic, word] = { accepted: ['check', '通过'], blocked: ['warn', a ? '没过' : '要人看'], unknown: ['warn', '没法判断'], failed: ['warn', '出错了'], stopped: ['stop', '停了'] }[state];
+  const why = a ? (a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('；')) : g.result.replace(/^验收(通过|没过)：/, '');
+  const pill = [icon(ic), word];
   return h(
     'div',
-    { class: `sys${ok ? ' strong' : ''}` },
-    icon(ok ? 'check' : g.status === 'stopped' ? 'stop' : 'warn'),
-    h('span', null, g.result),
-    h(
-      'button',
-      {
-        class: 'x',
-        'aria-label': '关闭',
-        onclick: () => {
+    { class: `stop verdict${state === 'accepted' || state === 'blocked' || state === 'failed' ? ' hot' : ''}` },
+    h('span', { class: 'pin', 'aria-hidden': 'true' }),
+    h('div', { class: 'v' }, h('span', { class: 'word' }, g && !a && state !== 'accepted' && state !== 'blocked' ? '全自动' : '验收'), a ? h('button', { class: 'pill', 'aria-haspopup': 'dialog', onclick: acceptPanel }, pill) : h('span', { class: 'pill' }, pill)),
+    why ? h('p', { class: 'why' }, why) : null,
+    g ? h('span', { class: 'cap' }, [clock(g.updatedAt), g.mode === 'auto' ? '全自动' : '', g.stints && g.stints.length ? `${g.stints.length} 棒` : '', lasted(g.startedAt, g.updatedAt)].filter(Boolean).join(' · ')) : null,
+    g
+      ? iconBtn('收起', 'x', () => {
           S.dismissed = g.id;
           store.set('dismissed', g.id);
           renderCenter();
-        },
-      },
-      icon('x')
-    )
+        }, '', 'x')
+      : null
   );
 }
 
@@ -2084,15 +2095,39 @@ function summaryOf(s) {
   return { text: s.ghost || !s.handoff ? '没有交接' : '交接里没写做了什么', faint: true };
 }
 
+/** 一棒是谁做的、现在什么状态：机器的标签，细边框加一个小图标。 */
+function pillOf(s) {
+  if (s.status === 'working') return h('span', { class: 'pill live' }, h('span', { class: 'dot' }), s.via === 'relay' ? KIND_WORD[s.kind] : '进行中');
+  if (s.rolledBack) return h('span', { class: 'pill soft' }, '作废');
+  if (s.kind === 'final' && s.verdictWord) return h('span', { class: 'pill' }, icon('search'), `终审 · ${s.verdictWord}`);
+  if (s.kind === 'review') return h('span', { class: 'pill' }, icon('review'), '复核');
+  const [ic, word] = { handed: ['arrow', '交接了'], unfinished: ['', '没留交接'], quota: ['', `额度用完${s.quotaUntil ? ` · ${clock(s.quotaUntil)} 恢复` : ''}`], failed: ['', '出错'], stopped: ['stop', '叫停了'] }[s.status] || [];
+  if (!word) return null;
+  return h('span', { class: `pill${s.status === 'handed' ? '' : ' soft'}` }, s.status === 'failed' ? h('span', { class: 'rd' }) : ic ? icon(ic) : null, word);
+}
+
+/** 做了多久：21:43–21:45 · 2 分钟；正在做的一秒一秒走。 */
+function spanOf(s) {
+  if (s.status === 'working') return h('span', { class: 'tm', 'data-since': s.startedAt }, elapsed(s.startedAt));
+  const a = msOf(s.startedAt);
+  const from = `${sameDay(new Date(a), new Date()) ? '' : `${shortDay(a)} `}${clock(s.startedAt)}`;
+  const to = s.endedAt ? clock(s.endedAt) : '';
+  return h('span', { class: 'tm' }, `${from}${to && to !== clock(s.startedAt) ? `–${to}` : ''}${s.endedAt ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}`);
+}
+
+/** 一棒：钉在线路上的一张小条。没交接、身份不明的是虚线；什么都没干的只留一行。 */
 function stintCard(s) {
   const live = s.status === 'working';
   const [name, model] = splitLabel(s.who.label);
   const sum = summaryOf(s);
   const open = S.open.has(s.id);
+  const files = s.facts && s.facts.files;
+  const ghost = !live && (s.ghost || !s.handoff || s.who.tier === 'unknown');
+  const compact = ghost && !files && s.review !== 'needed';
   return h(
     'article',
     {
-      class: `card${open ? ' open' : ''}${s.rolledBack ? ' void' : ''}`,
+      class: `stop card${ghost ? ' ghost' : ''}${compact ? ' compact' : ''}${live ? ' live' : ''}${open ? ' open' : ''}${s.rolledBack ? ' void' : ''}`,
       'data-stint': String(s.id),
       tabindex: '0',
       'aria-expanded': String(open),
@@ -2106,64 +2141,58 @@ function stintCard(s) {
           toggleCard(s.id);
         }
       },
-      onmouseenter: () => lightStint(s),
-      onmouseleave: unlight,
+      onmouseenter: (e) => {
+        lightStint(s);
+        wireTo(files ? e.currentTarget : null);
+      },
+      onmouseleave: () => {
+        unlight();
+        wireTo(null);
+      },
       oncontextmenu: (e) => ctx(e, stintMenuItems(s)),
     },
-    h('span', { class: 'who-tile', 'data-tip': whoTip(s.who) }, tile(s.who)),
+    h('span', { class: 'no', 'aria-hidden': 'true' }, pad(s.id)),
     h(
       'div',
-      { class: 'cbody' },
+      { class: 'slip' },
       h(
         'div',
-        { class: 'head' },
+        { class: 'who' },
+        h('span', { class: 'who-tile', 'data-tip': whoTip(s.who) }, tile(s.who)),
         h('b', null, name === '不知道是谁' ? '身份不明' : name),
-        s.kind !== 'work' ? h('span', { class: 'kind' }, s.kind === 'review' ? '复核' : '终审') : null,
-        model ? h('span', { class: 'model' }, model) : null,
-        h('span', { class: 'time' }, live ? h('span', { class: 'num', 'data-since': s.startedAt }, elapsed(s.startedAt)) : stamp(s.endedAt || s.startedAt))
+        h('span', { class: 'mdl' }, [model, { strong: '强', weak: '弱' }[s.who.tier]].filter(Boolean).join(' · ')),
+        pillOf(s),
+        compact ? h('span', { class: 'say' }, sum.text) : null,
+        spanOf(s)
       ),
-      h('div', { class: `sum${sum.faint ? ' faint' : ''}`, html: inline(esc(sum.text)) }),
+      compact ? null : h('div', { class: `sum${sum.faint ? ' faint' : ''}`, html: inline(esc(sum.text)) }),
       cardFoot(s),
       live && s.via === 'relay' ? h('pre', { class: 'tail', 'data-stint': String(s.id), hidden: true }) : null,
       h('div', { class: 'more-body' }, h('div', null))
     ),
-    h(
-      'div',
-      { class: 'hover-acts' },
-      s.facts && s.facts.files ? h('button', { class: 'icon-btn', 'aria-label': '改动', 'data-tip': '改动', onclick: () => openDiff(s.id) }, icon('diff')) : null,
-      h('button', { class: 'icon-btn', 'aria-label': '更多', onclick: (e) => openMenu(e.currentTarget, stintMenuItems(s), { align: 'end' }) }, icon('more'))
-    )
+    h('div', { class: 'hover-acts' }, files ? iconBtn('改动', 'diff', () => openDiff(s.id)) : null, iconBtn('更多', 'more', (e) => openMenu(e.currentTarget, stintMenuItems(s), { align: 'end' })))
   );
 }
 
-/** 卡片底下一行淡字：只写要注意的（正常交接了就不写），改了哪些文件合成一句，点开看改动。 */
+/** 小条底下一行淡字：只写要注意的（正常交接了就不写），改了哪些文件合成一句，点开看改动。 */
 function cardFoot(s) {
   const bits = [];
   const st = (cls, ...kids) => h('span', { class: `st ${cls}`.trim() }, ...kids);
-  if (s.status === 'working') bits.push(st('live', h('span', { class: 'dot' }), s.via === 'relay' ? KIND_WORD[s.kind] : '进行中'));
-  else if (s.status === 'unfinished') bits.push(st('', '没留交接'));
-  else if (s.status === 'quota') bits.push(st('', `额度用完${s.quotaUntil ? ` · ${clock(s.quotaUntil)} 恢复` : ''}`));
-  else if (s.status === 'failed') bits.push(st('bad', icon('warn'), '出错'));
-  else if (s.status === 'stopped') bits.push(st('', '已停止'));
-  if (s.rolledBack) bits.push(st('', '作废'));
-  else if (s.review === 'needed' && s.status !== 'working') {
+  if (!s.rolledBack && s.review === 'needed' && s.status !== 'working') {
     // 为什么还待复核：复核写了「有问题」「证据不足」、只有弱模型复核过、读不到改动……
     const why = s.reviewText.replace(/^待复核( · )?/, '');
-    const el = st(s.reviewWarn ? 'bad' : 'pend', s.reviewWarn ? icon('warn') : h('span', { class: 'ring-dot' }), h('span', { class: 'ell' }, s.reviewWarn && why ? why.replace(/（[^）]*）$/, '') : '待复核'));
+    const el = st('pend', h('span', { class: 'rd' }), h('span', { class: 'ell' }, s.reviewWarn && why ? why.replace(/（[^）]*）$/, '') : '待复核'));
     if (why) el.dataset.tip = why;
     bits.push(el);
-  } else if (s.review === 'done') {
+  } else if (!s.rolledBack && s.review === 'done') {
     // 谁复核的看小图标（复核算数的都是强模型），悬停看全名，点一下跳过去
     const c = countedReview(s);
     const by = c && stintById(c.by);
     const who = by ? by.who : c && { label: c.byLabel, tier: 'strong' };
     if (c) bits.push(h('button', { class: 'st ok link-st', 'data-tip': whoTip(who), onclick: () => by && jumpTo(by.id) }, tile(who, 's16'), `复核 · ${c.verdictWord}`));
-  } else if (s.kind === 'final' && s.verdictWord) {
-    const pass = s.verdict === 'ok' || s.verdict === 'fixed';
-    bits.push(st(pass ? 'ok' : 'bad', icon(pass ? 'check' : 'warn'), `终审 · ${s.verdictWord}`));
   }
   const warn = (text, tip) => {
-    const el = st('bad', icon('warn'), text);
+    const el = st('bad', h('span', { class: 'rd' }), text);
     if (tip) el.dataset.tip = tip;
     bits.push(el);
   };
@@ -2188,8 +2217,6 @@ function cardFoot(s) {
           class: 'st link-st',
           'data-tip': shown.join('\n') + (f.files > shown.length ? `\n… 一共 ${f.files} 个` : ''),
           onclick: () => openDiff(s.id, f.files === 1 ? f.paths[0] : undefined),
-          onmouseenter: () => lightPaths(f.paths),
-          onmouseleave: () => lightStint(s),
         },
         h('span', { class: 'ell' }, f.files === 1 ? basename(f.paths[0]) : `${f.files} 个文件`),
         h('span', { class: 'num' }, `+${f.added} −${f.removed}`)
@@ -2257,6 +2284,46 @@ function fillDetail(el, s) {
   if (slot) slot.replaceChildren(detailBox(s));
 }
 
+const SECTION = [
+  [/做了/, '做了'],
+  [/没做完|下一步/, '没做完'],
+  [/不确定|拿不准|可能有错/, '拿不准'],
+  [/验证/, '验证'],
+];
+
+/** 交接单：像一张实验记录表。交接里的每一节是一行（做了、没做完、拿不准、验证），最后一行是改了哪些文件。 */
+function handoffForm(s, text) {
+  const secs = [];
+  let status = '';
+  let cur = null;
+  for (const l of text.replace(/\r/g, '').split('\n')) {
+    const hm = l.match(/^##\s+(.+)$/);
+    if (hm) secs.push((cur = { head: hm[1].trim(), body: [] }));
+    else if (cur) cur.body.push(l);
+    else if (/^\s*[-*]\s*状态[:：]/.test(l)) status = l.replace(/^\s*[-*]\s*状态[:：]\s*/, '').trim();
+  }
+  const rows = [];
+  for (const x of secs) {
+    const body = x.body.join('\n').trim();
+    if (body) rows.push(h('dt', null, (SECTION.find(([re]) => re.test(x.head)) || [])[1] || x.head.slice(0, 5)), h('dd', { class: 'doc-md', html: md(body) }));
+  }
+  if (!secs.length && text.trim()) rows.push(h('dt', null, '交接'), h('dd', { class: 'doc-md', html: md(text.replace(/^#\s+.*\n+/, '')) }));
+  const f = s.facts;
+  if (f && f.files) {
+    rows.push(
+      h('dt', null, '改了'),
+      h(
+        'dd',
+        { class: 'files' },
+        f.paths.slice(0, 12).map((p) => h('button', { onclick: () => openDiff(s.id, p), onmouseenter: () => lightPaths([p]), onmouseleave: () => lightStint(s) }, p)),
+        f.files > 12 ? h('em', null, `… 一共 ${f.files} 个`) : null,
+        h('em', null, `+${f.added} −${f.removed}`)
+      )
+    );
+  }
+  return h('div', { class: 'form' }, h('div', { class: 'fh' }, h('span', { class: 'cap' }, `交接单 · 第 ${s.id} 棒${s.ghost ? ' · 接力台代写' : ''}`), status ? h('span', { class: 'cap' }, status) : null), h('dl', null, rows));
+}
+
 function detailBox(s) {
   const d = S.detail.get(s.id);
   const box = h('div', { class: 'detail' });
@@ -2264,7 +2331,7 @@ function detailBox(s) {
     box.append(h('div', { class: 'skel', style: 'width:62%' }), h('div', { class: 'skel', style: 'width:38%' }));
     return box;
   }
-  if (d.handoff) box.append(h('section', null, h('h5', null, s.ghost ? '交接 · 接力台代写' : '交接'), h('div', { class: 'doc-md', html: md(d.handoff.replace(/^#\s+.*\n+/, '')) })));
+  if (d.handoff || (s.facts && s.facts.files)) box.append(handoffForm(s, d.handoff || ''));
   if (s.who.claimed && s.who.claimed !== s.who.label) box.append(h('p', { class: 'aside' }, `交接里写的是「${s.who.claimed}」`));
   for (const r of d.reviews) {
     // 复核人：按复核文件找到那一棒，用它记下的身份（名字、模型、强弱）；终审自己写的就是这一棒
@@ -2309,7 +2376,7 @@ async function copyHandoff(s) {
       return stale(t) ? undefined : toast(e.message, { bad: true });
     }
   }
-  toast((await copyText(d.handoff || '')) ? '已复制' : '没能复制', { bad: false });
+  copyToast(d.handoff || '');
 }
 
 async function skipReview(btn, s) {
@@ -2358,83 +2425,74 @@ function jumpTo(id) {
 
 // ----- 投票 -----
 
+/** 投票：问题是人写的字；每个方案后面是投它的那几位的图形，「我」是一个小圈。 */
 function voteCard(v) {
   const done = v.status === 'done';
   const counts = v.counts || {};
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  const max = Math.max(1, ...Object.values(counts));
   const leaders = new Set(v.leaders || []);
-  const mine = (v.ballots || []).find((b) => b.voter === 'human');
-  const aiBallots = (v.ballots || []).filter((b) => b.voter !== 'human');
+  const ballots = v.ballots || [];
+  const mine = ballots.find((b) => b.voter === 'human');
+  const aiBallots = ballots.filter((b) => b.voter !== 'human');
+  const dots = h('span', { class: 'dots' }, h('i'), h('i'), h('i'));
   const box = h(
     'div',
     { class: 'vote' },
-    h(
-      'div',
-      { class: 'vote-head' },
-      h('span', { class: 'label' }, '投票'),
-      h('span', { class: 'q' }, v.question),
-      h(
-        'span',
-        { class: 'st' },
-        v.status === 'proposing'
-          ? [h('span', { class: 'dots' }, h('i'), h('i'), h('i')), '出方案']
-          : v.status === 'voting'
-            ? [h('span', { class: 'dots' }, h('i'), h('i'), h('i')), `投票中 ${aiBallots.length}/${v.voters.length}`]
-            : `${total} 票`
-      )
-    )
+    h('span', { class: 'cap' }, v.status === 'proposing' ? ['投票 · 出方案 ', dots] : v.status === 'voting' ? [`投票 · 投票中 ${aiBallots.length}/${v.voters.length} `, dots] : `投票 · ${total} 票`),
+    h('p', { class: 'q' }, v.question)
   );
   if (v.status === 'proposing') {
     box.append(h('div', { class: 'opts' }, v.voters.map((_, i) => h('div', { class: 'skel', style: `width:${80 - i * 12}%;margin:10px 0` }))));
     return box;
   }
-  if (v.error) box.append(h('div', { class: 'sys' }, icon('warn'), v.error));
+  if (v.error) box.append(h('div', { class: 'sys' }, h('span', { class: 'rd' }), v.error));
+  const me = () => h('span', { class: 'tile human', 'data-tip': '我' }, '我');
   const opts = h('div', { class: 'opts' });
   for (const o of v.options) {
     const n = counts[o.key] || 0;
     const lead = done && leaders.has(o.key) && n > 0;
     const adopted = v.adopted && v.adopted.key === o.key;
     const cast = !(mine && mine.choice === o.key);
-    const row = h(
-      'div',
-      {
-        class: `opt${lead ? ' lead' : ''}${adopted ? ' adopted' : ''}${v.adopted && !adopted ? ' dim' : ''}`,
-        role: cast ? 'button' : null,
-        tabindex: cast ? '0' : null,
-        'aria-label': cast ? `投方案 ${o.key}` : null,
-        onclick: cast ? (e) => !e.target.closest('.adopt') && castVote(v, o) : null,
-        onkeydown: cast ? (e) => (e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget && (e.preventDefault(), castVote(v, o)) : null,
-      },
-      h('span', { class: 'key' }, o.key),
-      h('span', { class: 'otext' }, o.text),
-      h('span', { class: 'n' }, done || n ? String(n) : ''),
-      h('span', { class: 'meter' }, h('i', { style: `--w:${Math.round((n / max) * 100)}` })),
+    opts.append(
       h(
-        'span',
-        { class: 'by' },
-        done && o.author !== 'human' ? [tile({ agent: o.author, label: o.authorLabel }, 's16'), splitLabel(o.authorLabel)[0]] : null,
-        mine && mine.choice === o.key ? h('span', { class: 'mine' }, '· 已投') : null,
-        adopted ? h('span', { class: 'mine' }, '· 已采纳') : null
-      ),
-      done && !v.adopted ? h('button', { class: 'btn small primary adopt', onclick: (e) => adopt(e.currentTarget, v, o) }, '采纳') : null
+        'div',
+        {
+          class: `opt${lead ? ' lead' : ''}${adopted ? ' adopted' : ''}${v.adopted && !adopted ? ' dim' : ''}`,
+          role: cast ? 'button' : null,
+          tabindex: cast ? '0' : null,
+          'aria-label': cast ? `投方案 ${o.key}` : null,
+          onclick: cast ? (e) => !e.target.closest('.adopt') && castVote(v, o) : null,
+          onkeydown: cast ? (e) => (e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget && (e.preventDefault(), castVote(v, o)) : null,
+        },
+        h('span', { class: 'key' }, o.key),
+        h('span', { class: 'otext' }, o.text),
+        h('span', { class: 'voters' }, done ? ballots.filter((b) => b.choice === o.key).map((b) => (b.voter === 'human' ? me() : h('span', { 'data-tip': b.voterLabel }, tile({ agent: b.voter, label: b.voterLabel }, 's16')))) : null),
+        h('span', { class: 'n' }, done || n ? String(n) : ''),
+        h(
+          'span',
+          { class: 'by' },
+          done && o.author !== 'human' ? [tile({ agent: o.author, label: o.authorLabel }, 's16'), `${splitLabel(o.authorLabel)[0]} 出的方案`] : null,
+          mine && mine.choice === o.key ? h('span', { class: 'mine' }, '已投') : null,
+          adopted ? h('span', { class: 'mine' }, '已采纳') : null
+        ),
+        done && !v.adopted ? h('button', { class: 'btn small primary adopt', onclick: (e) => adopt(e.currentTarget, v, o) }, '采纳') : null
+      )
     );
-    opts.append(row);
   }
   box.append(opts);
-  const ballots = (v.ballots || []).filter((b) => b.voter !== 'human' || b.choice);
-  if (done && ballots.length) {
+  const why = ballots.filter((b) => b.voter !== 'human' || b.choice);
+  if (done && why.length) {
     box.append(
       h(
         'details',
         { class: 'ballots' },
-        h('summary', { class: 'link' }, `每一票 · ${ballots.length}`),
-        ballots.map((b) =>
+        h('summary', { class: 'link' }, `每一票 · ${why.length}`),
+        why.map((b) =>
           h(
             'div',
             { class: 'b' },
-            b.voter === 'human' ? h('span', { class: 'tile human s16' }, icon('user')) : tile({ agent: b.voter, label: b.voterLabel }, 's16'),
-            h('span', null, h('b', null, b.voter === 'human' ? '用户' : splitLabel(b.voterLabel)[0]), ` · ${b.choice ? `投 ${b.choice}` : `弃权${b.void ? `（${b.void}）` : ''}`}${b.reason ? ` · ${b.reason}` : ''}`)
+            b.voter === 'human' ? me() : tile({ agent: b.voter, label: b.voterLabel }, 's16'),
+            h('span', null, h('b', null, b.voter === 'human' ? '我' : splitLabel(b.voterLabel)[0]), ` · ${b.choice ? `投 ${b.choice}` : `弃权${b.void ? `（${b.void}）` : ''}`}${b.reason ? ` · ${b.reason}` : ''}`)
           )
         )
       )
@@ -2631,9 +2689,9 @@ function renderDoc(t) {
       );
     }
     head.append(
-      h('button', { class: 'icon-btn', 'aria-label': '引用', 'data-tip': '引用', onclick: () => addFile(t.path) }, icon('insert')),
-      h('button', { class: 'icon-btn', 'aria-label': '复制路径', 'data-tip': '复制路径', onclick: () => copyText(t.path).then((ok) => ok && toast('已复制')) }, icon('copy')),
-      h('button', { class: 'icon-btn', 'aria-label': '在访达中显示', 'data-tip': '在访达中显示', onclick: () => reveal(t.path) }, icon('folder'))
+      iconBtn('引用', 'insert', () => addFile(t.path)),
+      iconBtn('复制路径', 'copy', () => copyToast(t.path)),
+      iconBtn('在访达中显示', 'folder', () => reveal(t.path))
     );
     if (t.view) {
       if (!extra || extra.loading) body.append(h('div', { class: 'skel', style: 'width:60%;margin:16px 0' }));
@@ -2729,7 +2787,7 @@ function buildComposer() {
   C.optRow = h('div', { class: 'opt-row', hidden: true }, C.optChips, C.optInput);
   C.seg = h(
     'div',
-    { class: 'seg', role: 'group', 'aria-label': '方式' },
+    { class: 'seg ink', role: 'group', 'aria-label': '方式' },
     [
       ['turn', '讨论'],
       ['solo', '各自'],
@@ -2796,6 +2854,8 @@ function buildComposer() {
   );
   C.wrap = h('div', { class: 'composer-wrap' }, C.box);
   C.kind = '';
+  // 输入框浮在对话上面：对话底下留出它的高度，「新消息」按钮也跟着它走
+  new ResizeObserver(() => C.wrap.parentNode === CE.chat && CE.chat.style.setProperty('--compose-h', `${C.wrap.offsetHeight}px`)).observe(C.wrap);
   restoreDraft();
 }
 
@@ -2863,7 +2923,7 @@ function updateComposer() {
       )
     );
   }
-  C.ta.placeholder = task ? '要做什么' : S.slash ? S.slash.placeholder : vote ? '投票的问题' : '发消息';
+  C.ta.placeholder = task ? '写下要做的事……' : S.slash ? S.slash.placeholder : vote ? '写下要投票的问题……' : '写下要说的话……';
   // 谁来回答
   const people = talkers();
   if (!S.ask) {
@@ -2944,6 +3004,7 @@ function updateComposer() {
   else ok = (!!text || S.files.length > 0) && asked.length > 0;
   C.send.disabled = !ok;
   autoGrow();
+  syncSegs(C.box);
 }
 
 function saveAsk() {
@@ -3220,36 +3281,28 @@ const RE = {};
 let treeSig = '';
 
 function buildRight() {
-  RE.title = h('span', { class: 'rt' });
-  RE.filterBtn = h('button', { class: 'icon-btn', 'aria-label': '筛选', 'data-tip': '筛选', 'data-kbd': '⌘P', 'aria-pressed': 'false', onclick: () => toggleFilter() }, icon('search'));
+  RE.title = h('span', { class: 'cap' }, '文件');
+  RE.filterBtn = iconBtn('筛选', 'search', () => toggleFilter(), '⌘P');
+  RE.filterBtn.setAttribute('aria-pressed', 'false');
   RE.changedBtn = h(
     'button',
     {
-      class: 'icon-btn',
-      'aria-label': '只看改动',
-      'data-tip': '只看改动',
-      'aria-pressed': 'false',
+      class: 'switch',
+      role: 'switch',
+      'aria-checked': 'false',
       onclick: () => {
         S.onlyChanged = !S.onlyChanged;
         renderRight(true);
       },
     },
-    icon('diff')
+    h('span', { class: 'track' }),
+    '只看改过的'
   );
-  RE.foldBtn = h(
-    'button',
-    {
-      class: 'icon-btn',
-      'aria-label': '全部收起',
-      'data-tip': '全部收起',
-      onclick: () => {
-        S.treeOpen.clear();
-        saveTreeOpen();
-        renderRight(true);
-      },
-    },
-    icon('fold')
-  );
+  RE.foldBtn = iconBtn('全部收起', 'fold', () => {
+    S.treeOpen.clear();
+    saveTreeOpen();
+    renderRight(true);
+  });
   RE.input = h('input', {
     type: 'text',
     placeholder: '筛选文件',
@@ -3274,13 +3327,10 @@ function buildRight() {
   });
   RE.filter = h('div', { class: 'filter', hidden: true }, icon('search'), RE.input, h('button', { class: 'x', 'aria-label': '清除', onclick: () => toggleFilter(false) }, icon('x')));
   RE.tree = h('div', { class: 'tree', role: 'tree', 'aria-label': '项目文件', onkeydown: treeKeys });
+  RE.tree.addEventListener('scroll', () => WIRE.card && drawWires(), { passive: true });
   RE.note = h('div', { class: 'tree-note', hidden: true });
-  $('#right-in').append(
-    h('div', { class: 'right-head' }, RE.title, RE.filterBtn, RE.changedBtn, RE.foldBtn, h('button', { class: 'icon-btn', 'aria-label': '收起右栏', 'data-tip': '收起', 'data-kbd': '⌥⌘B', onclick: toggleRight }, icon('sideR'))),
-    RE.filter,
-    RE.tree,
-    RE.note
-  );
+  RE.gate = h('div', { class: 'gate', hidden: true });
+  $('#right-in').append(h('div', { class: 'right-head' }, RE.title, RE.changedBtn, RE.filterBtn, RE.foldBtn, iconBtn('收起', 'sideR', toggleRight, '⌥⌘B')), RE.filter, RE.tree, RE.note, RE.gate);
 }
 
 function toggleFilter(on) {
@@ -3349,14 +3399,16 @@ const byName = (a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true }
 function renderRight(force) {
   if (!S.st || !RE.tree) return;
   const p = S.st.project;
-  RE.title.textContent = p.name || '文件';
-  RE.changedBtn.setAttribute('aria-pressed', String(S.onlyChanged));
+  RE.changedBtn.setAttribute('aria-checked', String(S.onlyChanged));
+  renderGate(p);
   const touched = touchedMap();
   const sig = JSON.stringify([S.treeRev, !!S.tree, [...touched].map(([k, v]) => [k, v.looks, v.pending]), [...S.treeOpen], S.treeFilter, S.onlyChanged, S.treeSel, looks.key]);
   if (!force && sig === treeSig) return;
   treeSig = sig;
   const focused = document.activeElement && RE.tree.contains(document.activeElement) ? document.activeElement.dataset.path : null;
   const files = (S.tree && S.tree.files) || [];
+  RE.title.textContent = S.tree ? `文件 · ${files.length}` : '文件';
+  const before = rowTops();
   const have = new Set(files);
   const gone = S.onlyChanged ? [...touched.keys()].filter((f) => !have.has(f)) : [];
   const root = buildTree(files, gone);
@@ -3392,6 +3444,7 @@ function renderRight(force) {
   const keepScroll = RE.tree.scrollTop;
   RE.tree.replaceChildren(...rows);
   RE.tree.scrollTop = keepScroll;
+  glide(before);
   RE.note.hidden = true;
   if (!S.tree) {
     RE.note.hidden = false;
@@ -3408,6 +3461,48 @@ function renderRight(force) {
   }
   if (focused) RE.rows.get(focused)?.focus({ preventScroll: true });
   if (LIT.paths) lightPaths(LIT.paths);
+}
+
+/** 文件树重画前：记下看得见的每一行在哪。 */
+function rowTops() {
+  const out = new Map();
+  if (!RE.rows || still()) return out;
+  const box = RE.tree.getBoundingClientRect();
+  for (const [p, el] of RE.rows) {
+    const b = el.getBoundingClientRect();
+    if (b.top > box.bottom) break;
+    if (b.bottom >= box.top) out.set(p, b.top);
+  }
+  return out;
+}
+
+/** 文件树重画后：还在的行从原来的位置滑过去，新出来的行淡入（展开、收起、筛选都接得上）。 */
+function glide(before) {
+  if (!before.size) return;
+  const box = RE.tree.getBoundingClientRect();
+  let k = 0;
+  for (const [p, el] of RE.rows) {
+    const top = el.getBoundingClientRect().top;
+    if (top > box.bottom) break;
+    const was = before.get(p);
+    if (was === undefined) el.animate([{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'none' }], { duration: 220, delay: Math.min(k++, 12) * 14, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'backwards' });
+    else if (Math.abs(was - top) > 0.5) el.animate([{ transform: `translateY(${was - top}px)` }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.7,.2,1)' });
+  }
+}
+
+/** 右栏底下：检查命令，和最近一次跑的结果。 */
+function renderGate(p) {
+  const cmd = p.init && p.config && p.config.gate;
+  const g = p.acceptance && p.acceptance.gate;
+  const sig = JSON.stringify([cmd, g && [g.status, g.text, g.stint]]);
+  RE.gate.hidden = !cmd;
+  if (!cmd || RE.gate.dataset.sig === sig) return;
+  RE.gate.dataset.sig = sig;
+  RE.gate.replaceChildren(
+    h('span', { class: 'cap' }, '检查'),
+    h('code', null, cmd),
+    g && g.status ? h('span', { class: 'res' }, g.status === 'pass' ? icon('check') : h('span', { class: 'rd' }), [g.text, g.stint ? `第 ${g.stint} 棒` : ''].filter(Boolean).join(' · ')) : null
+  );
 }
 
 function treeRow(r, touched) {
@@ -3441,10 +3536,10 @@ function treeRow(r, touched) {
       onmouseenter: () => lightCards(p, r.dir),
       onmouseleave: unlightCards,
     },
-    r.dir ? icon('chev', 'caret') : h('span', { class: 'fi' }),
+    r.dir ? icon('chev', 'caret') : t ? h('span', { class: `ring ${t.looks[t.looks.length - 1]}`, 'data-tip': t.ids.map((id) => `第 ${id} 棒`).join('、') }) : h('span', { class: 'fi' }),
     h('span', { class: 'nm' }, r.node.name),
-    t ? h('span', { class: 'mk', 'data-tip': t.ids.map((id) => `第 ${id} 棒`).join('、') }, t.looks.slice(-3).map((c) => h('i', { class: c })), t.pending ? h('span', { class: 'pend' }) : null) : null,
-    r.dir && r.marked && !r.open ? h('span', { class: 'mk' }, h('span', { class: 'd' })) : null
+    t && t.pending ? h('span', { class: 'rd', 'data-tip': '待复核' }) : null,
+    r.dir && r.marked && !r.open ? h('span', { class: 'd' }) : null
   );
   RE.rows.set(p, el);
   return el;
@@ -3460,12 +3555,12 @@ function toggleDir(p) {
 }
 
 function fileMenuItems(p, dir, gone) {
-  if (gone) return [{ label: '复制路径', icon: 'copy', run: () => copyText(p).then((ok) => ok && toast('已复制')) }];
+  if (gone) return [{ label: '复制路径', icon: 'copy', run: () => copyToast(p) }];
   return [
     dir ? { label: S.treeOpen.has(p) ? '收起' : '展开', icon: 'chev', run: () => toggleDir(p) } : { label: '打开', icon: 'file', run: () => openFile(p) },
     { label: '引用', icon: 'insert', run: () => addFile(p) },
     '-',
-    { label: '复制路径', icon: 'copy', run: () => copyText(p).then((ok) => ok && toast('已复制')) },
+    { label: '复制路径', icon: 'copy', run: () => copyToast(p) },
     { label: '在访达中显示', icon: 'folder', run: () => reveal(p) },
   ];
 }
@@ -3536,6 +3631,7 @@ function lightPaths(paths) {
       }
     }
   }
+  if (WIRE.card) drawWires();
 }
 
 function clearLit() {
@@ -3554,12 +3650,50 @@ function lightCards(p, dir) {
   for (const s of threadStints(t)) {
     if (!s.facts || !s.facts.paths.some(hit)) continue;
     CE.stream.querySelector(`.card[data-stint="${s.id}"]`)?.classList.add('lit');
-    CE.bar.querySelector(`.strip i[data-stint="${s.id}"]`)?.classList.add('lit');
   }
 }
 
 function unlightCards() {
-  for (const el of document.querySelectorAll('.card.lit, .strip i.lit')) el.classList.remove('lit');
+  for (const el of CE.stream.querySelectorAll('.card.lit')) el.classList.remove('lit');
+}
+
+// 连线：停在一棒上，从小条右边拉几根细线到它改过的文件（像实验笔记里钉照片的线）。只在看得见的时候画，滚动时跟着走。
+
+const WIRE = { svg: null, card: null, raf: 0 };
+
+function wireTo(card) {
+  WIRE.card = card;
+  drawWires(true);
+}
+
+function drawWires(fresh) {
+  cancelAnimationFrame(WIRE.raf);
+  WIRE.raf = requestAnimationFrame(() => {
+    if (!WIRE.svg) {
+      WIRE.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      WIRE.svg.setAttribute('class', 'wires');
+      WIRE.svg.setAttribute('aria-hidden', 'true');
+      document.body.append(WIRE.svg);
+    }
+    const card = WIRE.card;
+    const rows = card && card.isConnected && !narrow() && !UI.noRight && S.tab === 0 ? RE.tree.querySelectorAll('.tree-row.lit, .tree-row.lit-in') : [];
+    const slip = rows.length && card.querySelector('.slip').getBoundingClientRect();
+    const view = CE.scroll.getBoundingClientRect();
+    if (!rows.length || slip.bottom < view.top + 20 || slip.top > view.bottom - 20) return WIRE.svg.replaceChildren();
+    const tree = RE.tree.getBoundingClientRect();
+    const x1 = slip.right;
+    const y1 = clamp(slip.top + 24, view.top + 12, view.bottom - 12);
+    let out = '';
+    for (const r of rows) {
+      const mark = (r.querySelector('.ring, .caret') || r).getBoundingClientRect();
+      const y2 = mark.top + mark.height / 2;
+      if (y2 < tree.top || y2 > tree.bottom) continue;
+      const x2 = mark.left - 4;
+      out += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" style="--len:${Math.hypot(x2 - x1, y2 - y1).toFixed(0)}"/>`;
+    }
+    WIRE.svg.innerHTML = out ? `${out}<circle class="hub" cx="${x1.toFixed(1)}" cy="${y1.toFixed(1)}" r="3"/>` : '';
+    WIRE.svg.classList.toggle('draw', !!fresh && !still());
+  });
 }
 
 // ---------- 设置 ----------
@@ -3599,6 +3733,7 @@ function openSettings(tab) {
     );
     // 各页返回的列表里可能有空位（比如接力规矩是最新的就没有「更新」那一行）：去掉，不然会显示成「null」。
     pane.replaceChildren(h('button', { class: 'icon-btn close', 'aria-label': '关闭', onclick: () => close() }, icon('x')), ...settingsBody(settingsTab, draw).filter((x) => x !== null && x !== undefined && x !== false));
+    syncSegs(pane);
   };
   const close = sheet({
     title: '设置',
@@ -3778,8 +3913,13 @@ function settingsBody(tab, redraw) {
   const theme = store.get('theme') || '';
   const setTheme = (t) => {
     store.set('theme', t);
-    if (t) document.documentElement.dataset.theme = t;
-    else delete document.documentElement.dataset.theme;
+    const apply = () => {
+      if (t) document.documentElement.dataset.theme = t;
+      else delete document.documentElement.dataset.theme;
+    };
+    // 换浅色、深色：整页淡入淡出，不是一下子跳过去
+    if (document.startViewTransition && !still()) document.startViewTransition(apply);
+    else apply();
     redraw();
   };
   return [
@@ -3975,12 +4115,8 @@ function field(label, input) {
   return h('label', { class: 'field' }, h('span', null, label), input);
 }
 
-function addApiSheet(redraw) {
-  const name = h('input', { class: 'input', placeholder: 'kimi' });
-  const label = h('input', { class: 'input', placeholder: 'Kimi' });
-  const base = h('input', { class: 'input mono', placeholder: 'https://api.moonshot.cn/v1' });
-  const model = h('input', { class: 'input mono', placeholder: 'kimi-k2' });
-  const env = h('input', { class: 'input mono', placeholder: 'MOONSHOT_API_KEY' });
+/** 添加成员的弹窗：几个输入框加强弱，点「添加」存进名单。 */
+function addSheet(title, inputs, agentOf, redraw) {
   let tier = 'weak';
   const seg = h(
     'div',
@@ -3990,91 +4126,59 @@ function addApiSheet(redraw) {
         'button',
         {
           'aria-pressed': String(tier === t),
+          'data-t': t,
           onclick: () => {
             tier = t;
             for (const b of seg.children) b.setAttribute('aria-pressed', String(b.dataset.t === tier));
+            syncSegs(layer);
           },
-          'data-t': t,
         },
         t === 'strong' ? '强' : '弱'
       )
     )
   );
   const close = sheet({
-    title: '添加接口',
-    body: h('div', null, field('名字', name), field('显示名', label), field('接口地址', base), field('模型', model), field('密钥环境变量', env), h('div', { class: 'field' }, h('span', null, '强弱'), seg)),
+    title,
+    body: h('div', null, inputs.map(([label, input]) => field(label, input)), h('div', { class: 'field' }, h('span', null, '强弱'), seg)),
     foot: [
       h('button', { class: 'btn ghost', onclick: () => close() }, '取消'),
-      h(
-        'button',
-        {
-          class: 'btn primary',
-          onclick: (e) =>
-            act(
-              e.currentTarget,
-              () =>
-                api('/api/workers/save', {
-                  agent: { name: name.value.trim(), label: label.value.trim() || undefined, kind: 'api', tier, tierSet: true, api: { baseUrl: base.value.trim(), model: model.value.trim(), apiKeyEnv: env.value.trim() } },
-                }),
-              '已添加'
-            ).then((r) => {
-              if (r) {
-                close();
-                redraw();
-              }
-            }),
-        },
-        '添加'
-      ),
+      h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, () => api('/api/workers/save', { agent: { ...agentOf(), tier, tierSet: true } }), '已添加').then((r) => r && (close(), redraw())) }, '添加'),
     ],
   });
+  syncSegs(layer);
+}
+
+function addApiSheet(redraw) {
+  const [name, label, base, model, env] = [['kimi'], ['Kimi'], ['https://api.moonshot.cn/v1', 'mono'], ['kimi-k2', 'mono'], ['MOONSHOT_API_KEY', 'mono']].map(([ph, mono]) => h('input', { class: `input ${mono || ''}`.trim(), placeholder: ph }));
+  addSheet(
+    '添加接口',
+    [
+      ['名字', name],
+      ['显示名', label],
+      ['接口地址', base],
+      ['模型', model],
+      ['密钥环境变量', env],
+    ],
+    () => ({ name: name.value.trim(), label: label.value.trim() || undefined, kind: 'api', api: { baseUrl: base.value.trim(), model: model.value.trim(), apiKeyEnv: env.value.trim() } }),
+    redraw
+  );
 }
 
 function addAppSheet(redraw) {
   const name = h('input', { class: 'input', placeholder: 'trae' });
-  const appName = h('input', { class: 'input', placeholder: 'Trae' });
-  let tier = 'weak';
-  const seg = h(
-    'div',
-    { class: 'seg' },
-    ['strong', 'weak'].map((t) =>
-      h(
-        'button',
-        {
-          'aria-pressed': String(tier === t),
-          'data-t': t,
-          onclick: () => {
-            tier = t;
-            for (const b of seg.children) b.setAttribute('aria-pressed', String(b.dataset.t === tier));
-          },
-        },
-        t === 'strong' ? '强' : '弱'
-      )
-    )
-  );
-  const close = sheet({
-    title: '添加桌面程序',
-    body: h('div', null, field('名字', name), field('程序', appName), h('div', { class: 'field' }, h('span', null, '强弱'), seg)),
-    foot: [
-      h('button', { class: 'btn ghost', onclick: () => close() }, '取消'),
-      h(
-        'button',
-        {
-          class: 'btn primary',
-          onclick: (e) => {
-            const a = appName.value.trim();
-            return act(e.currentTarget, () => api('/api/workers/save', { agent: { name: name.value.trim(), label: a, kind: 'app', tier, tierSet: true, cmd: `open -a ${/\s/.test(a) ? `"${a}"` : a} {{dir}}` } }), '已添加').then((r) => {
-              if (r) {
-                close();
-                redraw();
-              }
-            });
-          },
-        },
-        '添加'
-      ),
+  const app = h('input', { class: 'input', placeholder: 'Trae' });
+  addSheet(
+    '添加桌面程序',
+    [
+      ['名字', name],
+      ['程序', app],
     ],
-  });
+    () => {
+      const a = app.value.trim();
+      return { name: name.value.trim(), label: a, kind: 'app', cmd: `open -a ${/\s/.test(a) ? `"${a}"` : a} {{dir}}` };
+    },
+    redraw
+  );
 }
 
 // ---------- 搜索（⌘K） ----------
@@ -4155,8 +4259,8 @@ function openPalette(initial = '', scope = '') {
   let flat = [];
   let hot = 0;
   const close = () => {
-    scrim.remove();
-    box.remove();
+    leave(scrim);
+    leave(box);
     PAL.el = null;
     PAL.close = null;
   };
@@ -4245,7 +4349,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     stopNow();
   } else if (e.key === 'Escape') {
-    if (layer.querySelector('.menu, .pop-panel')) closeMenus();
+    if (layer.querySelector('.menu:not(.leave)')) closeMenus();
     else if (PAL.close) PAL.close();
     else if (sheetStack.length) sheetStack[sheetStack.length - 1]();
     else if (app.classList.contains('drawer-left') || app.classList.contains('drawer-right')) closeDrawers();
@@ -4263,10 +4367,12 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// 每秒走一下：进行中的计时。
+// 每秒走一下：进行中的计时。页面在后台时不走。
 setInterval(() => {
+  if (document.hidden) return;
   for (const el of document.querySelectorAll('[data-since]')) el.textContent = elapsed(el.dataset.since);
 }, 1000);
+setInterval(turnVerb, 2600);
 
 mqNarrow.addEventListener('change', () => {
   closeDrawers();
@@ -4277,6 +4383,8 @@ mqNarrow.addEventListener('change', () => {
 
 addEventListener('resize', () => {
   if (SUG.menu) updateSuggest();
+  if (WIRE.card) drawWires();
+  syncSegs();
 });
 
 // ---------- 开始 ----------

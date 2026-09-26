@@ -296,39 +296,6 @@ export function restoreSnapshot(root: string, sha: string, message = '退回'): 
   return { safety, after, files: changed.length };
 }
 
-/** 只把一个文件恢复成某张快照里的样子（那张快照里没有它就删掉）。 */
-export function restoreFile(root: string, sha: string, file: string): void {
-  const rel = file.replace(/^\.\//, '');
-  const abs = path.join(root, rel);
-  if (!abs.startsWith(root + path.sep) || rel.startsWith('.relay/')) throw new RelayError(`不能恢复这个路径：${file}`, 'bad-path');
-  if (snapFile(root, sha, rel) === null) {
-    fs.rmSync(abs, { force: true });
-    removeEmptyDirs(root, rel);
-    return;
-  }
-  sgOk(root, ['checkout', '-f', sha, '--', rel], '恢复文件');
-}
-
-export interface SnapInfo {
-  sha: string;
-  ts: string;
-  message: string;
-}
-
-/** 最近的快照（新的在前）。 */
-export function listSnaps(root: string, limit = 50): SnapInfo[] {
-  if (!headSnap(root)) return [];
-  const r = sg(root, ['log', `-${limit}`, '--format=%H%x1f%cI%x1f%s']);
-  if (r.code !== 0) return [];
-  return r.stdout
-    .split('\n')
-    .filter(Boolean)
-    .map((l) => {
-      const [sha, ts, message] = l.split('\x1f');
-      return { sha, ts, message };
-    });
-}
-
 /** 改动的一句话统计：「3 个文件，+20 −4」。 */
 export function changeLine(files: FileChange[]): string {
   if (!files.length) return '没有改动';

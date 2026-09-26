@@ -836,7 +836,3 @@ export function startGo(root: string, opts: GoOptions, hooks: GoHooks = {}): { s
   finishing.set(abs, done);
   return { state: runner.state, done };
 }
-
-export function runGo(root: string, opts: GoOptions, hooks: GoHooks = {}): Promise<GoState> {
-  return startGo(root, opts, hooks).done;
-}
