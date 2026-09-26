@@ -234,3 +234,21 @@ test('群聊里的名字：叫模型的名字；名单里两位是同一个模�
   assert.equal(of('dsh'), 'DeepSeek Flash（DeepSeek Harness）');
   assert.equal(of('opencode'), 'DeepSeek Flash（OpenCode）');
 });
+
+test('Antigravity 安全档：它的设置允许读写项目外的文件就不派它（写文件的工具不经过沙箱）；关掉就派；完全放开不受这条限制', () => {
+  writeJson(home('agents.json'), { agents: [{ name: 'agy', kind: 'cli', cmd: 'agy', tier: 'weak', harness: 'agy', detected: true }] });
+  const h = { id: 'agy', label: 'Antigravity', vendor: '', version: '1.2.11', where: '', login: { state: 'ok' as const, detail: '' }, model: {}, workLevels: ['safe' as const, 'full' as const], canReview: true, tested: 'partial' as const, loginHint: '' };
+  const report = { at: '', harnesses: [h], providers: [], apps: [], unknownKeys: [] };
+  const settings = path.join(HOME, '.gemini', 'antigravity-cli', 'settings.json');
+  const agy = (level: 'safe' | 'full') => detect.listMembers(level, report).find((m) => m.name === 'agy')!;
+
+  writeJson(settings, { model: 'Gemini 3.8 Flash (High)', allowNonWorkspaceAccess: true, toolPermission: 'proceed-in-sandbox' });
+  assert.equal(agy('safe').canWork, false);
+  assert.match(agy('safe').why ?? '', /项目外/);
+  assert.equal(agy('full').canWork, true, '完全放开本来就不拦');
+
+  writeJson(settings, { model: 'Gemini 3.8 Flash (High)', allowNonWorkspaceAccess: false });
+  assert.equal(agy('safe').canWork, true);
+  assert.equal(agy('safe').why, undefined);
+  assert.equal(harness.findHarness('agy')!.model({ exec: [], version: '', where: '' }).label, 'Gemini 3.8 Flash (High)');
+});

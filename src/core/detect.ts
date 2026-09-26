@@ -406,13 +406,14 @@ export function listMembers(level: Level, report: DetectReport | null = loadDete
     // 识别结果里没有（没识别过、或者识别之后才装的）才现找：没装的工具找得很快，装了的只在这时慢一次。
     if (!hr && !locateCached(spec)) why = '这台电脑上找不到它';
     else if (hr?.login.state === 'no') why = `没登录：${spec.loginHint}`;
-    const work = !why && spec.workLevels.includes(level);
+    // 档位不够，或者你给它的设置让安全档守不住：列出来，但不派活
+    const held = !spec.workLevels.includes(level) ? '只有「完全放开」档才能无人值守地干活' : level === 'safe' ? spec.unsafe?.() : undefined;
     out.push({
       ...base,
       kind: 'harness',
       harness: spec.id,
-      canWork: work,
-      ...(why ? { why } : !work ? { why: '只有「完全放开」档才能无人值守地干活' } : {}),
+      canWork: !why && !held,
+      ...(why || held ? { why: why ?? held } : {}),
     });
   }
   return out;

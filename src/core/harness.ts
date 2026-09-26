@@ -80,6 +80,8 @@ export interface HarnessSpec {
   rank: number;
   /** 哪些档位下能无人值守地干活（有的工具在安全档一碰命令就整段停下）。 */
   workLevels: Level[];
+  /** 你给它的设置让安全档守不住时（比如允许改项目外的文件）说为什么，守得住返回 undefined。 */
+  unsafe?(): string | undefined;
   canReview: boolean;
   /** 实测程度：yes = 实测过改文件和跑命令；partial = 实测过一部分；no = 按官方参数写的，没实测。 */
   tested: 'yes' | 'partial' | 'no';
@@ -740,14 +742,18 @@ const dsh: HarnessSpec = {
   },
 };
 
+const agySettings = () => readJson(path.join(home(), '.gemini', 'antigravity-cli', 'settings.json'));
+
 const antigravity: HarnessSpec = {
   id: 'agy',
   label: 'Antigravity',
   vendor: 'Google',
   rank: 50,
-  // 安全档：改文件自动接受，命令放进它自己的沙箱（只能写项目文件夹和临时目录，不能联网）；
-  // 要人点头的（它设置里没放行的命令、出沙箱）无界面模式下直接拒绝、接着干。1.1.12 起 -p 才认 --mode，更早的会整段停下。
+  // 安全档：改文件自动接受，命令放进它自己的沙箱（只能写项目文件夹和临时目录，不能联网）。要人点头的
+  // （出沙箱、写项目外、工具执行不是 proceed-in-sandbox 时没放行过的命令）无界面模式下直接拒绝，这一棒停在那儿。1.1.12 起 -p 才认 --mode。
   workLevels: ['safe', 'full'],
+  // 写文件的工具不经过沙箱：它设置里允许读写项目外的文件时，项目外也照写不误（1.2.11 实测）
+  unsafe: () => (agySettings()?.allowNonWorkspaceAccess === true ? '它的设置允许读写项目外的文件，安全档不派它' : undefined),
   canReview: true,
   tested: 'partial',
   loginHint: '在终端运行 agy，按提示用 Google 账号登录。',
@@ -757,7 +763,7 @@ const antigravity: HarnessSpec = {
     return { state: 'no', detail: '没找到登录凭据' };
   },
   model() {
-    const m = strOf(readJson(path.join(home(), '.gemini', 'antigravity-cli', 'settings.json'))?.model);
+    const m = strOf(agySettings()?.model);
     return m ? { model: m, label: m } : {};
   },
   invoke(loc, i) {
