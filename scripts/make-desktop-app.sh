@@ -152,18 +152,22 @@ if [[ -f "$DIR/scripts/icon.png" ]]; then
     sips -z $s $s "$DIR/scripts/icon.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
     sips -z $((s * 2)) $((s * 2)) "$DIR/scripts/icon.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
   done
-  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/applet.icns"
-  # 新版系统优先用 Assets.car 里的图标；去掉它，让上面的 icns 生效。
-  rm -f "$APP/Contents/Resources/Assets.car"
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/relay.icns"
+  # 新版系统优先用 Assets.car 里的图标；去掉它和脚本编译自带的 applet.icns，让上面的 icns 生效。
+  rm -f "$APP/Contents/Resources/Assets.car" "$APP/Contents/Resources/applet.icns"
   /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST" >/dev/null 2>&1 || true
-  /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile applet" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string applet" "$PLIST"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile relay" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string relay" "$PLIST"
 else
   print "（没能生成图标，先用系统默认的。）"
 fi
 
-# 3. 改过里面的文件，重新做一次本机签名；再让访达刷新图标。
+# 3. 每次装都换一个版本号：系统的图标缓存按「同一个 App、同一个版本」认，版本不变，换了图标启动台还显示旧的。
+V="$(date +%Y%m%d%H%M%S)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $V" "$PLIST"
+# 改过里面的文件，重新做一次本机签名；再让系统重新登记它、刷新图标。
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 touch "$APP"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
 
 # 4. 登录电脑时，由系统在后台把它带起来（不打开网页）。「系统设置 → 通用 → 登录项」里能看到、能关掉。
 xml() { print -r -- "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
