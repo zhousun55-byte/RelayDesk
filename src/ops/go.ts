@@ -651,7 +651,8 @@ class GoRunner {
       /* 没有日志 */
     }
     // 工具自己在输出里报的用量；不报的（DeepSeek Harness）从它自己记的会话里读
-    const tokens = usageTotal(logText) ?? findHarness(m.harness)?.usage?.(root, Date.parse(stint.startedAt) - 1000) ?? null;
+    // 从这一棒开始算：上一棒的会话在它结束前最后写入，差几百毫秒，不能往前放宽
+    const tokens = usageTotal(logText) ?? findHarness(m.harness)?.usage?.(root, Date.parse(stint.startedAt)) ?? null;
     const closed = closeStint(root, { ...stint, who: ran, pid: process.pid, ...(tokens ? { tokens } : {}) }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
     // 调度拿着锁，这时只有检查命令在跑：它自己写的缓存、报告算接力台的改动，不算到哪一棒头上（不然下一轮会以为有别的 AI 在改文件）。
     if (kind === 'review' || kind === 'final' || closed.facts?.files || closed.factsError) await gateStint(root, id, cfg, { absorb: 'all' }).catch(() => undefined);

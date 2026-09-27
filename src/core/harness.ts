@@ -651,6 +651,38 @@ export function dshHome(): string {
  * 每调一次模型一行 data.usage。<项目> 是路径的写法：/ 换成 -，非 ASCII 的字写成 ~四位十六进制，前面加 -，后面加 --。
  * 输入把读缓存、写缓存的也算上（和别的工具日志里的一样）。
  */
+/**
+ * 一个文件里接连写的好几个 zstd 块（DeepSeek Harness 每写一条记录接一块）：Node 的 zstd 一次只解第一块，
+ * 按块头（RFC 8878）切开再逐块解。写到一半的最后一块不要。
+ */
+function unzstdAll(buf: Buffer, unzstd: (b: Buffer) => Buffer): string {
+  const parts: Buffer[] = [];
+  let i = 0;
+  while (i + 8 <= buf.length) {
+    const magic = buf.readUInt32LE(i);
+    // 可以跳过的块：4 字节标记 + 4 字节长度
+    if (magic >>> 4 === 0x184d2a5) {
+      i += 8 + buf.readUInt32LE(i + 4);
+      continue;
+    }
+    if (magic !== 0xfd2fb528) break;
+    const fhd = buf[i + 4];
+    const single = (fhd >> 5) & 1;
+    let p = i + 5 + (single ? 0 : 1) + [0, 1, 2, 4][fhd & 3] + [single, 2, 4, 8][fhd >> 6];
+    let last = 0;
+    while (!last && p + 3 <= buf.length) {
+      const h = buf[p] | (buf[p + 1] << 8) | (buf[p + 2] << 16);
+      last = h & 1;
+      p += 3 + (((h >> 1) & 3) === 1 ? 1 : h >>> 3);
+    }
+    p += (fhd >> 2) & 1 ? 4 : 0;
+    if (!last || p > buf.length) break;
+    parts.push(unzstd(buf.subarray(i, p)));
+    i = p;
+  }
+  return Buffer.concat(parts).toString('utf8');
+}
+
 export function dshUsage(root: string, sinceMs: number): { input: number; output: number } | null {
   const unzstd = (zlib as unknown as { zstdDecompressSync?: (b: Buffer) => Buffer }).zstdDecompressSync;
   if (!unzstd) return null;
@@ -674,7 +706,7 @@ export function dshUsage(root: string, sinceMs: number): { input: number; output
     let text = '';
     try {
       if (fs.statSync(f).mtimeMs < sinceMs) continue;
-      text = unzstd(fs.readFileSync(f)).toString('utf8');
+      text = unzstdAll(fs.readFileSync(f), unzstd);
     } catch {
       continue;
     }

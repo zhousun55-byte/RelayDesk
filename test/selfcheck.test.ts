@@ -595,7 +595,8 @@ test('DeepSeek Harness 的 token 用量从它自己记的会话里读：这个�
   const write = (name: string, lines: unknown[], mtime?: number) => {
     fs.mkdirSync(path.join(dir, name), { recursive: true });
     const f = path.join(dir, name, 'session.v4.jsonl.zstd');
-    fs.writeFileSync(f, zlib.zstdCompressSync!(Buffer.from(lines.map((l) => JSON.stringify(l)).join('\n'))));
+    // 和真的一样：每条记录单独压成一块，一块接一块写（以前只解得出第一块，一条用量都读不到）
+    fs.writeFileSync(f, Buffer.concat(lines.map((l) => zlib.zstdCompressSync!(Buffer.from(JSON.stringify(l) + '\n')))));
     if (mtime) fs.utimesSync(f, mtime / 1000, mtime / 1000);
   };
   const call = (i: number, o: number, c: number) => ({ data: { usage: { inputTokens: i, outputTokens: o, cacheReadTokens: c, cacheWriteTokens: 0 }, stream: [{ chunk: { usage: { inputTokens: 999 } } }] } });
