@@ -1,7 +1,8 @@
 /* 接力台网页。三栏：左边项目和对话、中间对话、右边项目文件。
    骨架规整（细线、线路、编号），这是「神性」的一半；纸面颗粒、点阵纸、钉上去的小条和细线，是「人性」的一半。
    只有黑白灰，外加一颗小红点：只有要人管的地方是红的。全站一种字（Albert Sans 配苹方），等宽字只给代码。
-   动画只动 transform 和 opacity；进来、出去都有过渡，减少动态效果时全部关掉。 */
+   动画只动 transform 和 opacity（点阵流画在画布上、网点进场动遮罩，都只在一小块上）；进来、出去都有过渡，减少动态效果时全部关掉。
+   2026-09-28 按两张海报加的细节：连续的东西拆成一格一格的点（点阵流、点线、网点进场），瑞士版式的对准标记和裁切角。 */
 
 @font-face {
   font-family: 'Albert Sans';
@@ -318,6 +319,33 @@ svg.i {
 .enter {
   animation: rise 0.34s var(--ease) backwards;
   animation-delay: var(--d, 0ms);
+}
+@property --ht {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 5px;
+}
+@keyframes halftone {
+  from {
+    --ht: 0px;
+  }
+}
+.card.enter .slip {
+  -webkit-mask: radial-gradient(circle, #000 var(--ht), transparent calc(var(--ht) + 0.8px)) 0 0 / 6px 6px;
+  mask: radial-gradient(circle, #000 var(--ht), transparent calc(var(--ht) + 0.8px)) 0 0 / 6px 6px;
+  animation: halftone 0.34s cubic-bezier(0.45, 0, 0.55, 1) backwards;
+  animation-delay: var(--d, 0ms);
+}
+/* 数字变了：新的数从下面翻上来 */
+@keyframes roll {
+  from {
+    opacity: 0;
+    transform: translateY(0.6em);
+  }
+}
+.roll {
+  display: inline-block;
+  animation: roll 0.36s var(--snap);
 }
 
 .leave {
@@ -847,12 +875,12 @@ button.busy::after {
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
-  border: 2px solid var(--ink-3);
+  border: 2px dotted var(--ink-3);
   border-right-color: transparent;
-  animation: spin 0.7s linear infinite;
+  animation: spin 0.8s steps(8) infinite;
 }
 .btn.primary.busy::after,
 .send.busy::after {
@@ -1056,6 +1084,8 @@ button.busy::after {
   background-position: 10px 12px, 0 0;
 }
 .offline {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1070,6 +1100,7 @@ button.busy::after {
   animation: drop 0.26s var(--ease);
 }
 .bar {
+  position: relative;
   flex: none;
   display: flex;
   align-items: center;
@@ -1078,6 +1109,28 @@ button.busy::after {
   padding: 10px 20px 10px 24px;
   box-shadow: inset 0 -1px 0 var(--hair);
   container-type: inline-size;
+}
+/* 顶栏的底线碰到左右两条分栏线的地方：一个细「+」，像印刷品的对准标记 */
+.bar::before,
+.bar::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  width: 9px;
+  height: 9px;
+  background: linear-gradient(var(--ink-4) 0 0) 50% 0 / 1px 100% no-repeat, linear-gradient(var(--ink-4) 0 0) 0 50% / 100% 1px no-repeat;
+  pointer-events: none;
+  z-index: 3;
+}
+.bar::before {
+  left: -5px;
+}
+.bar::after {
+  right: -5px;
+}
+.no-left .bar::before,
+.no-right .bar::after {
+  display: none;
 }
 .bar-l {
   flex: 1;
@@ -1260,8 +1313,9 @@ button.busy::after {
   display: none;
 }
 .stop.ghost::before {
-  border-left-style: dashed;
-  border-left-color: var(--ink-4);
+  border-left: 0;
+  width: 2px;
+  background: radial-gradient(circle, var(--ink-4) 0.95px, transparent 1.25px) 50% 0 / 2px 6px repeat-y;
 }
 .no {
   position: absolute;
@@ -1283,7 +1337,7 @@ button.busy::after {
   transition: transform 0.24s var(--pop), background 0.2s, color 0.2s;
 }
 .stop.ghost .no {
-  border-style: dashed;
+  border-style: dotted;
   border-color: var(--ink-4);
   color: var(--ink-3);
 }
@@ -1291,6 +1345,29 @@ button.busy::after {
   background: var(--ink);
   color: var(--paper);
   animation: pulse 1.6s ease-in-out infinite;
+}
+/* 进行中：线路还在往下长，一个点一格一格往下跳 */
+.stop.live .no::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 3px;
+  height: 3px;
+  margin: 5px 0 0 -1.5px;
+  border-radius: 50%;
+  background: var(--ink);
+  animation: signal 1.4s steps(4, jump-none) infinite;
+}
+@keyframes signal {
+  from {
+    transform: none;
+    opacity: 1;
+  }
+  to {
+    transform: translateY(21px);
+    opacity: 0.15;
+  }
 }
 .card:hover .no,
 .card.lit .no {
@@ -1494,8 +1571,42 @@ button.busy::after {
 .card.open .slip {
   transform: none;
 }
-.card.lit .slip {
-  box-shadow: 0 0 0 1.5px var(--ink), var(--shadow-slip);
+/* 四个角的裁切线（印刷品上的角线）：对准了哪一块。
+   卡片：悬停时淡淡地围过来，停在文件上点亮的那几张是墨色的；输入框：打字时围过来，拖文件进来时是墨色的。 */
+.slip::after,
+.composer::after {
+  content: '';
+  position: absolute;
+  inset: -11px;
+  --cm: var(--ink-4);
+  background: linear-gradient(var(--cm) 0 0) 0 0 / 7px 1px, linear-gradient(var(--cm) 0 0) 0 0 / 1px 7px, linear-gradient(var(--cm) 0 0) 100% 0 / 7px 1px,
+    linear-gradient(var(--cm) 0 0) 100% 0 / 1px 7px, linear-gradient(var(--cm) 0 0) 0 100% / 7px 1px, linear-gradient(var(--cm) 0 0) 0 100% / 1px 7px,
+    linear-gradient(var(--cm) 0 0) 100% 100% / 7px 1px, linear-gradient(var(--cm) 0 0) 100% 100% / 1px 7px;
+  background-repeat: no-repeat;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s, inset 0.32s var(--snap);
+}
+.composer:focus-within::after {
+  inset: -7px;
+  opacity: 1;
+}
+.composer.drop::after {
+  inset: -6px;
+  opacity: 1;
+  --cm: var(--ink);
+}
+.card:hover .slip::after {
+  inset: -6px;
+  opacity: 1;
+}
+.card.open .slip::after {
+  display: none;
+}
+.card.lit .slip::after {
+  inset: -5px;
+  opacity: 1;
+  --cm: var(--ink);
 }
 .card.flash .slip {
   animation: flash 1.4s var(--ease);
@@ -1704,7 +1815,7 @@ button.busy::after {
 }
 .form dt {
   padding: 8px 0;
-  border-bottom: 1px solid var(--hair);
+  border-bottom: 1px dotted var(--ink-4);
   font-size: 12px;
   line-height: 1.9;
   color: var(--ink-3);
@@ -1712,7 +1823,7 @@ button.busy::after {
 .form dd {
   margin: 0;
   padding: 7px 0;
-  border-bottom: 1px solid var(--hair);
+  border-bottom: 1px dotted var(--ink-4);
   font-size: 13px;
   color: var(--ink-2);
 }
@@ -1991,6 +2102,30 @@ button.busy::after {
 .typing .tiles {
   display: flex;
   gap: 6px;
+}
+.tally {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 3px;
+  vertical-align: -1px;
+}
+.tally i {
+  width: 7px;
+  height: 7px;
+  box-shadow: inset 0 0 0 1px var(--ink-4);
+}
+.tally i.on {
+  background: var(--ink-2);
+  box-shadow: none;
+  animation: land 0.3s var(--pop);
+}
+.tally i.next {
+  animation: blink 1.2s linear infinite;
+}
+@keyframes blink {
+  50% {
+    box-shadow: inset 0 0 0 1px var(--ink-2);
+  }
 }
 .dots {
   display: inline-flex;
@@ -2370,10 +2505,19 @@ button.busy::after {
 
 /* ---------- 空闲：一个小标题、要人看的一行、输入框 ---------- */
 
+/* 点阵流：和纸上的点对齐的一层画布，只在空闲页出现（见 app.js 的 flowShow） */
+.flow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  pointer-events: none;
+}
 .hero {
   flex: 1;
   min-height: 0;
   position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -2826,17 +2970,25 @@ button.busy::after {
   pointer-events: none;
   overflow: visible;
 }
-.wires line {
-  stroke: var(--ink-3);
-  stroke-width: 1;
+/* 连线是一串点（参考图里的点线）；小条那头是一个「+」 */
+.wires g line {
+  stroke: var(--ink-2);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-dasharray: 0 4.5;
 }
-.wires.draw line {
+.wires mask line {
+  stroke: #fff;
+  stroke-width: 8;
+}
+.wires.draw mask line {
   stroke-dasharray: var(--len);
   stroke-dashoffset: var(--len);
-  animation: draw 0.32s var(--ease) forwards;
+  animation: draw 0.42s var(--ease) forwards;
 }
 .wires .hub {
-  fill: var(--ink);
+  stroke: var(--ink);
+  stroke-width: 1.2;
 }
 
 /* ---------- 浮层：菜单、提示、弹窗、搜索、通知 ---------- */
@@ -3509,6 +3661,9 @@ button.busy::after {
     animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  .stop.live .no::after {
+    display: none;
   }
 }
 

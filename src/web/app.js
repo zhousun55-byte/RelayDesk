@@ -1559,7 +1559,10 @@ function buildCenter() {
   CE.chat = h('section', { class: 'pane', 'aria-label': '对话' }, CE.scroll, CE.toBottom);
   CE.doc = h('section', { class: 'pane', hidden: true });
   CE.hero = h('section', { class: 'hero', hidden: true });
-  $('#center').append(CE.offline, CE.cfgBad, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
+  CE.flow = h('canvas', { class: 'flow', 'aria-hidden': 'true', hidden: true });
+  CE.hero.addEventListener('pointermove', flowPointer);
+  CE.hero.addEventListener('pointerleave', flowPointer);
+  $('#center').append(CE.flow, CE.offline, CE.cfgBad, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
 }
 
 function onScroll() {
@@ -1615,6 +1618,9 @@ function renderCenter() {
     CE.chat.style.setProperty('--compose-h', '0px');
   }
   document.title = S.st.project.name && !S.st.project.pick ? `${S.st.project.name} · 接力台` : '接力台';
+  // 空闲页的点阵流：等字和输入框放好了再算（要给它们留白）
+  if (CE.hero.hidden) flowHide();
+  else flowShow(mode === 'pick' ? 'pick' : chat ? 'chat' : S.view === 'dispatch' ? 'dispatch' : 'relay', `${mode}:${S.view}:${S.st.project.root}`);
 }
 
 // ----- 空闲：小标题、要人看的一行、输入框 -----
@@ -1683,9 +1689,297 @@ function renderHero(mode) {
   setComposerKind(chat ? 'talk' : 'task');
 }
 
+// ----- 空闲页的点阵流：纸上本来就有的点，顺着一笔弯过来的线变大、变密（连续的一笔，拆成一格一格的点） -----
+
+/**
+ * 每一页一种走向（在中间这一栏里的归一化坐标，三次贝塞尔，可以有几条）：
+ * 接力：一笔从左边起、在左上拐弯、向右散开成几股；派活：拐过弯分成三股；群聊：三股从左边来、汇成一股往右走。
+ * knee：拐弯处（最紧最密）在线上的位置；w：起笔、拐弯、末尾各有多宽；ribbons：散开时分不分股。
+ */
+const FLOW_LINES = {
+  relay: { knee: 0.34, w: [22, 12, 86], ribbons: true, lines: [[[-0.04, 0.5], [0.03, 0.24], [0.12, 0.1], [1.08, 0.08]]] },
+  pick: { knee: 0.34, w: [24, 13, 100], ribbons: true, lines: [[[-0.04, 0.52], [0.03, 0.24], [0.12, 0.08], [1.08, 0.06]]] },
+  dispatch: {
+    knee: 0.3,
+    w: [20, 11, 18],
+    ribbons: false,
+    lines: [
+      [[-0.04, 0.5], [0.03, 0.24], [0.14, 0.12], [1.08, 0.0]],
+      [[-0.04, 0.5], [0.03, 0.24], [0.16, 0.14], [1.08, 0.15]],
+      [[-0.04, 0.5], [0.03, 0.24], [0.18, 0.16], [1.08, 0.3]],
+    ],
+  },
+  chat: {
+    knee: 0.56,
+    w: [16, 12, 70],
+    ribbons: true,
+    lines: [
+      [[-0.04, 0.04], [0.26, 0.04], [0.4, 0.15], [1.08, 0.13]],
+      [[-0.04, 0.17], [0.24, 0.17], [0.4, 0.15], [1.08, 0.13]],
+      [[-0.04, 0.3], [0.26, 0.3], [0.4, 0.15], [1.08, 0.13]],
+    ],
+  },
+};
+const FLOW_STEP = 10;
+const LENS_R = 96;
+const FLOW = { key: '', kind: 'relay', w: 0, h: 0, dpr: 1, cols: 0, rows: 0, marks: [], t0: 0, raf: 0, done: true, lens: null, drawn: null, ink: '#151515', resize: 0 };
+
+const smooth = (a, b, x) => {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
+/** 一条三次贝塞尔取 n 段折线：[x0, y0, x1, y1, t0, t1, 方向角]。 */
+function bezierSegs(P, n) {
+  const segs = [];
+  let prev = null;
+  for (let k = 0; k <= n; k++) {
+    const t = k / n;
+    const r = 1 - t;
+    const x = r * r * r * P[0][0] + 3 * r * r * t * P[1][0] + 3 * r * t * t * P[2][0] + t * t * t * P[3][0];
+    const y = r * r * r * P[0][1] + 3 * r * r * t * P[1][1] + 3 * r * t * t * P[2][1] + t * t * t * P[3][1];
+    if (prev) segs.push([prev[0], prev[1], x, y, prev[2], t, Math.atan2(y - prev[1], x - prev[0])]);
+    prev = [x, y, t];
+  }
+  return segs;
+}
+
+/** 点到折线第 a～b 段的最近处：[距离², t, 方向角, 在线的哪一边（+1 / -1）]。 */
+function nearSeg(segs, a, b, x, y, out) {
+  for (let k = Math.max(0, a); k <= Math.min(segs.length - 1, b); k++) {
+    const [x0, y0, x1, y1, t0, t1, ang] = segs[k];
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const u = clamp(((x - x0) * dx + (y - y0) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+    const px = x - x0 - u * dx;
+    const py = y - y0 - u * dy;
+    const d2 = px * px + py * py;
+    if (d2 < out[0]) {
+      out[0] = d2;
+      out[1] = t0 + (t1 - t0) * u;
+      out[2] = ang;
+      out[3] = dx * py - dy * px < 0 ? -1 : 1;
+      out[4] = k;
+    }
+  }
+}
+
+/**
+ * 算出每个格点上画什么：纸上的点（20px 一个）离线近就变大变深；线的正中间再加密成 10px 一个。
+ * 拐弯处最密；往后越散越宽，并且分成几股（参考图里一行一行的点）。字和输入框周围留白。
+ */
+function flowMarks() {
+  const { w: W, h: H } = FLOW;
+  const spec = FLOW_LINES[FLOW.kind] || FLOW_LINES.relay;
+  const lines = spec.lines.map((pts) => {
+    const P = pts.map(([u, v]) => [u * W, v * H]);
+    return { coarse: bezierSegs(P, 12), fine: bezierSegs(P, 48) };
+  });
+  const [w0, w1, w2] = spec.w;
+  const knee = spec.knee;
+  // 字和输入框那一块：离它越近点越淡，里面不画
+  const inner = CE.hero.querySelector('.hero-in');
+  const c = CE.flow.getBoundingClientRect();
+  const ib = inner && inner.getBoundingClientRect();
+  const keep = ib && ib.width ? [ib.left - c.left - 24, ib.top - c.top - 20, ib.right - c.left + 24, ib.bottom - c.top + 20] : null;
+  const cols = Math.floor(W / FLOW_STEP) + 1;
+  const rows = Math.floor((H - 2) / FLOW_STEP) + 1;
+  const marks = new Array(cols * rows).fill(null);
+  const far = (3.4 * w2) ** 2;
+  const best = [0, 0, 0, 0, 0];
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const x = i * FLOW_STEP;
+      const y = 2 + j * FLOW_STEP;
+      let I = 0;
+      let ang = 0;
+      let at = 0;
+      const r = (((i * 73856093) ^ (j * 19349663)) >>> 0) % 1000;
+      for (const L of lines) {
+        best[0] = Infinity;
+        nearSeg(L.coarse, 0, L.coarse.length - 1, x, y, best);
+        if (best[0] > far) continue;
+        const k = best[4] * 4;
+        best[0] = Infinity;
+        nearSeg(L.fine, k - 5, k + 8, x, y, best);
+        const [d2, t, a, side] = best;
+        // 起笔散、拐弯处最紧最密、往后越散越宽
+        const sg = t < knee ? w0 + (w1 - w0) * smooth(0, knee, t) : w1 + (w2 - w1) * smooth(knee, 1, t);
+        const n = Math.sqrt(d2) * side;
+        // 拐过弯之后分股：沿着线的法向一明一暗，越往后股和股离得越开
+        const lam = 18 + 24 * smooth(knee, 1, t);
+        const split = spec.ribbons ? 0.9 * smooth(knee, knee + 0.25, t) : 0;
+        // 起笔那一段零零散散（像参考图里往下落的点）
+        const scatter = t < knee ? 1 - 0.7 * (1 - smooth(0, knee, t)) * (r < 500 ? 1 : 0) : 1;
+        const v = smooth(0, knee * 0.8, t) * (1 - 0.45 * smooth(knee, 1, t)) * scatter * Math.exp(-d2 / (2 * sg * sg)) * (1 - split + split * (0.5 + 0.5 * Math.cos((2 * Math.PI * n) / lam)));
+        if (v > I) {
+          I = v;
+          ang = a;
+          at = t;
+        }
+      }
+      if (keep) {
+        const ox = Math.max(keep[0] - x, 0, x - keep[2]);
+        const oy = Math.max(keep[1] - y, 0, y - keep[3]);
+        I *= smooth(0, 56, Math.hypot(ox, oy));
+      }
+      const paper = i % 2 === 0 && j % 2 === 0;
+      if (paper ? I < 0.04 : I < 0.24) continue;
+      const q = paper ? I : (I - 0.24) / 0.76;
+      marks[j * cols + i] = {
+        x,
+        y,
+        a: ang,
+        rx: paper ? 1.05 + 2.4 * q : 0.8 + 2.2 * q,
+        ry: paper ? 1.05 + 0.75 * q : 0.8 + 0.6 * q,
+        al: paper ? 0.09 + 0.26 * q : 0.07 + 0.26 * q,
+        ring: I > 0.55 && r < 240 && at > knee,
+        delay: at * 620 + r * 0.06,
+      };
+    }
+  }
+  Object.assign(FLOW, { cols, rows, marks });
+}
+
+/** 放大镜：鼠标附近的点大一点（离得越近越大）。 */
+function lensAt(x, y) {
+  const L = FLOW.lens;
+  if (!L) return 0;
+  const d = Math.hypot(x - L.x, y - L.y);
+  if (d >= LENS_R) return 0;
+  const f = 1 - d / LENS_R;
+  return f * f;
+}
+
+function flowMark(ctx, m, k) {
+  ctx.globalAlpha = m.al;
+  ctx.beginPath();
+  if (m.ring) {
+    ctx.lineWidth = 0.9;
+    ctx.ellipse(m.x, m.y, m.rx * 1.3 * k, m.ry * 1.3 * k, m.a, 0, 6.2832);
+    ctx.stroke();
+  } else {
+    ctx.ellipse(m.x, m.y, m.rx * k, m.ry * k, m.a, 0, 6.2832);
+    ctx.fill();
+  }
+}
+
+/** 画一块区域（放大镜挪动时只重画它经过的地方）；reveal：刚显出来，每个点按先后从无到有。返回还有没有没显完的。 */
+function flowPaint(x0, y0, x1, y1, now) {
+  const ctx = CE.flow.getContext('2d');
+  ctx.setTransform(FLOW.dpr, 0, 0, FLOW.dpr, 0, 0);
+  ctx.save();
+  ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
+  ctx.beginPath();
+  ctx.rect(x0, y0, x1 - x0, y1 - y0);
+  ctx.clip();
+  ctx.fillStyle = ctx.strokeStyle = FLOW.ink;
+  const pad = 8;
+  const i0 = Math.max(0, Math.floor((x0 - pad) / FLOW_STEP));
+  const i1 = Math.min(FLOW.cols - 1, Math.ceil((x1 + pad) / FLOW_STEP));
+  const j0 = Math.max(0, Math.floor((y0 - 2 - pad) / FLOW_STEP));
+  const j1 = Math.min(FLOW.rows - 1, Math.ceil((y1 - 2 + pad) / FLOW_STEP));
+  let pending = false;
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const m = FLOW.marks[j * FLOW.cols + i];
+      const x = i * FLOW_STEP;
+      const y = 2 + j * FLOW_STEP;
+      const f = lensAt(x, y);
+      if (m) {
+        let k = 1;
+        if (!FLOW.done) {
+          const p = (now - FLOW.t0 - m.delay) / 420;
+          if (p < 1) pending = true;
+          if (p <= 0) continue;
+          if (p < 1) k = 1 - (1 - p) ** 3;
+        }
+        flowMark(ctx, m, k * (1 + 0.6 * f));
+      } else if (f > 0.02 && i % 2 === 0 && j % 2 === 0) {
+        ctx.globalAlpha = 0.09 + 0.08 * f;
+        ctx.beginPath();
+        ctx.arc(x, y, 1.05 * (1 + 1.3 * f), 0, 6.2832);
+        ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+  return pending;
+}
+
+function flowTick(now) {
+  FLOW.raf = 0;
+  if (CE.flow.hidden) return;
+  if (!FLOW.done) {
+    if (flowPaint(0, 0, FLOW.w, FLOW.h, now)) FLOW.raf = requestAnimationFrame(flowTick);
+    else FLOW.done = true;
+    FLOW.drawn = FLOW.lens;
+    return;
+  }
+  const a = FLOW.drawn;
+  const b = FLOW.lens;
+  if (a === b) return;
+  const R = LENS_R + 10;
+  const boxes = [a, b].filter(Boolean);
+  flowPaint(Math.min(...boxes.map((L) => L.x)) - R, Math.min(...boxes.map((L) => L.y)) - R, Math.max(...boxes.map((L) => L.x)) + R, Math.max(...boxes.map((L) => L.y)) + R, now);
+  FLOW.drawn = b;
+}
+
+/** 空闲页出来了：换了一页（或第一次）就让点一格一格显出来；只是大小变了，直接画好。 */
+function flowShow(kind, key) {
+  const box = CE.flow.parentNode.getBoundingClientRect();
+  const W = Math.round(box.width);
+  const H = Math.round(box.height);
+  CE.flow.hidden = false;
+  if (key === FLOW.key && W === FLOW.w && H === FLOW.h) return;
+  const fresh = key !== FLOW.key;
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  Object.assign(FLOW, { key, kind, w: W, h: H, dpr, ink: getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#151515' });
+  CE.flow.width = W * dpr;
+  CE.flow.height = H * dpr;
+  CE.flow.style.width = `${W}px`;
+  CE.flow.style.height = `${H}px`;
+  flowMarks();
+  cancelAnimationFrame(FLOW.raf);
+  FLOW.raf = 0;
+  FLOW.done = !fresh || still();
+  FLOW.t0 = performance.now();
+  if (FLOW.done) {
+    flowPaint(0, 0, W, H, 0);
+    FLOW.drawn = FLOW.lens;
+  } else FLOW.raf = requestAnimationFrame(flowTick);
+}
+
+function flowHide() {
+  if (CE.flow.hidden) return;
+  CE.flow.hidden = true;
+  cancelAnimationFrame(FLOW.raf);
+  FLOW.raf = 0;
+  FLOW.key = '';
+  FLOW.lens = FLOW.drawn = null;
+}
+
+/** 换了浅色 / 深色、窗口大小变了：照原样重画（不重放）。 */
+function flowRedraw() {
+  if (!CE.flow || CE.flow.hidden) return;
+  clearTimeout(FLOW.resize);
+  FLOW.resize = setTimeout(() => {
+    FLOW.w = 0;
+    flowShow(FLOW.kind, FLOW.key);
+  }, 120);
+}
+
+function flowPointer(e) {
+  if (CE.flow.hidden || still() || e.pointerType === 'touch') return;
+  const r = CE.flow.getBoundingClientRect();
+  FLOW.lens = e.type === 'pointerleave' ? null : { x: e.clientX - r.left, y: e.clientY - r.top };
+  if (!FLOW.raf) FLOW.raf = requestAnimationFrame(flowTick);
+}
+
 // ----- 顶栏：项目 / 任务几，现在谁在做，待复核，清单，控制 -----
 
 const KIND_WORD = { work: '干活中', review: '复核中', final: '终审中', plan: '拆解中' };
+let barNums = null;
 
 function renderBar(t) {
   const p = S.st.project;
@@ -1714,12 +2008,16 @@ function renderBar(t) {
   ]);
   if (sig === barSig) return;
   barSig = sig;
+  // 同一个任务里数字变了（打了勾、多了待复核）：新的数翻上来
+  const was = barNums;
+  barNums = { t: t.id, done: p.task.done, pend: p.pending.length };
+  const num = (k, text) => h('span', { class: was && was.t === t.id && was[k] !== barNums[k] ? 'roll' : null }, text);
   const meta = [];
   const ctl = [];
   if (latest) {
     meta.push(statusEl(run));
-    if (p.pending.length) meta.push(h('button', { class: 'meta-btn', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget) }, h('span', { class: 'rd' }), `待复核 ${p.pending.length}`));
-    if (p.task.total) meta.push(h('button', { class: 'meta-btn', 'data-tip': '清单', onclick: () => CE.stream.querySelector('.head')?.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'start' }) }, `清单 ${p.task.done}/${p.task.total}`));
+    if (p.pending.length) meta.push(h('button', { class: 'meta-btn', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget) }, h('span', { class: 'rd' }), h('span', null, '待复核 ', num('pend', p.pending.length))));
+    if (p.task.total) meta.push(h('button', { class: 'meta-btn', 'data-tip': '清单', onclick: () => CE.stream.querySelector('.head')?.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'start' }) }, h('span', null, '清单 ', num('done', p.task.done), `/${p.task.total}`)));
     if (run.running || run.waiting) {
       ctl.push(h('button', { class: 'btn primary', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), h('span', { class: 'lbl' }, '停止')));
     } else {
@@ -2868,7 +3166,15 @@ function voteCard(v, live = true) {
   const box = h(
     'div',
     { class: 'vote' },
-    h('span', { class: 'cap' }, v.status === 'proposing' ? ['投票 · 出方案 ', dots] : v.status === 'voting' ? [`投票中 ${aiBallots.length}/${v.voters.length} `, dots] : `投票 · ${total} 票`),
+    h(
+      'span',
+      { class: 'cap' },
+      v.status === 'proposing'
+        ? ['投票 · 出方案 ', dots]
+        : v.status === 'voting'
+          ? [`投票中 ${aiBallots.length}/${v.voters.length}`, h('span', { class: 'tally', 'aria-hidden': 'true' }, v.voters.map((_, i) => h('i', { class: i < aiBallots.length ? 'on' : i === aiBallots.length ? 'next' : null })))]
+          : `投票 · ${total} 票`
+    ),
     h('p', { class: 'q' }, v.question)
   );
   if (v.status === 'proposing') {
@@ -4238,15 +4544,20 @@ function drawWires(fresh) {
     const tree = RE.tree.getBoundingClientRect();
     const x1 = slip.right;
     const y1 = clamp(slip.top + 24, view.top + 12, view.bottom - 12);
+    // 每根线是一串点；刚出来时从小条那头一格一格点到文件（下面那层遮罩按 draw 的动画画出来）
     let out = '';
+    let reveal = '';
     for (const r of rows) {
       const mark = (r.querySelector('.ring, .caret') || r).getBoundingClientRect();
       const y2 = mark.top + mark.height / 2;
       if (y2 < tree.top || y2 > tree.bottom) continue;
-      const x2 = mark.left - 4;
-      out += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" style="--len:${Math.hypot(x2 - x1, y2 - y1).toFixed(0)}"/>`;
+      const x2 = mark.left - 5;
+      const xy = `x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"`;
+      out += `<line ${xy}/>`;
+      reveal += `<line ${xy} style="--len:${Math.hypot(x2 - x1, y2 - y1).toFixed(0)}"/>`;
     }
-    WIRE.svg.innerHTML = out ? `${out}<circle class="hub" cx="${x1.toFixed(1)}" cy="${y1.toFixed(1)}" r="3"/>` : '';
+    const [x, y] = [x1.toFixed(1), y1.toFixed(1)];
+    WIRE.svg.innerHTML = out ? `<mask id="wire-m" maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%">${reveal}</mask><g mask="url(#wire-m)">${out}</g><path class="hub" d="M${x - 4.5} ${y}h9M${x} ${y - 4.5}v9"/>` : '';
     WIRE.svg.classList.toggle('draw', !!fresh && !still());
   });
 }
@@ -4970,6 +5281,10 @@ addEventListener('resize', () => {
   if (WIRE.card) drawWires();
   syncSegs();
 });
+// 中间这一栏大小变了（窗口、收起左右栏）、换了浅色 / 深色：点阵流照原样重画
+new ResizeObserver(flowRedraw).observe($('#center'));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', flowRedraw);
+new MutationObserver(flowRedraw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 // ---------- 开始 ----------
 
