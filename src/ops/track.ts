@@ -22,6 +22,7 @@ import {
   readTask,
   readTaskCopy,
   reviewDiffFileFor,
+  reviewFileFor,
   reviewFilled,
   saveTaskCopy,
   type HandoffDoc,
@@ -427,10 +428,16 @@ function writerOf(v: LedgerView, by: Stint | null, mtimeMs: number, now: number)
 export function applyReviews(root: string, by: Stint | null, members: MemberInfo[] = allMembers(), now = new Date()): number[] {
   const v = loadLedger(root);
   const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
-  // 派活的终审一起复核了前面几棒，只写一份结论：也记到这几棒上。
-  const merged = new Map(v.stints.filter((x) => x.kind === 'final' && x.reviewFile && x.targets?.length).map((x) => [x.reviewFile!, x.targets!]));
+  const files = listReviewFiles(root);
+  // 派活的终审一起复核了前面几棒，只写一份结论：也记到这几棒上。它开工后又单独给某一棒写了复核的，以那一份为准。
+  const written = new Map(files.map((f) => [f.rel, f.mtimeMs]));
+  const merged = new Map(
+    v.stints
+      .filter((x) => x.kind === 'final' && x.reviewFile && x.targets?.length)
+      .map((x) => [x.reviewFile!, x.targets!.filter((id) => (written.get(reviewFileFor(id)) ?? 0) < Date.parse(x.startedAt) - REVIEW_BEFORE_MS)])
+  );
   const marked: number[] = [];
-  for (const f of listReviewFiles(root)) {
+  for (const f of files) {
     const r = readReview(root, f.rel);
     if (!r || !reviewFilled(r)) continue;
     for (const id of new Set([...r.targets, ...(merged.get(r.file) ?? [])])) {

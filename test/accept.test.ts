@@ -155,6 +155,34 @@ test('看复核文件：强模型写「有问题，还没修」「未通过」�
   );
 });
 
+test('派活的终审一起复核：一份结论记到并进来的每一棒；终审开工后又单独给某一棒写了复核的，以那一份为准', () => {
+  const root = tmpDir('merged');
+  const final = stint(4, { kind: 'final', who: STRONG, status: 'working', review: 'skip', startedAt: at(20), endedAt: undefined, targets: [1, 2, 3], reviewFile: '.relay/复核/终审-第4棒-0925-0920.md' });
+  const ev: LedgerEvent[] = [{ type: 'init', ts: at(0), snap: 's0' }, ...[1, 2, 3].map((id): LedgerEvent => ({ type: 'stint', ts: at(id), stint: stint(id) })), { type: 'stint', ts: at(20), stint: final }];
+  fs.mkdirSync(path.join(root, '.relay', '复核'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.relay', 'journal.jsonl'), ev.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const write = (rel: string, verdict: string) => fs.writeFileSync(path.join(root, rel), `# 复核\n\n- 复核人：Codex · gpt-6\n- 结论：${verdict}\n`);
+  write('.relay/复核/第3棒.md', '有问题，还没修');
+  fs.utimesSync(path.join(root, '.relay/复核/第3棒.md'), new Date(at(10)), new Date(at(10)));
+  write('.relay/复核/第2棒.md', '没问题');
+  write(final.reviewFile!, '有问题，已修好');
+  const members = [{ name: 'codex', label: 'Codex', harness: 'codex', model: 'gpt-6', tier: 'strong' as const, tierSet: false, kind: 'harness' as const, canWork: true, canTalk: true, agent: { name: 'codex', tier: 'strong' as const } }];
+  track.applyReviews(root, final, members);
+  const v = ledger.loadLedger(root);
+  assert.deepEqual(
+    [1, 2, 3].map((id) => {
+      const s = v.stints.find((x) => x.id === id)!;
+      return [id, s.review, s.reviews?.at(-1)?.file, s.reviews?.at(-1)?.verdict];
+    }),
+    [
+      [1, 'done', final.reviewFile, 'fixed'],
+      [2, 'done', '.relay/复核/第2棒.md', 'ok'],
+      [3, 'done', final.reviewFile, 'fixed'],
+    ],
+    '第 3 棒那份是终审开工前写的：终审的结论更新'
+  );
+});
+
 test('验收：清单打勾不等于做完——开着终审却没终审、终审是弱模型、终审结论有问题、终审之后又改了文件、检查没过或没跑，都不算通过', () => {
   const base = { task: DONE_TASK, gateCommand: '', finalRequired: true };
   const work = stint(1, { who: STRONG, review: 'skip' });
