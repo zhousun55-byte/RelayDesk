@@ -12,14 +12,6 @@ export interface FileChange {
   removed: number | null;
 }
 
-export function statusWord(code: string): string {
-  if (code === '??' || code.includes('A')) return '新增';
-  if (code.includes('D')) return '删除';
-  if (code.includes('R')) return '改名';
-  if (code.includes('U')) return '冲突';
-  return '修改';
-}
-
 export function parseNameStatusZ(raw: string): { status: string; path: string; orig?: string }[] {
   const parts = raw.split('\0').filter((x, i, arr) => !(x === '' && i === arr.length - 1));
   const out: { status: string; path: string; orig?: string }[] = [];

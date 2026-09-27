@@ -15,7 +15,7 @@ import { relayHome } from './paths';
 export type Level = 'safe' | 'full';
 
 /** 工具标准输出的格式（决定怎么解析进度和最后一句话）。 */
-export type StreamFormat = 'claude' | 'codex' | 'cursor' | 'agy' | 'dsh' | 'lines';
+export type StreamFormat = 'claude' | 'codex' | 'cursor' | 'agy' | 'dsh' | 'lines' | 'text';
 
 export interface Located {
   /** 调用前缀：可执行文件（+ 固定参数），如 ['/…/codex'] 或 ['/…/node', '/…/index.js']。 */

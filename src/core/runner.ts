@@ -327,6 +327,21 @@ function linesParser(): StreamParser {
   };
 }
 
+/** 群聊的自定义命令：标准输出整段就是回答（空行也留着，不猜 JSON：回答里举的 JSON 例子不能当成回答本身）。 */
+function textParser(): StreamParser {
+  const all: string[] = [];
+  return {
+    line(raw) {
+      const t = raw.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').trimEnd();
+      all.push(t);
+      if (all.length > 4000) all.shift();
+      return t.trim() ? [clip(t)] : [];
+    },
+    final: () => all.join('\n'),
+    model: () => undefined,
+  };
+}
+
 /** 工具自己打的、和干活无关的提示（登录方式、模型列表刷新失败之类），不进日志。 */
 export const NOISE = /connectors are disabled|unrecognized_model|codex_models_manager|responses_websocket|Skill descriptions were shortened|failed to refresh available models|Reading prompt from stdin/i;
 
@@ -336,6 +351,8 @@ export function makeParser(format: StreamFormat): StreamParser {
       return claudeParser();
     case 'codex':
       return codexParser();
+    case 'text':
+      return textParser();
     case 'cursor':
       return cursorParser();
     case 'agy':
@@ -375,7 +392,8 @@ export function lastError(stderrTail: string, log = ''): string {
     .pop();
   if (own) return own;
   const lines = stderrTail.split('\n').map((l) => l.trim()).filter(Boolean);
-  return lines.filter((l) => /error|错误|失败|failed|refused|denied|timed out/i.test(l)).pop() ?? lines.pop() ?? '';
+  const errs = lines.filter((l) => /error|错误|失败|failed|refused|denied|timed out/i.test(l));
+  return errs.filter((l) => !NOISE.test(l)).pop() ?? errs.pop() ?? lines.pop() ?? '';
 }
 
 /**

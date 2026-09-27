@@ -582,4 +582,6 @@ test('没成的原因：连接类的错说「连不上服务器」；原话取�
   const ask = (cmd: string) => talk.askAgent({ name: 'mine', kind: 'cli', cmd: 'x', tier: 'weak', ask: cmd }, 'hi', tmpDir('offline'), 20_000, 5000);
   await assert.rejects(ask(`echo 'ERROR models: request timed out' >&2; echo 'Error: error sending request for url (https://chatgpt.com/backend-api/codex/responses)' >&2; exit 1`), /: 连不上服务器，原话：Error: error sending request for url \(https:\/\/chatgpt\.com\/backend-api\/codex\/responses\)$/);
   assert.ok(runner.looksLikeNetworkBlip('Reconnecting... 2/5 (workspace routing discovery failed)'), '干活时也算网络抖了一下，原地再试一次');
+  // 自定义命令和编程工具走同一套执行：回答原样，空行留着，回答里举的 JSON 例子不当成回答本身
+  assert.equal(await ask(`printf '第一段\\n\\n{"text": "只是例子"}\\n第二段\\n'`), '第一段\n\n{"text": "只是例子"}\n第二段');
 });

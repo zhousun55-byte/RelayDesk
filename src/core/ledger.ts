@@ -247,10 +247,6 @@ export function readLedgerFull(root: string): { events: LedgerEvent[]; bad: BadL
   return { events, bad };
 }
 
-export function readLedger(root: string): LedgerEvent[] {
-  return readLedgerFull(root).events;
-}
-
 export interface LedgerView {
   events: LedgerEvent[];
   init: InitEvent | null;

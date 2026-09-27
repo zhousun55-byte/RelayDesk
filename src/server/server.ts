@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { doctor } from '../commands/doctor';
 import { talkContext } from '../commands/talk';
 import { loadAutoSettings, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
@@ -17,7 +16,6 @@ import { forgetProject, lastProject, loadMemory, rememberProject } from '../core
 import { appNameOf, llmName, toolName } from '../core/names';
 import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
 import { isInside } from '../core/paths';
-import { PRESETS } from '../core/presets';
 import { untilText } from '../core/quota';
 import { agentKind, findAgent, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
@@ -271,7 +269,6 @@ export function createServer(opts: ServerOptions): http.Server {
         rememberProject(root);
         watchOn(root);
       }
-      const t = talkStatus(talkPath(root));
       const w = watching(root);
       const pick = pickFolder(root, !!pv.init);
       return {
@@ -283,7 +280,6 @@ export function createServer(opts: ServerOptions): http.Server {
         members: memberViews(),
         settings: loadAutoSettings(),
         projects: projectList(pick ? null : root),
-        talk: { count: readTalk(root).length, speaking: t.speaking, queue: t.queue },
         detecting: !!detecting,
         detectedAt: loadDetected()?.at ?? null,
         watching: !!w,
@@ -351,8 +347,6 @@ export function createServer(opts: ServerOptions): http.Server {
     },
     '/api/file': (q) => readProjectFile(dirOf(q, {}), q.get('path') ?? ''),
     '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
-    '/api/presets': () => ({ presets: PRESETS }),
-    '/api/doctor': (q) => ({ lines: doctor(dirOf(q, {})) }),
   };
 
   const post: Record<string, Handler> = {

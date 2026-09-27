@@ -1,11 +1,9 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RelayError, errorMessage } from './errors';
 import { loadDetected, memberModel, refreshHarnessModel } from './detect';
-import { agentEnv } from './env';
-import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds } from './harness';
+import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from './harness';
 import { fillTemplate } from './launch';
 import { runLlmAgent } from './llm-agent';
 import { llmName, toolName } from './names';
@@ -324,10 +322,7 @@ function replyOf(raw: string): string {
   return text;
 }
 
-/**
- * 让一个 AI 回答。接口型用内置小代理，只给读文件的工具；编程工具用它的只读模式；
- * 自定义命令把提示从标准输入喂进去，读标准输出（或 {{out}} 文件）。
- */
+/** 让一个 AI 回答。接口型用内置小代理，只给读文件的工具；编程工具、自定义命令见下面。 */
 export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, timeoutMs = TALK_MAX_MS, idleMs = TALK_IDLE_MS): Promise<string> {
   const late = (idle: boolean | undefined) => (idle ? cause.idle(idleMs) : cause.overtime(timeoutMs));
   if (agentKind(agent) === 'api') {
@@ -350,110 +345,41 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     if (!text) throw new RelayError(r.error ? (quotaWhy(r.error) ?? plain(r.error)) : r.timedOut ? late(false) : cause.silent(), 'ask-empty');
     return text;
   }
+  // 编程工具用它的只读模式回答；自定义命令把提示从标准输入喂进去，回答是它的标准输出（或 {{out}} 文件）。
+  // 两种都交给 startRun：计时、太久没动静就停、不传宿主的会话变量（agentEnv）、认没成的原因都是同一套。
+  const stamp = `${process.pid}-${Date.now()}`;
+  const outFile = path.join(os.tmpdir(), `relay-talk-${stamp}.txt`);
+  const logPath = path.join(os.tmpdir(), `relay-talk-${stamp}.log`);
   const tpl = agent.ask?.trim();
-  if (!tpl) {
-    // 绑定了认得的编程工具：用它的只读模式回答。
+  let harness: string | undefined;
+  let make: () => Invocation;
+  if (tpl) {
+    const out = tpl.includes(OUT_PLACEHOLDER) ? outFile : undefined;
+    const argv = ['sh', '-c', fillTemplate(tpl, out ? { out } : {})];
+    make = () => ({ argv, stdin: prompt, format: 'text', env: { NO_COLOR: '1' }, ...(out ? { outFile: out } : {}) });
+  } else {
     const spec = findHarness(agent.harness);
     const loc = spec ? locateCached(spec) : null;
     if (!spec || !loc) throw new RelayError('没有配置讨论命令', 'no-ask');
-    const stamp = `${process.pid}-${Date.now()}`;
-    const make = () =>
-      spec.invoke(loc, {
-        cwd,
-        prompt,
-        level: 'safe',
-        readOnly: true,
-        model: agent.model?.trim() || undefined,
-        effort: agent.effort,
-        outFile: path.join(os.tmpdir(), `relay-talk-${stamp}.txt`),
-      });
-    const logPath = path.join(os.tmpdir(), `relay-talk-${stamp}.log`);
-    const inv = make();
-    let r = await startRun({ invocation: inv, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
-    // 命令行太旧、用不了这个模型：记下来，换成它用得了的再问一次。
-    const needs = r.code !== 0 ? cliTooOld(`${r.finalText}\n${r.error ?? ''}\n${r.stderrTail}`) : null;
-    const used = modelArg(inv.argv);
-    if (needs && used) {
-      noteModelNeeds(used, needs);
-      refreshHarnessModel(spec.id);
-      const again = make();
-      if (modelArg(again.argv) !== used) r = await startRun({ invocation: again, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
-    }
-    const log = logTail(logPath, 6000);
-    fs.rmSync(logPath, { force: true });
-    const text = replyOf(r.finalText);
-    if (!text) throw new RelayError(r.error ? plain(r.error) : r.timedOut ? late(r.idle) : silentWhy(spec.id, log, r), 'ask-empty');
-    return text;
+    harness = spec.id;
+    make = () => spec.invoke(loc, { cwd, prompt, level: 'safe', readOnly: true, model: agent.model?.trim() || undefined, effort: agent.effort, outFile });
   }
-  const outFile = tpl.includes(OUT_PLACEHOLDER) ? path.join(os.tmpdir(), `relay-talk-${process.pid}-${Date.now()}.txt`) : null;
-  const cmd = fillTemplate(tpl, outFile ? { out: outFile } : {});
-  return new Promise((resolve, reject) => {
-    // 和编程工具一样用 agentEnv：接力台是从某个 AI 工具里启动的时候，它注入的会话变量（CLAUDE_*、ANTHROPIC_*）不传过去。
-    const child = spawn('sh', ['-c', cmd], { cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true, env: agentEnv({ NO_COLOR: '1' }) });
-    let out = '';
-    let err = '';
-    let timedOut = false;
-    let idle = false;
-    const kill = () => {
-      try {
-        if (child.pid) process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        /* 已结束 */
-      }
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      kill();
-    }, timeoutMs);
-    const quiet = setTimeout(() => {
-      timedOut = idle = true;
-      kill();
-    }, idleMs);
-    child.stdout?.setEncoding('utf8');
-    child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (c: string) => {
-      quiet.refresh();
-      out += c;
-      if (out.length > 200_000) out = out.slice(-200_000);
-    });
-    child.stderr?.on('data', (c: string) => {
-      quiet.refresh();
-      err = (err + c).slice(-4000);
-    });
-    child.stdin?.on('error', () => {
-      /* 有的命令不读标准输入 */
-    });
-    child.stdin?.end(prompt);
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      clearTimeout(quiet);
-      reject(new RelayError(`启动失败，原话：${plain(e.message)}`, 'ask-spawn'));
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      clearTimeout(quiet);
-      let reply = out;
-      if (outFile) {
-        try {
-          reply = fs.readFileSync(outFile, 'utf8');
-        } catch {
-          /* 没写文件就用标准输出 */
-        }
-        fs.rmSync(outFile, { force: true });
-      }
-      if (timedOut) return reject(new RelayError(late(idle), 'ask-timeout'));
-      let text: string;
-      try {
-        text = replyOf(reply);
-      } catch (e) {
-        return reject(e);
-      }
-      const tail = cleanReply(err).slice(-300);
-      const said = clip(lastError(tail), 200);
-      if (!text) return reject(new RelayError((tail && quotaWhy(tail)) || (said ? cause.exit(code ?? -1, said) : cause.silent(code ?? -1)), code ? 'ask-failed' : 'ask-empty'));
-      resolve(text);
-    });
-  });
+  const inv = make();
+  let r = await startRun({ invocation: inv, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
+  // 命令行太旧、用不了这个模型：记下来，换成它用得了的再问一次。
+  const needs = harness && r.code !== 0 ? cliTooOld(`${r.finalText}\n${r.error ?? ''}\n${r.stderrTail}`) : null;
+  const used = modelArg(inv.argv);
+  if (harness && needs && used) {
+    noteModelNeeds(used, needs);
+    refreshHarnessModel(harness);
+    const again = make();
+    if (modelArg(again.argv) !== used) r = await startRun({ invocation: again, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
+  }
+  const log = logTail(logPath, 6000);
+  fs.rmSync(logPath, { force: true });
+  const text = replyOf(r.finalText);
+  if (!text) throw new RelayError(r.error ? plain(r.error) : r.timedOut ? late(r.idle) : silentWhy(harness, log, r), 'ask-empty');
+  return text;
 }
 
 /** 一段群聊里谁在说、谁在排队。 */
