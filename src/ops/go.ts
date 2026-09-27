@@ -16,7 +16,7 @@ import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc } from '../core/notes';
 import { finalPrompt, reviewPrompt, workPrompt } from '../core/prompts';
 import { clearQuota, detectQuota, markQuota, untilText } from '../core/quota';
-import { clip, logTail, looksLikeNetworkBlip, startRun, toolLines, type RunHandle, type RunResult } from '../core/runner';
+import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, type RunHandle, type RunResult } from '../core/runner';
 import { cause, plain } from '../core/cause';
 import { takeSnapshot } from '../core/snap';
 import { memberTier, sameModel, whoOfMember } from '../core/tier';
@@ -520,11 +520,11 @@ class GoRunner {
         // 认额度只看工具自己报的话（出错信息、标准错误、日志里的「出错」「提示」）和最后一句话，不看 AI 说的话、搜的词：
         // 任务本身讲限流、额度时，那些话里全是 rate limit、quota。
         const failed = !r.stopped && (!!r.error || r.timedOut || r.code !== 0);
-        quotaText = `${r.error ?? ''}\n${r.stderrTail}\n${toolLines(logTail(logAbs, 6000))}\n${r.finalText.slice(-2000)}`;
+        const own = toolLines(logTail(logAbs, 6000));
+        quotaText = `${r.error ?? ''}\n${r.stderrTail}\n${own}\n${r.finalText.slice(-2000)}`;
         if (failed) {
-          const said = clip(r.stderrTail.split('\n').filter(Boolean).slice(-2).join(' '), 200);
           const hint = explainFailure(m.harness, `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}`);
-          error = r.error ?? (r.timedOut ? cause.overtime(timeoutMs) : hint ?? cause.exit(r.code, said));
+          error = r.error ?? (r.timedOut ? cause.overtime(timeoutMs) : hint ?? cause.exit(r.code, clip(lastError(r.stderrTail, own), 200)));
         }
       } else if (m.kind === 'api' && m.agent.api) {
         log(`（接力台内置小代理：${m.agent.api.baseUrl} · ${m.agent.api.model}）`);

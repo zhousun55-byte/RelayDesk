@@ -8,17 +8,17 @@ import { redactSecrets } from './redact';
 import { plain } from './cause';
 import { findAgent } from './registry';
 import { memberTier } from './tier';
-import { appendTalkRaw, askAgent, checkSpeakers, inParallel, speakerName, talkPath, type TalkContext } from './talk';
+import { appendTalkRaw, askAgent, checkSpeakers, inParallel, releaseThread, speakerName, talkPath, threadOf, type TalkContext, type Thread } from './talk';
 import { stampLocal } from './time';
 
 /**
  * 投票：让弱模型也有话语权。
- * 1. 方案：你来列，或者请每个 AI 先各自出一个（互相看不到）；
+ * 1. 方案：你来列（两个以上），或者请每个 AI 先各自出一个（互相看不到；你只列了一个的话，它也一起参加）；
  * 2. 方案打乱顺序、去掉名字（方案 A、B、C……），发给每个 AI 投票，要写理由，不能投自己的；
  * 3. 一个 AI 一票，不分强弱；你也可以投一票；
  * 4. 公布票数和理由，再揭晓每个方案是谁出的；平票由你定；
  * 5. 「采纳」后写进任务的「约定」，之后接力的每一棒都会看到。
- * 记录存在群聊记录里（kind = vote，同一个投票追加多次，读的时候取最后一条）。
+ * 记录存在群聊记录里（kind = vote，同一个投票追加多次，读的时候取最后一条）；投票途中点了「新群聊」，接着写进原来那段。
  */
 
 export interface VoteOption {
@@ -58,7 +58,8 @@ export interface Vote {
   error?: string;
 }
 
-export function readVotes(root: string, file = talkPath(root)): Vote[] {
+/** 一段群聊记录里的投票（同一个投票取最后一条）。 */
+export function readVotes(file: string): Vote[] {
   let text = '';
   try {
     text = fs.readFileSync(file, 'utf8');
@@ -78,12 +79,12 @@ export function readVotes(root: string, file = talkPath(root)): Vote[] {
   return [...byId.values()];
 }
 
-export function findVote(root: string, id: string): Vote | null {
-  return readVotes(root).find((v) => v.id === id) ?? null;
+export function findVote(file: string, id: string): Vote | null {
+  return readVotes(file).find((v) => v.id === id) ?? null;
 }
 
-function save(root: string, v: Vote): Vote {
-  appendTalkRaw(root, { ...v, ts: new Date().toISOString() });
+function save(file: string, v: Vote): Vote {
+  appendTalkRaw(file, { ...v, ts: new Date().toISOString() });
   return v;
 }
 
@@ -91,8 +92,8 @@ function save(root: string, v: Vote): Vote {
  * AI 投票的时候你也可以投：存之前先把记录里你最新的那一票并进来。
  * 不然后面每个 AI 投完都拿自己手里那份（没有你那一票的）去存，你的票就被盖掉了。
  */
-function withHumanBallot(root: string, v: Vote): void {
-  const human = findVote(root, v.id)?.ballots.filter((b) => b.voter === 'human') ?? [];
+function withHumanBallot(file: string, v: Vote): void {
+  const human = findVote(file, v.id)?.ballots.filter((b) => b.voter === 'human') ?? [];
   v.ballots = [...v.ballots.filter((b) => b.voter !== 'human'), ...human];
 }
 
@@ -175,7 +176,7 @@ function firstLine(text: string): string {
 
 export interface StartVoteInput {
   question: string;
-  /** 你列的选项；不给就请 AI 各自出方案。 */
+  /** 你列的选项：两个以上就直接投；一个或者不给，AI 先各自出方案（你列的那个一起参加）。 */
   options?: string[];
   /** 谁投票（工人名）。 */
   voters: string[];
@@ -190,26 +191,33 @@ export function startVote(root: string, input: StartVoteInput): { vote: Vote; do
   if (!q) throw new RelayError('投票的问题是空的', 'empty');
   const voters = checkSpeakers(input.voters);
   if (voters.length < 2) throw new RelayError('投票的 AI 少于两个', 'few-voters');
-  const own = (input.options ?? []).map((x) => x.trim()).filter(Boolean);
-  if (own.length === 1) throw new RelayError('至少要两个选项（或者不写选项，让 AI 各自出方案）。', 'few-options');
+  const own = (input.options ?? []).map((x) => x.trim()).filter(Boolean).slice(0, KEYS.length);
   const ctx = input.context ?? (() => ({}));
   const vote: Vote = {
     kind: 'vote',
     id: `vote-${Date.now().toString(36)}-${crypto.randomBytes(2).toString('hex')}`,
     ts: new Date().toISOString(),
     question: q,
-    status: own.length ? 'voting' : 'proposing',
-    options: own.slice(0, KEYS.length).map((text, i) => ({ key: KEYS[i], text, author: 'human', authorLabel: '我' })),
+    status: own.length >= 2 ? 'voting' : 'proposing',
+    options: own.map((text, i) => ({ key: KEYS[i], text, author: 'human', authorLabel: '我' })),
     voters,
     ballots: [],
   };
-  save(root, vote);
-  const done = runVote(root, vote, ctx).finally(() => running.delete(vote.id));
+  const file = talkPath(root);
+  save(file, vote);
+  const th = threadOf(file);
+  th.votes++;
+  const done = runVote(root, th, vote, ctx).finally(() => {
+    running.delete(vote.id);
+    th.votes--;
+    releaseThread(th);
+  });
   running.set(vote.id, done);
   return { vote, done };
 }
 
-async function runVote(root: string, v: Vote, context: () => TalkContext): Promise<Vote> {
+/** 出方案、投票。存都按 th.file：投到一半点了「新群聊」，也写回原来那段。 */
+async function runVote(root: string, th: Thread, v: Vote, context: () => TalkContext): Promise<Vote> {
   let ctx: TalkContext = {};
   try {
     ctx = context();
@@ -218,7 +226,8 @@ async function runVote(root: string, v: Vote, context: () => TalkContext): Promi
   }
   try {
     if (v.status === 'proposing') {
-      const got: { author: string; text: string }[] = [];
+      // 你先列的那一个（有的话）和 AI 出的一起打乱
+      const got: { author: string; text: string }[] = v.options.map((o) => ({ author: o.author, text: o.text }));
       await inParallel(v.voters, 4, async (name) => {
         const a = findAgent(name);
         if (!a) return;
@@ -232,12 +241,14 @@ async function runVote(root: string, v: Vote, context: () => TalkContext): Promi
       if (got.length < 2) {
         v.status = 'done';
         v.error = got.length ? '投票没开始：只有 1 个方案' : '投票没开始：没有方案';
-        return save(root, v);
+        return save(th.file, v);
       }
-      v.options = shuffle(got).slice(0, KEYS.length).map((g, i) => ({ key: KEYS[i], text: g.text, author: g.author, authorLabel: speaker(g.author) }));
+      v.options = shuffle(got)
+        .slice(0, KEYS.length)
+        .map((g, i) => ({ key: KEYS[i], text: g.text, author: g.author, authorLabel: g.author === 'human' ? '我' : speaker(g.author) }));
       v.ballots = v.ballots.filter((b) => b.void);
       v.status = 'voting';
-      save(root, v);
+      save(th.file, v);
     }
     const keys = v.options.map((o) => o.key);
     await inParallel(v.voters, 4, async (name) => {
@@ -254,34 +265,36 @@ async function runVote(root: string, v: Vote, context: () => TalkContext): Promi
       } catch (e) {
         v.ballots.push({ voter: name, voterLabel: speaker(name), choice: null, reason: '', tier, void: plain(errorMessage(e)) });
       }
-      withHumanBallot(root, v);
-      save(root, { ...v, ...tally(v.options, v.ballots) });
+      withHumanBallot(th.file, v);
+      save(th.file, { ...v, ...tally(v.options, v.ballots) });
     });
-    withHumanBallot(root, v);
+    withHumanBallot(th.file, v);
     v.status = 'done';
     Object.assign(v, tally(v.options, v.ballots));
-    return save(root, v);
+    return save(th.file, v);
   } catch (e) {
     v.status = 'done';
     v.error = errorMessage(e);
-    return save(root, v);
+    return save(th.file, v);
   }
 }
 
 /** 你也投一票（一人一票，再投就是改票）。 */
 export function castHumanVote(root: string, id: string, key: string, reason = ''): Vote {
-  const v = findVote(root, id);
+  const file = talkPath(root);
+  const v = findVote(file, id);
   if (!v) throw new RelayError('找不到这次投票。', 'no-vote');
   if (v.status === 'proposing') throw new RelayError('方案还没出齐', 'not-ready');
   if (!v.options.some((o) => o.key === key)) throw new RelayError(`没有方案 ${key}。`, 'bad-key');
   const ballots = [...v.ballots.filter((b) => b.voter !== 'human'), { voter: 'human', voterLabel: '我', choice: key, reason: reason.trim().slice(0, 300) }];
   const next: Vote = { ...v, ballots, ...(v.status === 'done' ? tally(v.options, ballots) : {}) };
-  return save(root, next);
+  return save(file, next);
 }
 
 /** 采纳一个方案：写进任务的「约定」，之后接力的每一棒都会看到。 */
 export function adoptOption(root: string, id: string, key: string): Vote {
-  const v = findVote(root, id);
+  const file = talkPath(root);
+  const v = findVote(file, id);
   if (!v) throw new RelayError('找不到这次投票。', 'no-vote');
   if (v.status !== 'done') throw new RelayError('投票还没结束。', 'not-ready');
   const o = v.options.find((x) => x.key === key);
@@ -289,7 +302,7 @@ export function adoptOption(root: string, id: string, key: string): Vote {
   const count = v.counts?.[key] ?? 0;
   const by = /[\u4e00-\u9fff\uff00-\uffef]$/.test(o.authorLabel) ? `${o.authorLabel}出的` : `${o.authorLabel} 出的`;
   appendRule(root, `${v.question.replace(/\s+/g, ' ').slice(0, 60)} → 采用方案 ${key}（${count} 票，${by}）：${firstLine(o.text)}`);
-  return save(root, { ...v, adopted: { key, at: new Date().toISOString() } });
+  return save(file, { ...v, adopted: { key, at: new Date().toISOString() } });
 }
 
 /** 往任务的「约定」一节里加一条（没有这一节就加上）。 */

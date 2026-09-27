@@ -15,6 +15,14 @@ export function plain(text: string): string {
   return text.trim().replace(/[。.]+$/, '');
 }
 
+/** 连不上服务器的说法：超时、连接被断、域名解析不了、加密握手失败、工具自己在反复重连。 */
+const OFFLINE =
+  /request timed out|connect(?:ion)? ?timed? ?out|UND_ERR_CONNECT_TIMEOUT|error sending request|Reconnecting\.\.\.|routing discovery failed|socket disconnected|socket hang up|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|fetch failed|TLS connection|tls handshake|SSL_ERROR|dns error|network error|stream disconnected|connection (?:reset|closed|error|refused)/i;
+
+export function looksOffline(text: string): boolean {
+  return OFFLINE.test(text);
+}
+
 /** 没成的原因。 */
 export const cause = {
   idle: (ms: number) => `${span(ms)}没有输出，已停止`,
@@ -25,6 +33,7 @@ export const cause = {
   },
   denied: (what: string) => `「${what}」没获准运行`,
   silent: (code?: number) => `没有输出${code === undefined ? '' : `（退出码 ${code}）`}`,
-  exit: (code: number, said = '') => `退出码 ${code}${plain(said) ? `，原话：${plain(said)}` : ''}`,
+  /** 工具出错退出：它说的是连接类的错，就说「连不上服务器」（退出码没有用）。 */
+  exit: (code: number, said = '') => `${looksOffline(said) ? '连不上服务器' : `退出码 ${code}`}${plain(said) ? `，原话：${plain(said)}` : ''}`,
   rawToolCall: '回的是调用工具的原文',
 };

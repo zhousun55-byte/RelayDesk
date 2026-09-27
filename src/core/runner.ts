@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { agentEnv } from './env';
 import type { Invocation, StreamFormat } from './harness';
-import { cause } from './cause';
+import { cause, looksOffline } from './cause';
 import { stampLocal } from './time';
 
 /**
@@ -363,9 +363,19 @@ export interface RunRequest {
 
 /** 工具出错的样子像不像网络抖了一下（连接被断开、服务器临时忙）：像的话值得隔几秒原地再试一次。 */
 export function looksLikeNetworkBlip(text: string): boolean {
-  return /socket disconnected|socket hang up|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|fetch failed|TLS connection|network error|stream disconnected|connection (?:reset|closed|error)|\b50[234]\b|\b429\b|rate.?limit|overloaded|temporarily unavailable|service unavailable|bad gateway/i.test(
-    text
-  );
+  return looksOffline(text) || /\b50[234]\b|\b429\b|rate.?limit|overloaded|temporarily unavailable|service unavailable|bad gateway/i.test(text);
+}
+
+/** 工具自己最后报的错：日志里最后一条「出错：」；没有就是标准错误里最后一句像报错的话，再没有就是标准错误的最后一行。 */
+export function lastError(stderrTail: string, log = ''): string {
+  const own = toolLines(log)
+    .split('\n')
+    .map((l) => l.match(/出错：(.+)/)?.[1]?.trim())
+    .filter(Boolean)
+    .pop();
+  if (own) return own;
+  const lines = stderrTail.split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.filter((l) => /error|错误|失败|failed|refused|denied|timed out/i.test(l)).pop() ?? lines.pop() ?? '';
 }
 
 /**

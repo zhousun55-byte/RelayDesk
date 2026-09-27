@@ -1110,13 +1110,13 @@ function schedule() {
   const g = p && p.go;
   const live = p && (p.now.kind !== 'idle' || (g && (g.status === 'running' || g.status === 'waiting')));
   const t = S.talk.status;
-  const talking = t.speaking.length || t.queue.length || S.talk.votes.some((v) => v.status !== 'done');
+  const talking = t.speaking.length || t.queue.length || S.talk.votes.some((v) => v.status !== 'done') || archiveLive();
   const ms = document.hidden ? 15000 : talking ? 1200 : live ? 1500 : 3000;
   pollTimer = setTimeout(tick, ms);
 }
 
 async function tick() {
-  await Promise.all([refresh(), loadTalk()]);
+  await Promise.all([refresh(), loadTalk(), archiveLive() && loadArchive(S.chat)]);
   const p = S.st && S.st.project;
   const k = p ? p.stints.map((s) => `${s.id}${s.status}${s.endedAt || ''}`).join() : '';
   if (k !== stintsKey || ++ticks % 5 === 0) {
@@ -2649,13 +2649,13 @@ function talkAt(d) {
 /** 在接力那一页时，群聊有人在说话、或者来了新回答：「群聊」上点一下。 */
 function talkNews() {
   if (S.view === 'chat') return false;
-  if (talkLive()) return true;
+  if (talkLive() || (S.talk.sessions || []).some((x) => x.busy)) return true;
   const last = S.talk.rows[S.talk.rows.length - 1];
   return !!last && last.kind !== 'human' && last.ts > (store.get(`seen:${S.dir}`) || '');
 }
 
 function sessionEl(x) {
-  const live = !x.id && talkLive();
+  const live = x.id ? !!x.busy : talkLive();
   return h('button', { class: 'thread', 'data-id': `chat:${x.id}`, onclick: () => selectChat(x.id || null) }, h('span', { class: 't' }, x.title), h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : x.at ? when(x.at) : '现在'));
 }
 
@@ -2681,7 +2681,7 @@ async function loadArchive(id) {
   }
 }
 
-/** 新群聊：正在用的那段有内容就存档（左边还看得到），换一段空的。 */
+/** 新群聊：正在用的那段有内容就存档（左边还看得到；还有人在说也行，接着写进存档那段），换一段空的。 */
 async function newChat() {
   if (talkHas(S.talk)) {
     try {
@@ -2689,6 +2689,7 @@ async function newChat() {
     } catch (e) {
       return fail('新建群聊', e);
     }
+    streamThread = null;
     await loadTalk();
   }
   S.chat = null;
@@ -2697,6 +2698,12 @@ async function newChat() {
   closeDrawers();
   renderAll();
   focusComposer();
+}
+
+/** 看的是存档的一段、它还没说完（中途点了「新群聊」）：跟着刷新。 */
+function archiveLive() {
+  const a = S.chat && S.archive && S.archive.id === S.chat ? S.archive : null;
+  return !!a && (a.status.speaking.length > 0 || a.status.queue.length > 0 || a.votes.some((v) => v.status !== 'done'));
 }
 
 function chatData() {
@@ -2710,7 +2717,7 @@ function chatMode() {
   return S.chat || talkHas(S.talk) || talkLive() ? 'chat' : 'chat-new';
 }
 
-/** 群聊里的每一项：人说的、AI 说的、「对比」那一轮、投票，按时间排；正在用的那段最后是谁在输入。 */
+/** 群聊里的每一项：人说的、AI 说的、「对比」那一轮、投票，按时间排；最后是谁在输入（存档的那段还没说完也有）。 */
 function chatItems(d, live) {
   const items = [];
   const rounds = new Map();
@@ -2728,8 +2735,8 @@ function chatItems(d, live) {
   for (const it of items) if (it.group) it.sig = JSON.stringify([it.group.rows.map((r) => [r.ts, r.text, r.error]), looks.key]);
   for (const v of d.votes) items.push({ key: `v:${v.id}`, at: voteBorn(v), sig: JSON.stringify([v, live, looks.key]), make: () => voteCard(v, live) });
   items.sort((a, b) => a.at - b.at);
-  const st = S.talk.status;
-  if (live && (st.speaking.length || st.queue.length)) items.push({ key: 'typing', sig: JSON.stringify([st, looks.key]), make: () => typingLine(st) });
+  const st = d.status;
+  if (st && (st.speaking.length || st.queue.length)) items.push({ key: 'typing', sig: JSON.stringify([st, looks.key]), make: () => typingLine(st) });
   return items;
 }
 
@@ -3337,7 +3344,7 @@ function updateComposer() {
   if (S.uploading.length) ok = false;
   else if (task) ok = !!text;
   else if (S.slash) ok = !S.slash.needsText || !!text;
-  else if (vote) ok = !!text && asked.length >= 2 && S.options.length !== 1;
+  else if (vote) ok = !!text && asked.length >= 2;
   else ok = (!!text || S.files.length > 0) && asked.length > 0;
   C.send.disabled = !ok;
   autoGrow();

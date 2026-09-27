@@ -311,7 +311,7 @@ test('投票：AI 还在投的时候你投的那一票不会被后面的结果�
     vote.castHumanVote(root, v.id, 'B', '我也选 B');
     const final = await done;
     assert.deepEqual(final.counts, { A: 1, B: 2 }, '以前你那一票会丢，变成 1 比 1');
-    assert.deepEqual(vote.readVotes(root).find((x) => x.id === v.id)!.ballots.map((b) => b.voter).sort(), ['a1', 'a2', 'human']);
+    assert.deepEqual(vote.readVotes(talk.talkPath(root)).find((x) => x.id === v.id)!.ballots.map((b) => b.voter).sort(), ['a1', 'a2', 'human']);
     assert.deepEqual(Object.fromEntries(final.ballots.filter((b) => b.voter !== 'human').map((b) => [b.voter, b.tier])), { a1: 'strong', a2: 'weak' }, 'a2 名单里记的是强，实际模型是 DeepSeek，算弱');
   } finally {
     talkMod.askAgent = real;
@@ -516,4 +516,70 @@ test('群聊里的接口成员：能看项目里的文件、不能改，照看�
   } finally {
     mock.close();
   }
+});
+
+test('群聊说到一半点「新群聊」：没说完的接着写回原来那段，新群聊里没有它们；存档那段标着还在说。接着一段还在说的群聊，说的人跟过去', async () => {
+  registry([{ name: 'slow', label: 'Slow', kind: 'cli', cmd: 'x', tier: 'weak', ask: 'sleep 0.3; echo 慢慢说完了' }]);
+  const root = tmpDir('talk-move');
+  {
+    const first = talk.say(root, '第一段的问题', ['slow']);
+    const id = talk.archiveTalk(root)!;
+    assert.ok(id, '有内容：存档了');
+    assert.deepEqual(talk.talkSessions(root).map((s) => [s.id, !!s.busy]), [[id, true]], '存档那段还在说');
+    assert.equal(talk.talkStatus(talk.talkPath(root)).speaking.length, 0, '新的一段没人在说');
+    talk.say(root, '新群聊的问题', []);
+    await first.done;
+    assert.deepEqual(talk.readTalk(root, 10, talk.talkFile(root, id)).map((r) => r.text), ['第一段的问题', '慢慢说完了']);
+    assert.deepEqual(talk.readTalk(root).map((r) => r.text), ['新群聊的问题'], '回答没串进新群聊');
+    assert.equal(talk.talkSessions(root)[0].busy, undefined, '说完就不标');
+
+    const again = talk.say(root, '再问一次', ['slow']);
+    const id2 = talk.archiveTalk(root)!;
+    talk.resumeTalk(root, id2);
+    assert.equal(talk.talkStatus(talk.talkPath(root)).speaking[0]?.agent, 'slow', '接着的那段：还在说的跟过来');
+    await again.done;
+    assert.deepEqual(talk.readTalk(root).map((r) => r.text), ['新群聊的问题', '再问一次', '慢慢说完了']);
+    assert.equal(talk.anyTalkBusy(), false);
+  }
+});
+
+test('投票只列了一个选项：AI 照样各出一个方案，你列的那个一起参加（去掉名字）；投票途中点了「新群聊」，结果写回原来那段', async () => {
+  registry([
+    { name: 'a1', label: 'A1', kind: 'api', tier: 'strong', api: { baseUrl: 'http://127.0.0.1:9', model: 'claude-opus-5-5', apiKeyEnv: '' } },
+    { name: 'a2', label: 'A2', kind: 'api', tier: 'strong', api: { baseUrl: 'http://127.0.0.1:9', model: 'gpt-6-sol', apiKeyEnv: '' } },
+  ]);
+  const root = tmpDir('vote-one');
+  const real = talkMod.askAgent;
+  talkMod.askAgent = async (agent: { name: string }, prompt: string) => {
+    await new Promise((r) => setTimeout(r, 100));
+    if (/各自独立出一个方案/.test(prompt)) return `${agent.name} 的方案\n理由写在这里`;
+    const key = prompt.match(/【方案 ([A-L])】\n我的方案/)![1];
+    return `投票：${key}\n理由：人列的这个最稳`;
+  };
+  try {
+    const { vote: v, done } = vote.startVote(root, { question: '用哪个方案？', voters: ['a1', 'a2'], options: ['我的方案'] });
+    assert.equal(v.status, 'proposing', '一个选项：先请 AI 出方案');
+    const id = talk.archiveTalk(root)!;
+    const final = await done;
+    assert.equal(final.options.length, 3);
+    const mine = final.options.find((o) => o.author === 'human')!;
+    assert.equal(mine.authorLabel, '我');
+    assert.equal(final.counts![mine.key], 2);
+    assert.equal(vote.readVotes(talk.talkFile(root, id)).find((x) => x.id === v.id)!.status, 'done', '结果写回原来那段');
+    assert.deepEqual(vote.readVotes(talk.talkPath(root)), [], '新群聊里没有这次投票');
+  } finally {
+    talkMod.askAgent = real;
+  }
+});
+
+test('没成的原因：连接类的错说「连不上服务器」；原话取工具最后报的那条（先看日志里的「出错」，再看标准错误里最后一句）', async () => {
+  assert.equal(
+    runner.lastError('2026 ERROR codex_models_manager::manager: failed to refresh available models: request timed out', '10:00:00 出错：Reconnecting... 5/5 (workspace routing discovery failed)'),
+    'Reconnecting... 5/5 (workspace routing discovery failed)'
+  );
+  assert.equal(runner.lastError('WARN 开头\nERROR 第一条\nError: 最后一条\n  at x.js:1'), 'Error: 最后一条');
+  assert.equal(runner.lastError('zsh: killed'), 'zsh: killed', '没有像报错的就用最后一行');
+  const ask = (cmd: string) => talk.askAgent({ name: 'mine', kind: 'cli', cmd: 'x', tier: 'weak', ask: cmd }, 'hi', tmpDir('offline'), 20_000, 5000);
+  await assert.rejects(ask(`echo 'ERROR models: request timed out' >&2; echo 'Error: error sending request for url (https://chatgpt.com/backend-api/codex/responses)' >&2; exit 1`), /: 连不上服务器，原话：Error: error sending request for url \(https:\/\/chatgpt\.com\/backend-api\/codex\/responses\)$/);
+  assert.ok(runner.looksLikeNetworkBlip('Reconnecting... 2/5 (workspace routing discovery failed)'), '干活时也算网络抖了一下，原地再试一次');
 });

@@ -21,8 +21,8 @@ import { PRESETS } from '../core/presets';
 import { untilText } from '../core/quota';
 import { agentKind, findAgent, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
-import { archiveTalk, readTalk, resumeTalk, say, talkBusy, talkFile, talkSessions, talkStatus } from '../core/talk';
-import { adoptOption, castHumanVote, readVotes, startVote, voteBusy } from '../core/vote';
+import { archiveTalk, readTalk, resumeTalk, say, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
+import { adoptOption, castHumanVote, readVotes, startVote } from '../core/vote';
 import { goActive, startGo, stopGo } from '../ops/go';
 import { checkRoot, initProject, liveProjects, newTask } from '../ops/init';
 import { buildStamp, keeperMode } from '../ops/keeper';
@@ -271,7 +271,7 @@ export function createServer(opts: ServerOptions): http.Server {
         rememberProject(root);
         watchOn(root);
       }
-      const t = talkStatus(root);
+      const t = talkStatus(talkPath(root));
       const w = watching(root);
       const pick = pickFolder(root, !!pv.init);
       return {
@@ -339,9 +339,10 @@ export function createServer(opts: ServerOptions): http.Server {
       if (id) {
         const file = talkFile(root, id);
         if (!fs.existsSync(file)) throw new RelayError('没有这个群聊。', 'no-talk');
-        return { id, rows: readTalk(root, 300, file), votes: readVotes(root, file).slice(-20) };
+        return { id, rows: readTalk(root, 300, file), votes: readVotes(file).slice(-20), status: talkStatus(file) };
       }
-      return { rows: readTalk(root, 300), votes: readVotes(root).slice(-20), status: talkStatus(root), sessions: talkSessions(root) };
+      const file = talkPath(root);
+      return { rows: readTalk(root, 300, file), votes: readVotes(file).slice(-20), status: talkStatus(file), sessions: talkSessions(root) };
     },
     '/api/tree': (q) => {
       const root = dirOf(q, {});
@@ -519,17 +520,11 @@ export function createServer(opts: ServerOptions): http.Server {
       r.done.catch(() => undefined);
       return { row: r.row, queued: r.queued };
     },
-    '/api/talk/clear': (q, b) => {
-      // 新群聊：正在用的存档（左栏里还看得到）。
-      const root = dirOf(q, b);
-      if (talkBusy(root) || voteBusy()) throw new RelayError('还有人在发言，等这一轮说完。', 'busy');
-      return { archived: archiveTalk(root) };
-    },
+    // 新群聊：正在用的存档（左栏里还看得到）。还有人在说、在投也行：他们接着写进存档的那段。
+    '/api/talk/clear': (q, b) => ({ archived: archiveTalk(dirOf(q, b)) }),
+    // 接着一个存档的群聊：它换成正在用的，原来正在用的存档。
     '/api/talk/resume': (q, b) => {
-      // 接着一个存档的群聊：它换成正在用的，原来正在用的存档。
-      const root = dirOf(q, b);
-      if (talkBusy(root) || voteBusy()) throw new RelayError('还有人在发言，等这一轮说完。', 'busy');
-      resumeTalk(root, str(b.id) ?? '');
+      resumeTalk(dirOf(q, b), str(b.id) ?? '');
       return {};
     },
     '/api/vote/start': (q, b) => {
