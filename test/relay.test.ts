@@ -468,7 +468,7 @@ test('群聊：讨论（轮流说）、对比（同时答）；投票不投自�
   for (const b of last.ballots) assert.notEqual(last.options.find((o: { key: string }) => o.key === b.choice).author, b.voter, '不投自己');
 });
 
-test('派活：强模型先拆成小步，弱模型一棒做一步，攒 3 棒强模型一起复核，最后一批并进终审；强模型一直没干活；每一棒记下 token 用量', () => {
+test('派活：强模型先拆成小步，弱模型一棒做一步，中途不复核，做完后终审一起复核；强模型一直没干活；每一棒记下 token 用量', () => {
   const s = prepared('dispatch');
   setOrder(s, ['claude', 'codex']);
   s.relay(['init']);
@@ -483,14 +483,13 @@ test('派活：强模型先拆成小步，弱模型一棒做一步，攒 3 棒�
       ['work', 'claude'],
       ['work', 'claude'],
       ['work', 'claude'],
-      ['review', 'codex'],
       ['work', 'claude'],
       ['final', 'codex'],
     ]
   );
   const merged = s.stints();
-  assert.deepEqual(merged[6].targets, [6], '最后一棒的复核并进了终审');
-  assert.equal(merged[5].review, 'done');
+  assert.deepEqual(merged[5].targets, [2, 3, 4, 5], '弱模型的棒都并进终审一起复核');
+  assert.ok(merged.filter((x) => x.kind === 'work').every((x) => x.review === 'done'));
   const prompts = fs
     .readdirSync(s.base)
     .filter((f) => f.startsWith('prompt-claude-'))

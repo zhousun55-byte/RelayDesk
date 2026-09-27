@@ -182,7 +182,7 @@ export function autoCommand(): Command {
     .option('--max <棒数>', '最多接力几棒')
     .option('--no-wait', '都没额度了就停下，不等')
     .option('--no-final', '这一次清单打完不终审')
-    .option('--dispatch', '这一次用派活：强模型拆成小步，弱模型一棒做一步，强模型每 3 棒复核一次（不写就看任务是不是用 --dispatch 写的）')
+    .option('--dispatch', '这一次用派活：强模型拆成小步，弱模型一棒做一步，做完后强模型终审时一起复核（不写就看任务是不是用 --dispatch 写的）')
     .option('--relay', '这一次不用派活')
     .option('--force', '在别的工具里干到一半的那一位已经停下了（额度用完、关掉了），直接换人')
     .action(async (words: string[], opts: { full?: boolean; max?: string; wait: boolean; final: boolean; dispatch?: boolean; relay?: boolean; force?: boolean }) => {

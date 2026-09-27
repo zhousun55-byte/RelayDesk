@@ -25,13 +25,12 @@ import { applyReviews, closeStint, gateStint, projectConfig, projectConfigSafe, 
 /**
  * 接力台调度：替你让某个 AI 接着做一棒；或者「全自动」一直接力下去——
  * 额度用完换下一位，有待复核就先派强模型复核，任务清单全部打勾后请强模型终审，都没额度了就等。
- * 派活（任务是在「派活」页写的）：强模型先把任务拆成小步，干活只派弱模型、一棒一步，攒够 REVIEW_BATCH 棒再请强模型一起复核；
+ * 派活（任务是在「派活」页写的）：强模型先把任务拆成小步，干活只派弱模型、一棒一步；中途不复核，
+ * 清单做完后终审的强模型一起复核所有弱模型的棒（实测每次复核都接近直接做一遍，中途复核最费强模型）。
  * 弱模型都用不了时不换强模型干活，等额度或停下。
  * 一棒一棒都记在账本里，所以随时能停、能接着跑。
  */
 
-/** 派活时弱模型做满几棒，强模型复核一次。 */
-const REVIEW_BATCH = 3;
 
 export type GoStatus = 'running' | 'waiting' | 'done' | 'stopped' | 'needs-human' | 'failed';
 
@@ -333,8 +332,6 @@ class GoRunner {
   private readonly weakFinals = new Set<string>();
   /** 收工前补跑检查的次数。 */
   private gateRuns = 0;
-  /** 派活时弱模型做不下去了：攒着的复核不等凑够就做。 */
-  private reviewNow = false;
   /** 这次是不是派活（开始时定下，跑到一半换了任务也不变）。 */
   private readonly dispatch: boolean;
   /** 派活：最后一批待复核的已经并进过一次终审（没复核上的再单独复核）。 */
@@ -763,12 +760,11 @@ class GoRunner {
         if (task.empty) return this.finish('needs-human', '全自动停止：还没写任务');
         const pending = pendingReviews(v);
         const dispatch = this.dispatch;
-        if (!pending.length) this.reviewNow = false;
         // 派活：清单做完了还有待复核的，不单独复核，并进终审（终审的人顺手写这几棒的复核，省一棒强模型）。
         const merge = dispatch && taskComplete(task) && pending.length > 0 && !this.merged;
 
-        // 1. 有待复核、又有强模型能用：先复核。派活时攒够几棒、弱模型做不下去了才复核。
-        if (pending.length && !merge && (!dispatch || pending.length >= REVIEW_BATCH || taskComplete(task) || this.reviewNow)) {
+        // 1. 有待复核、又有强模型能用：先复核。派活时中途不复核（并进终审；并过还没复核上的才单独复核）。
+        if (pending.length && (!dispatch || this.merged)) {
           const stuck = pending.filter((p) => (this.reviewTries.get(p.id) ?? 0) >= 2);
           if (stuck.length) {
             const ids = stuck.map((p) => p.id).join('、');
@@ -786,7 +782,6 @@ class GoRunner {
           const authors = pending.map((p) => p.who.member).filter(Boolean) as string[];
           const reviewer = this.pick('strong', authors) ?? this.pick('strong');
           if (reviewer) {
-            this.reviewNow = false;
             await this.runStint(reviewer, 'review', pending);
             continue;
           }
@@ -864,11 +859,7 @@ class GoRunner {
         if (stints >= this.settings.maxStints) return this.finish('needs-human', `全自动停止：接力到上限 ${stints} 棒，任务还没做完`);
         const w = this.pick(dispatch ? 'weak' : 'any');
         if (!w && dispatch) {
-          // 弱模型都用不了：攒着的复核先做了；再按「等额度」等最早恢复的弱模型，或者停下。不换强模型干活。
-          if (pending.length && !this.reviewNow) {
-            this.reviewNow = true;
-            continue;
-          }
+          // 弱模型都用不了：按「等额度」等最早恢复的弱模型，或者停下。不换强模型干活，也不复核（做到哪写在页面上，复核你来点）。
           const c = this.earliestCooling('weak');
           if (c && (await this.waitFor(c, '派活的弱模型都没额度'))) continue;
           return this.finish('needs-human', `全自动停止：没有能用的弱模型${this.weakWhy()}`);
@@ -893,9 +884,8 @@ class GoRunner {
           idle++;
           if (o.handoff?.state === 'stuck' || idle >= 2) {
             if (dispatch) {
-              // 派活：这位弱模型这次不再派，换别的弱模型；攒着的复核先做（强模型会顺手把问题改好）。
+              // 派活：这位弱模型这次不再派，换别的弱模型。
               this.failed.add(w.name);
-              this.reviewNow = true;
               idle = 0;
               continue;
             }
