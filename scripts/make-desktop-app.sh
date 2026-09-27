@@ -167,7 +167,13 @@ V="$(date +%Y%m%d%H%M%S)"
 # 改过里面的文件，重新做一次本机签名；再让系统重新登记它、刷新图标。
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 touch "$APP"
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
+LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSR" -f "$APP" >/dev/null 2>&1 || true
+# 系统里还登记着同一个包标识的别的副本（废纸篓里的、试装的）时，启动台可能拿到它的旧图标：注销这些登记，文件不动。
+"$LSR" -dump 2>/dev/null | awk -v id="$BUNDLE_ID" '/^path:/ { p = $0; sub(/^path:[ ]+/, "", p); sub(/ \(0x[0-9a-f]+\)$/, "", p) } /^identifier:/ && $2 == id { print p }' |
+  while IFS= read -r other; do
+    [[ "$other" -ef "$APP" ]] || "$LSR" -u "$other" >/dev/null 2>&1 || true
+  done
 
 # 4. 登录电脑时，由系统在后台把它带起来（不打开网页）。「系统设置 → 通用 → 登录项」里能看到、能关掉。
 xml() { print -r -- "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
