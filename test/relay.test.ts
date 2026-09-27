@@ -365,6 +365,7 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   assert.match(s.relay(['go', 'claude-official']), /额度用完.*3:50 恢复/);
   const third = s.stints()[2];
   assert.equal(third.status, 'quota');
+  assert.equal(third.who.model, 'claude-opus-5-5', '没等到回复，只有开头报的简写 claude-opus-5：用调用时给的完整名字（不然卡片上一会儿 Opus 5、一会儿 Opus 5.5）');
   const q = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'quota.json'), 'utf8')).members['claude-official'];
   const until = new Date(q.until);
   assert.equal(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(until), '03:50');

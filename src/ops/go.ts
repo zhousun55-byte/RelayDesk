@@ -181,7 +181,7 @@ function agoText(ms: number): string {
 }
 
 function nativeActiveError(a: { stint: Stint; idleMs: number }): RelayError {
-  return new RelayError(`第 ${a.stint.id} 棒（${whoName(a.stint.who)}）${agoText(a.idleMs)}还在改这个文件夹；现在换人，两个 AI 会同时改文件`, 'native-active');
+  return new RelayError(`第 ${a.stint.id} 棒（${whoName(a.stint.who)}）${agoText(a.idleMs)}还在改这个文件夹；现在换人，两边会同时改文件`, 'native-active');
 }
 
 export function loadGoState(root: string): GoState | null {
@@ -436,6 +436,9 @@ class GoRunner {
       }
       const r = await h.done;
       this.current = null;
+      // 没等到回复（额度用完）时只有开头报的简写（claude-opus-5）：用调用时给的完整名字（claude-opus-5-5）。
+      const asked = modelArg(inv.argv);
+      if (r.model && asked?.startsWith(`${r.model}-`)) r.model = asked;
       if (attempt > 3 || r.stopped || r.timedOut || r.code === 0 || this.stopRequested || !mayRetry()) return r;
       const text = `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}\n${toolLines(logTail(logAbs))}`;
       const needs = cliTooOld(text);

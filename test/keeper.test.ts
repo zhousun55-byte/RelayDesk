@@ -215,7 +215,7 @@ test('网页：接力台换了新版重启过，网页自己刷新；你正在�
   const out: string[] = [];
   const script = `
 const S = { dir: 'A', st: null, gen: 0, seq: {}, offline: false, build: '', newBuild: false };
-const CE = { offline: { hidden: true } };
+const CE = { offline: { hidden: true }, offlineText: {}, offlineDot: {}, offlineRetry: {} };
 const C = { ta: { value: '' } };
 let sheetStack = [];
 let menuOpen = false;

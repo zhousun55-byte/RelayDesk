@@ -808,7 +808,7 @@ svg.i {
   color: var(--paper);
   box-shadow: none;
 }
-.btn.primary:hover {
+.btn.primary:hover:not(:disabled) {
   opacity: 0.86;
 }
 .btn.ghost {
@@ -2040,7 +2040,7 @@ button.busy::after {
 }
 .opt {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto 22px;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto 22px;
   column-gap: 10px;
   align-items: center;
   padding: 9px 6px;
@@ -2077,7 +2077,11 @@ button.busy::after {
   word-break: break-word;
   line-height: 1.6;
 }
+.opt:not(:has(> .adopt)) {
+  grid-template-columns: 22px minmax(0, 1fr) auto 22px;
+}
 .opt .voters {
+  grid-column: 3;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2086,6 +2090,7 @@ button.busy::after {
   animation: pop 0.3s var(--pop) backwards;
 }
 .opt .n {
+  grid-column: -2;
   font-size: 13px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -2108,15 +2113,12 @@ button.busy::after {
   color: var(--ink);
   font-weight: 600;
 }
+/* 采纳排在投票人和票数中间，占着位置不压住投票人的图标 */
 .opt .adopt {
-  position: absolute;
-  right: 44px;
-  top: 7px;
+  grid-column: 4;
+  grid-row: 1;
   opacity: 0;
   transition: opacity 0.16s;
-}
-.opt {
-  position: relative;
 }
 .opt:hover .adopt,
 .opt:focus-within .adopt,

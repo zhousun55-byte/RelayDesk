@@ -89,7 +89,7 @@ test('网页的图标：规则里用到的每家都画了，几何图形也都�
 });
 
 test('网页：全自动的结果只出现在它开始时的那段对话里（换了任务，上一个任务的「验收通过」不跑到新任务里）', () => {
-  const code = ['msOf', 'rangeOf', 'inRange', 'pageThreads', 'streamItems'].map(pick).join('\n\n');
+  const code = ['msOf', 'rangeOf', 'inRange', 'pageThreads', 'accepted', 'streamItems'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
   vm.runInNewContext(
     `
@@ -196,7 +196,7 @@ ${code}
 });
 
 test('网页线路的终点：最新的任务看验收（做着的时候没有终点）；更早的任务看当时全自动的结果', () => {
-  const code = ['msOf', 'rangeOf', 'inRange', 'pageThreads', 'streamItems'].map(pick).join('\n\n');
+  const code = ['msOf', 'rangeOf', 'inRange', 'pageThreads', 'accepted', 'streamItems'].map(pick).join('\n\n');
   const run = (acceptance: unknown, go: unknown) => {
     const ctx: Record<string, unknown> = {};
     vm.runInNewContext(
@@ -217,6 +217,11 @@ result = [ends(t0), ends(t1)];`,
   const oldGo = { id: 'g1', mode: 'auto', status: 'done', startedAt: '2026-09-25T13:42:00Z', updatedAt: '2026-09-25T13:49:00Z', result: '验收通过：清单 2/2' };
   assert.deepEqual(run({ state: 'blocked', headline: '', items: [{ text: '第 9 棒待复核' }] }, oldGo), [['res'], ['acc']], '旧任务：全自动的结果；新任务：验收没过');
   assert.deepEqual(run({ state: 'working', headline: '', items: [] }, oldGo), [['res'], []], '新任务还在做：没有终点');
+  // 新任务全自动做完、验收通过，之后又退回了（或加了一步）：验收回到「还在做」，终点不能还写着当时的「验收通过」
+  const newGo = { id: 'g2', mode: 'auto', status: 'done', startedAt: '2026-09-25T14:20:00Z', updatedAt: '2026-09-25T14:30:00Z', result: '验收通过：清单 2/2' };
+  assert.deepEqual(run({ state: 'accepted', headline: '清单 2/2 全部打勾', items: [] }, newGo), [[], ['res']], '做完了：新任务的终点是这次全自动');
+  assert.deepEqual(run({ state: 'working', headline: '', items: [] }, newGo), [[], []], '退回之后：没有终点');
+  assert.deepEqual(run({ state: 'working', headline: '', items: [] }, { ...newGo, status: 'stopped', result: '全自动已停止' }), [[], ['res']], '停下来的那次照样画（它确实停了）');
   assert.deepEqual(run(null, null), [[], []]);
   assert.deepEqual(run(null, { ...oldGo, mode: 'single', status: 'stopped', result: '已停止。' }), [[], []], '只做一棒停了：那一棒的小条上写了，不画终点');
 });

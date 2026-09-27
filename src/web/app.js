@@ -470,13 +470,13 @@ function q(path) {
   return S.dir ? `${path}${path.includes('?') ? '&' : '?'}dir=${encodeURIComponent(S.dir)}` : path;
 }
 
-/** 按钮点下去：请求期间转圈，出错弹提示，做完刷新。 */
 /** 失败的提示：「没能 X：原因」（原因去掉句末的句号）。说法见 docs/设计说明.md「结果怎么说」。 */
 function fail(what, e) {
   const why = String((e && e.message) || e || '').trim().replace(/[。.]+$/, '');
   toast(what ? `没能${what}：${why || '出错'}` : why || '出错', { bad: true });
 }
 
+/** 按钮点下去：请求期间转圈，出错弹提示，做完刷新。 */
 async function act(btn, fn, okText) {
   if (btn) {
     btn.classList.add('busy');
@@ -1033,10 +1033,17 @@ function sideBtn(side) {
 
 // ---------- 数据 ----------
 
+/** 连不上接力台：刚在设置里点了关闭，就写「已关闭接力台」（不是出了问题，不标红点、不给重试）。 */
 function setOffline(v) {
-  if (S.offline === v) return;
+  if (!v) S.closed = false;
+  const closed = v && !!S.closed;
+  if (S.offline === v && S.shownClosed === closed) return;
   S.offline = v;
-  if (CE.offline) CE.offline.hidden = !v;
+  S.shownClosed = closed;
+  if (!CE.offline) return;
+  CE.offline.hidden = !v;
+  CE.offlineText.textContent = closed ? '已关闭接力台' : '连不上接力台';
+  CE.offlineDot.hidden = CE.offlineRetry.hidden = closed;
 }
 
 /** force：刚做完一个操作，一定要按接力台的最新状态重画（定时刷新时没变就什么都不做）。 */
@@ -1263,6 +1270,12 @@ function runState() {
   const waiting = !running && (p.now.kind === 'waiting' || (!!g && g.status === 'waiting'));
   const native = !running && !waiting && p.now.kind === 'native';
   return { running, waiting, native, g, cur: g && g.current };
+}
+
+/** 当前任务已经验收通过（再点全自动没有要做的）。 */
+function accepted() {
+  const a = S.st.project.acceptance;
+  return !!a && a.state === 'accepted';
 }
 
 // ---------- 左栏 ----------
@@ -1533,7 +1546,10 @@ let streamThread = null;
 let stick = true;
 
 function buildCenter() {
-  CE.offline = h('div', { class: 'offline', hidden: true }, h('span', { class: 'rd' }), '连不上接力台', h('button', { class: 'btn small', onclick: () => refresh(true) }, '重试'));
+  CE.offlineDot = h('span', { class: 'rd' });
+  CE.offlineText = h('span', null, '连不上接力台');
+  CE.offlineRetry = h('button', { class: 'btn small', onclick: () => refresh(true) }, '重试');
+  CE.offline = h('div', { class: 'offline', hidden: true }, CE.offlineDot, CE.offlineText, CE.offlineRetry);
   CE.cfgBad = h('div', { class: 'offline cfg-bad', hidden: true });
   CE.bar = h('header', { class: 'bar' });
   CE.tabs = h('div', { class: 'tabs', role: 'tablist', hidden: true });
@@ -1689,6 +1705,7 @@ function renderBar(t) {
     p.now.stint,
     g && [g.id, g.status, g.mode, g.current && g.current.stint, g.current && g.current.kind, g.current && g.current.label, g.waitingUntil],
     p.pending.map((s) => s.id),
+    p.acceptance && p.acceptance.state,
     members().map((m) => [m.name, m.cooling, m.canWork]),
     UI.noLeft,
     UI.noRight,
@@ -1706,7 +1723,7 @@ function renderBar(t) {
     if (run.running || run.waiting) {
       ctl.push(h('button', { class: 'btn primary', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), h('span', { class: 'lbl' }, '停止')));
     } else {
-      const why = p.task.empty ? '还没有任务' : !ready().length ? '没有可用的成员' : '';
+      const why = p.task.empty ? '还没有任务' : accepted() ? '验收通过' : !ready().length ? '没有可用的成员' : '';
       const word = pageOf(t) === 'dispatch' ? '派活' : '全自动';
       ctl.push(
         h(
@@ -1940,7 +1957,7 @@ async function startWork(path, body) {
     return await api(path, body);
   } catch (e) {
     if (e.code !== 'native-active') throw e;
-    if (!(await confirmSheet('有 AI 还在改这个文件夹', e.message, '换人'))) throw Object.assign(new Error('没有换人。'), { code: 'cancelled' });
+    if (!(await confirmSheet('文件夹刚才还在改', e.message, '换人'))) throw Object.assign(new Error('没有换人。'), { code: 'cancelled' });
     return api(path, { ...body, force: true });
   }
 }
@@ -2051,7 +2068,9 @@ function streamItems(t) {
   // 线路的终点：最新的任务看验收；全自动的结果放在它开始时的那段对话里（换了任务之后，上一个任务的「验收通过」不能跑到新任务里）。
   // 只做一棒停了、出错，那一棒的小条上已经写了，不再画终点。
   const g = p.go;
-  const res = g && g.mode === 'auto' && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && S.dismissed !== g.id && inRange(rangeOf(t), msOf(g.startedAt || g.updatedAt)) ? g : null;
+  // 全自动当时做完了，后来退回、加了一步：验收已经不是「通过」，那句「验收通过」不能再挂在终点上。
+  const outdated = g && g.status === 'done' && latest && !!p.acceptance && !accepted();
+  const res = g && g.mode === 'auto' && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && !outdated && S.dismissed !== g.id && inRange(rangeOf(t), msOf(g.startedAt || g.updatedAt)) ? g : null;
   const a = latest && p.acceptance && p.acceptance.state !== 'working' ? p.acceptance : null;
   if (res || a) {
     const last = stints.length ? Math.max(...stints.map((s) => msOf(s.endedAt || s.startedAt))) : msOf(t.from);
@@ -2155,7 +2174,7 @@ function updateLive() {
   const g = S.st.project.go;
   for (const pre of CE.stream.querySelectorAll('.tail')) {
     const id = Number(pre.dataset.stint);
-    const text = g && g.current && g.current.stint === id ? g.logTail || '' : '';
+    const text = g && g.current && g.current.stint === id ? (g.logTail || '').split('\n').filter((l) => !/^(\d\d:\d\d:\d\d )?[#$] /.test(l)).join('\n').trim() : '';
     if (pre.textContent === text) continue;
     const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
     pre.textContent = text;
@@ -3583,7 +3602,7 @@ const idleNow = () => !runState().running && !runState().waiting;
 const SLASH = [
   { key: 'step', label: '加一步', icon: 'plus', needsText: true, placeholder: '这一步', run: (text) => act(null, () => api('/api/task/edit', { op: 'add', text }), '已加入清单') },
   { key: 'go', label: '接着做', icon: 'play', when: () => idleNow() && !!defaultWorker(), run: goDefault },
-  { key: 'auto', label: '全自动', icon: 'bolt', when: () => idleNow() && ready().length > 0, run: () => act(null, () => startWork('/api/auto', {}), '已开始全自动') },
+  { key: 'auto', label: '全自动', icon: 'bolt', when: () => idleNow() && ready().length > 0 && !accepted(), run: () => act(null, () => startWork('/api/auto', {}), '已开始全自动') },
   { key: 'review', label: '复核', icon: 'review', when: () => idleNow() && S.st.project.pending.length > 0 && !!reviewer(), run: reviewNow },
   { key: 'stop', label: '停止', icon: 'stop', when: () => !idleNow(), run: stopNow },
   { key: 'task', label: '新任务', icon: 'plus', run: newThread },
@@ -4480,8 +4499,19 @@ function settingsBody(tab, redraw) {
           onclick: async (e) => {
             const b = e.currentTarget;
             if (!(await confirmSheet('关闭接力台？', '正在进行的调度会停止。', '关闭'))) return;
-            await act(b, () => api('/api/quit', {}), '已关闭接力台');
-            setTimeout(() => setOffline(true), 600);
+            b.disabled = true;
+            try {
+              await api('/api/quit', {});
+            } catch (err) {
+              // 接力台先回话再退出；回话前就断了也算关上了
+              if (!(err instanceof TypeError)) {
+                b.disabled = false;
+                return fail('关闭接力台', err);
+              }
+            }
+            S.closed = true;
+            for (const close of [...sheetStack].reverse()) close();
+            setOffline(true);
           },
         },
         icon('power'),
@@ -4769,18 +4799,18 @@ function paletteItems(query, scope) {
       ]
         .filter(([v]) => v !== S.view)
         .map(([v, label, ic]) => ({ label, icon: ic, run: () => setView(v) })),
-      { label: '新任务', icon: 'plus', run: newThread },
-      { label: '新群聊', icon: 'plus', run: newChat },
+      p.pick ? null : { label: '新任务', icon: 'plus', run: newThread },
+      p.pick ? null : { label: '新群聊', icon: 'plus', run: newChat },
       p.init && !p.task.empty && !run.running && ready().length ? { label: '接着做', icon: 'play', run: goDefault } : null,
-      ...(p.init && !p.task.empty && !run.running && ready().length ? [pageOf(threads().at(-1)) === 'dispatch' ? '派活' : '全自动'] : []).map((word) => ({ label: word, icon: 'bolt', run: () => act(null, () => startWork('/api/auto', {}), `已开始${word}`) })),
+      ...(p.init && !p.task.empty && !run.running && ready().length && !accepted() ? [pageOf(threads().at(-1)) === 'dispatch' ? '派活' : '全自动'] : []).map((word) => ({ label: word, icon: 'bolt', run: () => act(null, () => startWork('/api/auto', {}), `已开始${word}`) })),
       p.pending.length && reviewer() ? { label: '复核', icon: 'review', run: reviewNow } : null,
       run.running || run.waiting ? { label: '停止', icon: 'stop', kbd: '⌘.', run: stopNow } : null,
       p.init ? { label: '编辑任务', icon: 'pencil', run: editTaskRaw } : null,
       p.init ? { label: '接力本', icon: 'book', run: openBrief } : null,
       p.init ? { label: '对账', icon: 'sync', run: snapNow } : null,
       { label: '打开文件夹', icon: 'folder', run: chooseFolder },
-      { label: '在访达中显示', icon: 'folder', run: () => reveal('') },
-      { label: '复制开场白', icon: 'copy', run: copyHint },
+      p.pick ? null : { label: '在访达中显示', icon: 'folder', run: () => reveal('') },
+      p.pick ? null : { label: '复制开场白', icon: 'copy', run: copyHint },
       { label: '成员', icon: 'user', run: () => openSettings('members') },
       { label: '设置', icon: 'sliders', run: () => openSettings() },
       { label: UI.noLeft ? '显示左栏' : '隐藏左栏', icon: 'sideL', kbd: '⌘B', run: toggleLeft },
