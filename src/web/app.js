@@ -414,7 +414,7 @@ const S = {
   editingTitle: false,
   dismissed: store.get('dismissed') || '',
   /** 哪一页：relay 接力（任务、一棒一棒），chat 群聊（讨论、投票）。 */
-  view: store.get('view') === 'chat' ? 'chat' : 'relay',
+  view: ['relay', 'dispatch', 'chat'].includes(store.get('view')) ? store.get('view') : 'relay',
   /** 看的是哪一段群聊：null = 正在用的，其余是存档的 id。 */
   chat: null,
   /** 存档的群聊（按 id 取回来的记录）。 */
@@ -1137,6 +1137,34 @@ function threads() {
   return (S.st && S.st.project.threads) || [];
 }
 
+/** 这一页的任务：派活页只列在派活页写的，接力页列别的（线路还是按全部任务切，见 rangeOf）。 */
+function pageThreads() {
+  const dispatch = S.view === 'dispatch';
+  return threads().filter((t) => (t.mode === 'dispatch') === dispatch);
+}
+
+/** 这个任务在哪一页。 */
+function pageOf(t) {
+  return t && t.mode === 'dispatch' ? 'dispatch' : 'relay';
+}
+
+/** 「3.2 万」「860」：token 数。 */
+function tokenText(n) {
+  return n >= 10000 ? `${(n / 10000).toFixed(1)} 万` : String(n);
+}
+
+/** 这几棒强模型、弱模型各用了多少 token（工具自己报的）；有没报用量的写出几棒。 */
+function tokenSplit(ids) {
+  const sum = { strong: 0, weak: 0 };
+  let missing = 0;
+  for (const s of ids.map(stintById).filter(Boolean)) {
+    if (!s.tokens) missing++;
+    else sum[s.who.tier === 'weak' ? 'weak' : 'strong'] += s.tokens.input + s.tokens.output;
+  }
+  const bits = [sum.strong ? `强模型 ${tokenText(sum.strong)}` : '', sum.weak ? `弱模型 ${tokenText(sum.weak)}` : ''].filter(Boolean);
+  return bits.length ? `${bits.join('，')} token${missing ? `（${missing} 棒没报用量）` : ''}` : '';
+}
+
 function voteBorn(v) {
   const n = parseInt(String(v.id).split('-')[1], 36);
   return Number.isFinite(n) ? n : msOf(v.ts);
@@ -1159,7 +1187,7 @@ function blank(t) {
 }
 
 function selectedThread() {
-  const ts = threads();
+  const ts = pageThreads();
   return ts.find((t) => t.id === S.thread) || ts[ts.length - 1] || null;
 }
 
@@ -1180,7 +1208,7 @@ function centerMode() {
 }
 
 function selectThread(t) {
-  showView('relay');
+  showView(pageOf(t));
   S.draft = false;
   S.thread = t.current ? null : t.id;
   S.tab = 0;
@@ -1190,7 +1218,7 @@ function selectThread(t) {
 }
 
 function newThread() {
-  showView('relay');
+  showView(S.view === 'dispatch' ? 'dispatch' : 'relay');
   S.draft = true;
   S.thread = null;
   S.tab = 0;
@@ -1199,15 +1227,18 @@ function newThread() {
   C.ta.focus();
 }
 
-// ---------- 两页：接力、群聊 ----------
+// ---------- 三页：接力、派活、群聊 ----------
+
+const VIEWS = ['relay', 'dispatch', 'chat'];
 
 /** 换一页（还没画）：记下从哪边切过来的，画完后新内容从那一边滑进来（renderAll 里的 swapIn）。 */
 function showView(v) {
   if (S.view === v) return false;
+  S.swap = VIEWS.indexOf(v) > VIEWS.indexOf(S.view) ? 1 : -1;
   S.view = v;
   store.set('view', v);
   S.tab = 0;
-  S.swap = v === 'chat' ? 1 : -1;
+  S.draft = false;
   return true;
 }
 
@@ -1253,7 +1284,7 @@ function renderLeft() {
   const st = S.st;
   const p = st.project;
   const chat = S.view === 'chat';
-  const ts = threads();
+  const ts = pageThreads();
   const sig = JSON.stringify([
     S.view,
     st.projects,
@@ -1289,7 +1320,7 @@ function drawLeft() {
   const st = S.st;
   const p = st.project;
   const chat = S.view === 'chat';
-  const ts = threads();
+  const ts = pageThreads();
   const box = $('#left-in');
   if (!LE.brand) {
     LE.news = h('span', { class: 'news', hidden: true });
@@ -1298,6 +1329,7 @@ function drawLeft() {
       { class: 'seg view', role: 'tablist', 'aria-label': '页面' },
       [
         ['relay', '接力'],
+        ['dispatch', '派活'],
         ['chat', '群聊'],
       ].map(([k, label]) => h('button', { role: 'tab', 'data-view': k, onclick: () => setView(k) }, label, k === 'chat' ? LE.news : null))
     );
@@ -1316,7 +1348,7 @@ function drawLeft() {
       list.push(sessionEl({ id: '', title: talkTitle(S.talk) || '新群聊', at: talkAt(S.talk) }));
       for (const x of S.talk.sessions || []) list.push(sessionEl(x));
     } else if (cur && p.init) {
-      if (S.draft || blank(ts[ts.length - 1])) list.push(h('button', { class: 'thread draft', 'data-id': 'draft', onclick: newThread }, h('span', { class: 't' }, '新任务'), h('span', { class: 'when' }, '现在')));
+      if (S.draft || !ts.length || blank(ts[ts.length - 1])) list.push(h('button', { class: 'thread draft', 'data-id': 'draft', onclick: newThread }, h('span', { class: 't' }, '新任务'), h('span', { class: 'when' }, '现在')));
       for (const t of [...ts].reverse()) if (!blank(t)) list.push(threadEl(t));
     }
     if (swap) list.forEach((el, i) => enterAnim(el, i));
@@ -1598,15 +1630,15 @@ function renderHero(mode) {
   const setup = mode === 'setup' || mode === 'chat-setup';
   const chat = mode === 'chat-new' || mode === 'chat-setup';
   const pend = setup || chat ? [] : p.pending;
-  const canCancel = mode === 'new' && S.draft && threads().some((t) => !blank(t));
-  const sig = JSON.stringify([mode, p.root, p.name, pend.map((s) => [s.id, s.summary]), UI.noLeft, UI.noRight, narrow(), canCancel]);
+  const canCancel = mode === 'new' && S.draft && pageThreads().some((t) => !blank(t));
+  const sig = JSON.stringify([mode, S.view, p.root, p.name, pend.map((s) => [s.id, s.summary]), UI.noLeft, UI.noRight, narrow(), canCancel]);
   if (sig !== heroSig) {
     heroSig = sig;
     const s = pend[0];
     const head = h(
       'div',
       { class: 'hero-head' },
-      h('div', null, h('h1', null, setup ? p.name : chat ? '新群聊' : '新任务'), h('span', { class: 'cap', 'data-tip': setup ? p.root : null }, setup ? `未接入 · ${shortPath(p.root)}` : p.name)),
+      h('div', null, h('h1', null, setup ? p.name : chat ? '新群聊' : '新任务'), h('span', { class: 'cap', 'data-tip': setup ? p.root : null }, setup ? `未接入 · ${shortPath(p.root)}` : !chat && S.view === 'dispatch' ? `${p.name} · 派活` : p.name)),
       setup ? h('button', { class: 'btn line', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已接入').then(() => loadTree()) }, '接入') : null
     );
     const notice = s ? h('button', { class: 'notice', onclick: () => jumpTo(s.id) }, h('span', { class: 'rd' }), h('b', null, `第 ${s.id} 棒待复核${pend.length > 1 ? `（共 ${pend.length} 棒）` : ''}`), h('span', { class: 'ell' }, s.summary || '')) : null;
@@ -1644,7 +1676,7 @@ function renderBar(t) {
   const run = runState();
   const g = run.g;
   const latest = !!t.current;
-  const n = threads().indexOf(t) + 1;
+  const n = pageThreads().indexOf(t) + 1;
   const sig = JSON.stringify([
     t.id,
     n,
@@ -1675,15 +1707,16 @@ function renderBar(t) {
       ctl.push(h('button', { class: 'btn primary', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), h('span', { class: 'lbl' }, '停止')));
     } else {
       const why = p.task.empty ? '还没有任务' : !ready().length ? '没有可用的成员' : '';
+      const word = pageOf(t) === 'dispatch' ? '派活' : '全自动';
       ctl.push(
         h(
           'span',
           { class: 'split' },
           h(
             'button',
-            { class: 'btn primary', disabled: !!why, 'data-tip': why || null, onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), '已开始全自动') },
+            { class: 'btn primary', disabled: !!why, 'data-tip': why || null, onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), `已开始${word}`) },
             icon('play'),
-            h('span', { class: 'lbl' }, '全自动')
+            h('span', { class: 'lbl' }, word)
           ),
           h('button', { class: 'btn primary', 'aria-label': '只做一棒', 'data-tip': '只做一棒', 'aria-haspopup': 'menu', onclick: (e) => whoMenu(e.currentTarget) }, icon('down'))
         )
@@ -1703,12 +1736,12 @@ function renderBar(t) {
 function statusEl(run) {
   if (run.running) {
     const c = run.cur;
-    const auto = run.g && run.g.mode === 'auto';
+    const auto = run.g && run.g.mode === 'auto' ? (run.g.dispatch ? '派活' : '全自动') : '';
     return h(
       'span',
-      { class: 'status live', 'data-tip': c ? `${auto ? '全自动 · ' : ''}${nameOf(c.label)}` : null },
+      { class: 'status live', 'data-tip': c ? `${auto ? `${auto} · ` : ''}${nameOf(c.label)}` : null },
       h('span', { class: 'dot' }),
-      auto ? h('span', { class: 'w' }, '全自动') : null,
+      auto ? h('span', { class: 'w' }, auto) : null,
       c ? tile({ name: c.member, label: c.label }, 's16') : null,
       h('span', { class: 'w' }, c ? KIND_WORD[c.kind] || '干活中' : '进行中'),
       c ? h('span', { class: 'num', 'data-since': c.since }, elapsed(c.since)) : null
@@ -2005,7 +2038,7 @@ function streamItems(t) {
   const latest = !!t.current;
   const items = [];
   const title = latest ? p.task.title : t.title;
-  const n = threads().indexOf(t) + 1;
+  const n = pageThreads().indexOf(t) + 1;
   if (title) {
     // 正在改标题：定时刷新不重画它
     items.push({ key: `task:${t.id}`, at: -Infinity, keep: latest && S.editingTitle, sig: JSON.stringify(latest ? [title, p.task.body, p.task.items, p.task.rules, t.from, n] : [title, t.from, n]), make: () => headEl(t, latest) });
@@ -2259,7 +2292,7 @@ function verdictEl(g, a) {
     h('span', { class: 'no', 'aria-hidden': 'true' }, ic === 'unknown' ? '?' : icon(ic)),
     a ? h('button', { class: 'vt', 'aria-haspopup': 'dialog', onclick: acceptPanel }, body) : h('div', { class: 'vt' }, body),
     why ? h('p', { class: 'why' }, why) : null,
-    g ? h('span', { class: 'cap' }, [clock(g.updatedAt), g.mode === 'auto' ? '全自动' : '', g.stints && g.stints.length ? `${g.stints.length} 棒` : '', lasted(g.startedAt, g.updatedAt)].filter(Boolean).join(' · ')) : null,
+    g ? h('span', { class: 'cap' }, [clock(g.updatedAt), g.mode === 'auto' ? (g.dispatch ? '派活' : '全自动') : '', g.stints && g.stints.length ? `${g.stints.length} 棒` : '', lasted(g.startedAt, g.updatedAt), tokenSplit(g.stints || [])].filter(Boolean).join(' · ')) : null,
     g
       ? iconBtn(
           '收起',
@@ -2315,7 +2348,7 @@ function spanOf(s) {
   if (s.status === 'working') return h('span', { class: 'tm', 'data-since': s.startedAt }, elapsed(s.startedAt));
   const from = dayClock(s.startedAt);
   const to = s.endedAt ? clock(s.endedAt) : '';
-  return h('span', { class: 'tm' }, `${from}${to && to !== clock(s.startedAt) ? `–${to}` : ''}${s.endedAt ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}`);
+  return h('span', { class: 'tm' }, `${from}${to && to !== clock(s.startedAt) ? `–${to}` : ''}${s.endedAt ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}${s.tokens ? ` · ${tokenText(s.tokens.input + s.tokens.output)} token` : ''}`);
 }
 
 /** 一棒：钉在线路上的一张小条。没交接、身份不明的是虚线；什么都没干的只留一行。 */
@@ -2907,7 +2940,7 @@ function renderTabs() {
   tabsSig = sig;
   const chat = S.view === 'chat';
   CE.tabs.replaceChildren(
-    h('button', { class: 'tab chat-tab', role: 'tab', 'aria-selected': String(S.tab === 0), onclick: () => ((S.tab = 0), renderCenter(), scrollBottom()) }, icon(chat ? 'chat' : 'route'), chat ? '群聊' : '任务'),
+    h('button', { class: 'tab chat-tab', role: 'tab', 'aria-selected': String(S.tab === 0), onclick: () => ((S.tab = 0), renderCenter(), scrollBottom()) }, icon(chat ? 'chat' : S.view === 'dispatch' ? 'list' : 'route'), chat ? '群聊' : S.view === 'dispatch' ? '派活' : '任务'),
     ...S.tabs.map((t, i) =>
       h(
         'div',
@@ -3190,7 +3223,7 @@ function buildComposer() {
       },
     },
     h('span', { class: 'track' }),
-    '全自动'
+    (C.autoWord = h('span', null, '全自动'))
   );
   C.send = h('button', { class: 'send', 'aria-label': '发送', 'data-tip': '发送', 'data-kbd': '↵', onclick: send }, icon('up'));
   C.tools = h('div', { class: 'tools' }, C.plus, C.seg, C.auto, C.pick, h('span', { class: 'sp' }), C.send);
@@ -3278,6 +3311,7 @@ function updateComposer() {
   C.plus.hidden = !!S.slash;
   C.auto.hidden = !task;
   C.auto.setAttribute('aria-checked', String(S.autoAfter));
+  C.autoWord.textContent = S.view === 'dispatch' ? '派活' : '全自动';
   C.optRow.hidden = !vote || !!S.slash;
   for (const b of C.seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === S.mode));
   C.pill.hidden = !S.slash;
@@ -3711,8 +3745,10 @@ async function createTask(text) {
   const p = S.st.project;
   if (!p.init) await api('/api/init', {});
   const refs = S.files.map((f) => `\`${f}\``).join(' ');
-  await api('/api/task', { text: [lines[0].trim(), ...body, refs].filter(Boolean).join('\n'), steps });
-  if (S.autoAfter) await startWork('/api/auto', {}).catch((e) => e.code !== 'cancelled' && fail('开始全自动', e));
+  // 派活页写的任务：全自动用派活（强模型拆、弱模型做）
+  const dispatch = S.view === 'dispatch';
+  await api('/api/task', { text: [lines[0].trim(), ...body, refs].filter(Boolean).join('\n'), steps, ...(dispatch ? { mode: 'dispatch' } : {}) });
+  if (S.autoAfter) await startWork('/api/auto', {}).catch((e) => e.code !== 'cancelled' && fail(dispatch ? '开始派活' : '开始全自动', e));
   S.draft = false;
   S.thread = null;
   S.autoAfter = false;
@@ -4358,17 +4394,6 @@ function settingsBody(tab, redraw) {
       h(
         'div',
         { class: 'row' },
-        h('span', { class: 'lbl' }, '全自动'),
-        h(
-          'div',
-          { class: 'seg', role: 'group', 'aria-label': '全自动' },
-          h('button', { 'aria-pressed': String(!s.dispatch), 'data-tip': '按顺序，谁有额度谁做', onclick: () => s.dispatch && save({ dispatch: false }) }, '接力'),
-          h('button', { 'aria-pressed': String(!!s.dispatch), 'data-tip': '强模型拆成小步，弱模型一棒做一步，强模型每 3 棒复核一次', onclick: () => !s.dispatch && save({ dispatch: true }) }, '派活')
-        )
-      ),
-      h(
-        'div',
-        { class: 'row' },
         h('span', { class: 'lbl' }, '权限'),
         h(
           'div',
@@ -4715,11 +4740,17 @@ function paletteItems(query, scope) {
   };
   if (scope !== 'files') {
     const cmds = [
-      { label: S.view === 'chat' ? '接力' : '群聊', icon: S.view === 'chat' ? 'route' : 'chat', run: () => setView(S.view === 'chat' ? 'relay' : 'chat') },
+      ...[
+        ['relay', '接力', 'route'],
+        ['dispatch', '派活', 'list'],
+        ['chat', '群聊', 'chat'],
+      ]
+        .filter(([v]) => v !== S.view)
+        .map(([v, label, ic]) => ({ label, icon: ic, run: () => setView(v) })),
       { label: '新任务', icon: 'plus', run: newThread },
       { label: '新群聊', icon: 'plus', run: newChat },
       p.init && !p.task.empty && !run.running && ready().length ? { label: '接着做', icon: 'play', run: goDefault } : null,
-      p.init && !p.task.empty && !run.running && ready().length ? { label: '全自动', icon: 'bolt', run: () => act(null, () => startWork('/api/auto', {}), '已开始全自动') } : null,
+      ...(p.init && !p.task.empty && !run.running && ready().length ? [pageOf(threads().at(-1)) === 'dispatch' ? '派活' : '全自动'] : []).map((word) => ({ label: word, icon: 'bolt', run: () => act(null, () => startWork('/api/auto', {}), `已开始${word}`) })),
       p.pending.length && reviewer() ? { label: '复核', icon: 'review', run: reviewNow } : null,
       run.running || run.waiting ? { label: '停止', icon: 'stop', kbd: '⌘.', run: stopNow } : null,
       p.init ? { label: '编辑任务', icon: 'pencil', run: editTaskRaw } : null,
@@ -4735,7 +4766,7 @@ function paletteItems(query, scope) {
     ].filter(Boolean);
     pick(cmds, '操作', qy ? 6 : 8);
     if (p.init && !p.task.empty) pick(ready().map((m) => ({ label: `派给 ${memberName(m)}`, alt: `${m.name} ${m.tool || ''}`, tile: tile(m, 's20'), sub: m.tool || '', run: () => goWith(null, m) })), '成员', 5);
-    pick([...threads()].reverse().filter((t) => !blank(t)).map((t) => ({ label: t.title || '未命名', icon: 'route', sub: when(lastActive(t)), run: () => selectThread(t) })), '任务', 6);
+    pick([...threads()].reverse().filter((t) => !blank(t)).map((t) => ({ label: t.title || '未命名', icon: pageOf(t) === 'dispatch' ? 'list' : 'route', sub: when(lastActive(t)), run: () => selectThread(t) })), '任务', 6);
     const chats = [talkHas(S.talk) ? { id: null, title: talkTitle(S.talk) || '群聊', at: talkAt(S.talk) } : null, ...(S.talk.sessions || [])].filter(Boolean);
     pick(chats.map((x) => ({ label: x.title, icon: 'chat', sub: x.at ? when(x.at) : '', run: () => selectChat(x.id) })), '群聊', 6);
     pick(S.st.projects.filter((x) => !x.current).map((x) => ({ label: x.name, icon: 'folder', sub: tildify(x.root), alt: x.root, run: () => switchProject(x.root) })), '项目', 5);

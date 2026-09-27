@@ -89,7 +89,7 @@ test('网页的图标：规则里用到的每家都画了，几何图形也都�
 });
 
 test('网页：全自动的结果只出现在它开始时的那段对话里（换了任务，上一个任务的「验收通过」不跑到新任务里）', () => {
-  const code = ['msOf', 'rangeOf', 'inRange', 'streamItems'].map(pick).join('\n\n');
+  const code = ['msOf', 'rangeOf', 'inRange', 'pageThreads', 'streamItems'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
   vm.runInNewContext(
     `
@@ -196,7 +196,7 @@ ${code}
 });
 
 test('网页线路的终点：最新的任务看验收（做着的时候没有终点）；更早的任务看当时全自动的结果', () => {
-  const code = ['msOf', 'rangeOf', 'inRange', 'streamItems'].map(pick).join('\n\n');
+  const code = ['msOf', 'rangeOf', 'inRange', 'pageThreads', 'streamItems'].map(pick).join('\n\n');
   const run = (acceptance: unknown, go: unknown) => {
     const ctx: Record<string, unknown> = {};
     vm.runInNewContext(
@@ -267,4 +267,19 @@ test('网页的一棒：没成的（出错、额度用完、中途停了）卡�
   assert.equal(summaryOf({ status: 'failed', note: '退出码 1，原话：Cannot use this model', handoff: 'a.md' }).text, '退出码 1，原话：Cannot use this model');
   assert.equal(summaryOf({ status: 'quota', note: '额度用完，15:00 恢复', handoff: 'a.md' }).text, '额度用完，15:00 恢复');
   assert.equal(summaryOf({ status: 'handed', note: '你标记过不用复核', handoff: 'a.md' }).text, '交接里没写做了什么', '交了的一棒：说明不顶替摘要');
+});
+
+test('网页的三页：派活页只列在派活页写的任务，接力页列别的；收尾写强、弱模型各用了多少 token', () => {
+  const ctx: Record<string, unknown> = {};
+  vm.runInNewContext(
+    `${['threads', 'pageThreads', 'pageOf', 'tokenText', 'tokenSplit'].map(pick).join('\n\n')}
+const S = { view: 'dispatch', st: { project: { threads: [{ id: 't0' }, { id: 't1', mode: 'dispatch' }, { id: 't2' }] } } };
+const stints = { 1: { who: { tier: 'strong' }, tokens: { input: 30000, output: 2000 } }, 2: { who: { tier: 'weak' }, tokens: { input: 150000, output: 9000 } }, 3: { who: { tier: 'strong' } } };
+const stintById = (id) => stints[id];
+const dispatch = pageThreads().map((t) => t.id);
+S.view = 'relay';
+result = { dispatch, relay: pageThreads().map((t) => t.id), page: pageOf({ mode: 'dispatch' }), split: tokenSplit([1, 2, 3]), small: tokenText(860) };`,
+    ctx
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.result)), { dispatch: ['t1'], relay: ['t0', 't2'], page: 'dispatch', split: '强模型 3.2 万，弱模型 15.9 万 token（1 棒没报用量）', small: '860' });
 });

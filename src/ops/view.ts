@@ -48,6 +48,7 @@ export interface StintView {
   targets?: number[];
   log?: string;
   quotaUntil?: string;
+  tokens?: Stint['tokens'];
 }
 
 /** 一段对话 = 一个任务：从写下它（或接入）开始，到换下一个任务为止。 */
@@ -61,6 +62,8 @@ export interface ThreadView {
   stints: number[];
   pending: number;
   current: boolean;
+  /** 在「派活」页写的任务。 */
+  mode?: 'dispatch';
 }
 
 export interface ProjectView {
@@ -158,6 +161,7 @@ function toView(s: Stint, rolledBack: ReadonlySet<number>, summary = s.summary ?
     ...(s.targets ? { targets: s.targets } : {}),
     ...(s.log ? { log: s.log } : {}),
     ...(s.quotaUntil ? { quotaUntil: s.quotaUntil } : {}),
+    ...(s.tokens ? { tokens: s.tokens } : {}),
   };
 }
 
@@ -177,9 +181,9 @@ export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadVie
     }
   }
   // 之后每一段：被换掉时记下的标题（中途改过标题的，以最后的为准）；最新一段用任务文件里现在的。
-  const spans = [
+  const spans: { from: string; title: string; mode?: 'dispatch' }[] = [
     { from: v.init.ts, title: first },
-    ...changes.map((e, i) => ({ from: e.ts, title: i === last - 1 ? task.title || e.title : changes[i + 1].prev || e.title })),
+    ...changes.map((e, i) => ({ from: e.ts, title: i === last - 1 ? task.title || e.title : changes[i + 1].prev || e.title, ...(e.mode ? { mode: e.mode } : {}) })),
   ];
   const out: ThreadView[] = [];
   let carry: string | null = null;
@@ -206,6 +210,7 @@ export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadVie
       stints: mine.map((s) => s.id),
       pending: mine.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack).length,
       current,
+      ...(sp.mode ? { mode: sp.mode } : {}),
     });
   });
   return out;
@@ -285,7 +290,7 @@ export function statusLines(root: string): string[] {
   const pv = projectView(root);
   if (!pv.init) return ['这个文件夹还没接入接力台。执行 relay init，或者在网页里点「接入」。'];
   const out: string[] = [];
-  out.push(`任务：${pv.task.empty ? '（还没写）' : pv.task.title}${pv.task.total ? `（${pv.task.done}/${pv.task.total}${pv.task.complete ? '，全部打勾' : ''}）` : ''}`);
+  out.push(`任务${pv.threads.at(-1)?.mode === 'dispatch' ? '（派活）' : ''}：${pv.task.empty ? '（还没写）' : pv.task.title}${pv.task.total ? `（${pv.task.done}/${pv.task.total}${pv.task.complete ? '，全部打勾' : ''}）` : ''}`);
   out.push(/^(验收|没法验收)/.test(pv.acceptance.headline) ? pv.acceptance.headline : `验收：${pv.acceptance.headline}`);
   if (pv.config.error) out.push(`配置文件坏了：${pv.config.error}`);
   out.push(`现在：${pv.now.text}`);

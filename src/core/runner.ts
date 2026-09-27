@@ -393,6 +393,19 @@ export function looksLikeNetworkBlip(text: string): boolean {
   return looksOffline(text) || /\b50[234]\b|\b429\b|rate.?limit|overloaded|temporarily unavailable|service unavailable|bad gateway/i.test(text);
 }
 
+/** 一棒的日志里记的 token 用量加起来（每家工具每轮一行「本轮用了 X 输入 / Y 输出 token」）；一行都没有就是没报。 */
+export function usageTotal(log: string): { input: number; output: number } | null {
+  let input = 0;
+  let output = 0;
+  let seen = false;
+  for (const m of log.matchAll(/本轮用了 (\d+) 输入 \/ (\d+) 输出 token/g)) {
+    input += Number(m[1]);
+    output += Number(m[2]);
+    seen = true;
+  }
+  return seen ? { input, output } : null;
+}
+
 /** 工具自己最后报的错：日志里最后一条「出错：」；没有就是标准错误里最后一句像报错的话，再没有就是标准错误的最后一行。 */
 export function lastError(stderrTail: string, log = ''): string {
   const own = toolLines(log)

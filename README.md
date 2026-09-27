@@ -134,7 +134,7 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 
 网页上每个任务的线路终点就是验收：「验收通过」（实心圆圈）、「验收没过」「没法验收」（配置坏了或改动读不到），点开看还差什么。
 
-**派活**（设置 → 调度 → 全自动选「派活」，或者 `relay auto --dispatch`）：让强模型动脑、弱模型动手，省强模型的额度，用掉弱模型花不完的额度。
+**派活**（网页左上角「接力 / 派活 / 群聊」的中间那一页；命令行 `relay task --dispatch "要做什么"` 或 `relay auto --dispatch`）：让强模型动脑、弱模型动手，省强模型的额度，用掉弱模型花不完的额度。派活页只列在这一页写的任务，主按钮叫「派活」；每一棒写着工具自己报的 token 用量，收尾那一行写强模型、弱模型各用了多少。
 
 - 开工前请一位强模型拆解：读代码，把清单改写成弱模型一棒做得完的小步，每步下面写清楚改哪些文件、怎么改、怎么验证（网页上没做的步骤下面用小字显示）。它只写清单，不写代码；
 - 干活只派弱模型，一棒只做清单里的下一步；照写的做不通就写「卡住了」，不自己换做法；
@@ -160,11 +160,11 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 | `relay init ["要做什么"]` | 接入当前文件夹（可以重复执行，缺什么补什么） |
 | `relay status` | 现在怎么样了：任务、进度、谁在做、待复核 |
 | `relay watch` | 一直开着看进度：任务、清单（下一步下面写做法）、谁在做、最近几棒，每 2 秒刷新，Ctrl-C 退出 |
-| `relay task "要做什么" --step 第一步 第二步` | 写下新任务（旧的存档） |
+| `relay task "要做什么" --step 第一步 第二步` | 写下新任务（旧的存档）；`--dispatch` 写成派活的任务 |
 | `relay step` / `relay step add 文字` / `done N` / `undo N` / `remove N` | 看清单、加一步、打勾、去掉勾、删一步 |
 | `relay go [谁]` | 让一个 AI 接着做一棒（不写谁就挑第一个有额度的） |
 | `relay review [谁]` | 请强模型复核所有待复核的棒；`--skip N` 标记第 N 棒不用复核，`--need N` 撤销 |
-| `relay auto ["要做什么"]` | 全自动做完；`--dispatch` 这一次用派活（`--relay` 这一次不用），`--no-wait` 都没额度时不等，`--max 20` 最多接力几棒 |
+| `relay auto ["要做什么"]` | 全自动做完（派活的任务用派活）；`--dispatch` 这一次用派活（`--relay` 这一次不用），`--no-wait` 都没额度时不等，`--max 20` 最多接力几棒 |
 | `relay stop` | 叫停 |
 | `relay diff [N]` | 看第 N 棒改了什么 |
 | `relay rollback N` / `relay rollback --undo` | 退回到第 N 棒之前 / 撤销退回 |
@@ -175,7 +175,7 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 | `relay vote "问题" [--option A B]` | 投票；不带问题显示最近一次，`--cast B` 你也投一票，`--adopt A` 采纳（写进任务的约定） |
 | `relay detect` | 重新识别这台电脑上的 AI 工具和接口 |
 | `relay workers list / add / edit / remove` | 管理成员名单 |
-| `relay settings` | 调度设置：`--mode dispatch`（派活）/ `relay`（接力）、`--level`、`--order`、`--max`、`--no-wait`、`--no-final` |
+| `relay settings` | 调度设置：`--level`、`--order`、`--max`、`--no-wait`、`--no-final` |
 | `relay config` | 项目设置：`--gate "npm test"` 检查命令、`--protect a.txt,config/*.json` 不许改的文件 |
 | `relay doctor` | 体检 |
 

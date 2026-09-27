@@ -112,6 +112,8 @@ export interface Stint {
   activeAt?: string;
   /** 接力台调度的棒：跑它的接力台进程（进程没了还显示进行中，就是接力台中途被关了）。 */
   pid?: number;
+  /** 工具自己报的 token 用量（日志里「本轮用了 X 输入 / Y 输出 token」加起来；没报就没有）。 */
+  tokens?: { input: number; output: number };
   /** 终审棒：结论写在哪（.relay/复核/终审-….md）、写的是什么。 */
   reviewFile?: string;
   verdict?: Verdict;
@@ -174,6 +176,8 @@ export interface TaskEvent {
   prev?: string;
   /** 换任务时的任务清单（副本编号）：下一棒打了哪些勾，和它比。 */
   taskCopy?: string;
+  /** 在「派活」页写的任务：全自动用派活（强模型拆、弱模型做）。 */
+  mode?: 'dispatch';
 }
 
 /** 接力台自己改了项目里的文件（比如更新 AGENTS.md 里的规矩）：从这里重新算，不算到哪一棒头上。 */
@@ -384,6 +388,11 @@ export function markReview(root: string, id: number, review: 'skip' | 'needed', 
   } else {
     saveStint(root, { ...s, review: 'skip', note: [s.note, note?.trim() || '你标记为不用复核。'].filter(Boolean).join(' ') });
   }
+}
+
+/** 当前任务是在哪一页写的：派活页写的用派活，别的都是接力。 */
+export function taskMode(v: LedgerView): 'dispatch' | 'relay' {
+  return [...v.events].reverse().find((e): e is TaskEvent => e.type === 'task')?.mode === 'dispatch' ? 'dispatch' : 'relay';
 }
 
 /** 一棒在做什么：干活、复核、终审、拆解。 */

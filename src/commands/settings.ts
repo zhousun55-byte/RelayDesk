@@ -1,7 +1,6 @@
 import { Command } from 'commander';
 import { loadAutoSettings, saveAutoSettings, type AutoSettings } from '../core/auto-settings';
 import { loadRelayConfig, saveRelayConfig } from '../core/config';
-import { RelayError } from '../core/errors';
 import { requireInit } from '../core/ledger';
 import { refreshBrief } from '../ops/track';
 import { info, ok } from './print';
@@ -11,7 +10,6 @@ import { findRoot } from './relay';
 export function settingsCommand(): Command {
   return new Command('settings')
     .description('调度设置（全机通用，和网页「设置 → 调度」是同一份）。不带选项就显示现在的')
-    .option('--mode <方式>', 'relay（接力：谁有额度谁做）| dispatch（派活：强模型拆、弱模型做）')
     .option('--level <档位>', 'safe（安全）| full（完全放开）')
     .option('--order <名字>', '派活顺序，逗号分隔的成员名')
     .option('--max <棒数>', '全自动最多接力几棒')
@@ -21,9 +19,8 @@ export function settingsCommand(): Command {
     .option('--no-wait', '都没额度时停下')
     .option('--final', '清单全部打勾后请强模型终审')
     .option('--no-final', '不终审')
-    .action((o: { mode?: string; level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean }) => {
+    .action((o: { level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean }) => {
       const patch: Partial<Record<keyof AutoSettings, unknown>> = {};
-      if (o.mode !== undefined) patch.dispatch = o.mode === 'dispatch' ? true : o.mode === 'relay' ? false : badMode(o.mode);
       if (o.level !== undefined) patch.level = o.level;
       if (o.order !== undefined) patch.order = o.order;
       if (o.max !== undefined) patch.maxStints = o.max;
@@ -34,16 +31,11 @@ export function settingsCommand(): Command {
       const changed = Object.keys(patch).length > 0;
       const s = changed ? saveAutoSettings({ ...loadAutoSettings(), ...patch }) : loadAutoSettings();
       if (changed) ok('已保存');
-      info(`全自动：${s.dispatch ? '派活（强模型拆、弱模型做）' : '接力（谁有额度谁做）'}`);
       info(`权限：${s.level === 'full' ? '完全放开' : '安全'}`);
       info(`派活顺序：${s.order.length ? s.order.join('、') : '强的在前、编程工具在前'}`);
       info(`一棒上限：${s.stintTimeoutMin} 分钟；复核上限：${s.reviewTimeoutMin} 分钟；全自动上限：${s.maxStints} 棒`);
       info(`等额度恢复：${s.waitForQuota ? '等' : '不等'}；做完后终审：${s.finalReview ? '终审' : '不终审'}`);
     });
-}
-
-function badMode(v: string): never {
-  throw new RelayError(`不认识的方式「${v}」：只能是 relay 或 dispatch`, 'bad-auto');
 }
 
 /** 项目设置（.relay/config.json，网页「设置 → 项目」）：检查命令、不许改的文件。 */

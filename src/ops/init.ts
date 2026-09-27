@@ -108,7 +108,8 @@ export function liveProjects(): string[] {
 // ---- 换任务 ----
 
 /** 写下新任务（旧的存档），记一笔，从这张快照开始算这件事。 */
-export function newTask(root: string, text: string, items: string[] = []): void {
+/** 写下新任务（旧的存档）。mode = dispatch：在派活页写的，全自动用派活。 */
+export function newTask(root: string, text: string, items: string[] = [], mode?: 'dispatch'): void {
   const t = text.trim();
   if (!t) throw new RelayError('任务是空的', 'no-task');
   const v = loadLedger(root);
@@ -117,6 +118,6 @@ export function newTask(root: string, text: string, items: string[] = []): void 
   const doc = setTask(root, t, items);
   const snap = takeSnapshot(root, '换任务').sha;
   const taskCopy = saveTaskCopy(root);
-  appendLedger(root, { type: 'task', ts: new Date().toISOString(), title: doc.title, snap, prev: before.empty ? '' : before.title, ...(taskCopy ? { taskCopy } : {}) });
+  appendLedger(root, { type: 'task', ts: new Date().toISOString(), title: doc.title, snap, prev: before.empty ? '' : before.title, ...(taskCopy ? { taskCopy } : {}), ...(mode ? { mode } : {}) });
   refreshBrief(root);
 }

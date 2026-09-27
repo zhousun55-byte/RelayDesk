@@ -20,12 +20,10 @@ export interface AutoSettings {
   waitForQuota: boolean;
   /** 任务清单全部打勾后，请强模型把整件事过一遍再算完成。 */
   finalReview: boolean;
-  /** 派活：强模型先把任务拆成小步，弱模型一棒做一步，强模型攒几棒一起复核（强模型只花在拆、复核、终审上）。 */
-  dispatch: boolean;
 }
 
 export function defaultAutoSettings(): AutoSettings {
-  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, dispatch: false };
+  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true };
 }
 
 export function autoSettingsPath(): string {
@@ -65,7 +63,6 @@ export function normalizeAutoSettings(raw: unknown): AutoSettings {
     maxStints: int(o.maxStints, '最多几棒', 1, 100, d.maxStints),
     waitForQuota: bool(o.waitForQuota, d.waitForQuota),
     finalReview: bool(o.finalReview, d.finalReview),
-    dispatch: bool(o.dispatch, d.dispatch),
   };
 }
 

@@ -360,7 +360,7 @@ export function createServer(opts: ServerOptions): http.Server {
     '/api/task': (q, b) => {
       const root = dirOf(q, b);
       requireProject(root);
-      newTask(root, str(b.text) ?? '', strList(b.steps));
+      newTask(root, str(b.text) ?? '', strList(b.steps), b.mode === 'dispatch' ? 'dispatch' : undefined);
       return {};
     },
     '/api/task/save': (q, b) => {
@@ -398,7 +398,7 @@ export function createServer(opts: ServerOptions): http.Server {
     '/api/auto': (q, b) => {
       const root = dirOf(q, b);
       requireProject(root);
-      if (str(b.task)?.trim()) newTask(root, str(b.task)!);
+      if (str(b.task)?.trim()) newTask(root, str(b.task)!, [], b.mode === 'dispatch' ? 'dispatch' : undefined);
       const r = startGo(root, { mode: 'auto', ...(b.force === true ? { force: true } : {}) });
       r.done.catch(() => undefined);
       return { state: r.state };

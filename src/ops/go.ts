@@ -8,7 +8,7 @@ import { loadAutoSettings, normalizeAutoSettings, type AutoSettings } from '../c
 import { errorMessage, RelayError } from '../core/errors';
 import { refreshHarnessModel } from '../core/detect';
 import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from '../core/harness';
-import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
+import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, taskMode, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { pidAlive } from '../core/proc';
 import { allMembers, orderMembers, readyMembers, type MemberInfo } from '../core/members';
@@ -16,7 +16,7 @@ import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
 import { finalPrompt, planPrompt, reviewPrompt, stepPrompt, workPrompt } from '../core/prompts';
 import { clearQuota, detectQuota, markQuota, untilText } from '../core/quota';
-import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, type RunHandle, type RunResult } from '../core/runner';
+import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, usageTotal, type RunHandle, type RunResult } from '../core/runner';
 import { cause, plain } from '../core/cause';
 import { takeSnapshot } from '../core/snap';
 import { memberTier, sameModel, whoOfMember } from '../core/tier';
@@ -25,7 +25,7 @@ import { applyReviews, closeStint, gateStint, projectConfig, projectConfigSafe, 
 /**
  * 接力台调度：替你让某个 AI 接着做一棒；或者「全自动」一直接力下去——
  * 额度用完换下一位，有待复核就先派强模型复核，任务清单全部打勾后请强模型终审，都没额度了就等。
- * 派活（设置里打开）：强模型先把任务拆成小步，干活只派弱模型、一棒一步，攒够 REVIEW_BATCH 棒再请强模型一起复核；
+ * 派活（任务是在「派活」页写的）：强模型先把任务拆成小步，干活只派弱模型、一棒一步，攒够 REVIEW_BATCH 棒再请强模型一起复核；
  * 弱模型都用不了时不换强模型干活，等额度或停下。
  * 一棒一棒都记在账本里，所以随时能停、能接着跑。
  */
@@ -53,6 +53,8 @@ export interface GoState {
   updatedAt: string;
   result?: string;
   level: AutoSettings['level'];
+  /** 这次是派活（强模型拆、弱模型做）。 */
+  dispatch?: boolean;
   /** 上次跑到一半接力台被关了。 */
   interrupted?: boolean;
 }
@@ -64,6 +66,8 @@ export interface GoOptions {
   /** 只跑一棒时：做复核（复核所有待复核的棒）。 */
   kind?: 'work' | 'review';
   settings?: Partial<AutoSettings>;
+  /** 派活：强模型拆、弱模型做。不写就看当前任务是在哪一页写的。 */
+  dispatch?: boolean;
   /** 你确认过：在别的工具里干到一半的那一位已经停下了（额度用完、关掉了），可以换人。 */
   force?: boolean;
 }
@@ -331,6 +335,8 @@ class GoRunner {
   private gateRuns = 0;
   /** 派活时弱模型做不下去了：攒着的复核不等凑够就做。 */
   private reviewNow = false;
+  /** 这次是不是派活（开始时定下，跑到一半换了任务也不变）。 */
+  private readonly dispatch: boolean;
 
   constructor(
     private readonly root: string,
@@ -339,6 +345,7 @@ class GoRunner {
     private readonly hooks: GoHooks
   ) {
     const t = nowIso();
+    this.dispatch = opts.dispatch ?? taskMode(loadLedger(root)) === 'dispatch';
     this.state = {
       id: `${t.replace(/[-:T]/g, '').slice(0, 14)}-${crypto.randomBytes(2).toString('hex')}`,
       root,
@@ -350,6 +357,7 @@ class GoRunner {
       startedAt: t,
       updatedAt: t,
       level: settings.level,
+      ...(this.dispatch ? { dispatch: true } : {}),
     };
     fs.rmSync(stopFlag(root), { force: true });
     this.save();
@@ -625,7 +633,14 @@ class GoRunner {
       clearQuota(m.name);
     }
     const ran = actualModel && !(who.model && who.model === actualModel) ? { ...who, model: actualModel, label: `${m.label} · ${actualModel}`, tier: who.model && sameModel(who.model, actualModel) ? who.tier : memberTier(m.agent, actualModel) } : who;
-    const closed = closeStint(root, { ...stint, who: ran, pid: process.pid }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
+    let logText = '';
+    try {
+      logText = fs.readFileSync(logAbs, 'utf8');
+    } catch {
+      /* 没有日志 */
+    }
+    const tokens = usageTotal(logText);
+    const closed = closeStint(root, { ...stint, who: ran, pid: process.pid, ...(tokens ? { tokens } : {}) }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
     // 调度拿着锁，这时只有检查命令在跑：它自己写的缓存、报告算接力台的改动，不算到哪一棒头上（不然下一轮会以为有别的 AI 在改文件）。
     if (kind === 'review' || kind === 'final' || closed.facts?.files || closed.factsError) await gateStint(root, id, cfg, { absorb: 'all' }).catch(() => undefined);
     // 终审的结论：收工时要看它（交接成功不等于终审通过）。
@@ -704,7 +719,7 @@ class GoRunner {
         return this.finishOnce(o);
       }
       // 派活时指定一位弱模型：它只做清单里下一步（强模型拆好的）。
-      const o = await this.runStint(m, 'work', [], this.settings.dispatch && m.tier === 'weak' ? nextStep(readTask(this.root)) : undefined);
+      const o = await this.runStint(m, 'work', [], this.dispatch && m.tier === 'weak' ? nextStep(readTask(this.root)) : undefined);
       return this.finishOnce(o);
     } catch (e) {
       return this.finish(e instanceof RelayError && e.code === 'native-active' ? 'needs-human' : 'failed', errorMessage(e));
@@ -734,7 +749,7 @@ class GoRunner {
         const task = readTask(this.root);
         if (task.empty) return this.finish('needs-human', '全自动停止：还没写任务');
         const pending = pendingReviews(v);
-        const dispatch = this.settings.dispatch;
+        const dispatch = this.dispatch;
         if (!pending.length) this.reviewNow = false;
 
         // 1. 有待复核、又有强模型能用：先复核。派活时攒够几棒、清单做完了、弱模型做不下去了才复核。

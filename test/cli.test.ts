@@ -35,13 +35,12 @@ test('命令行改清单：加一步、打勾、去掉勾、删一步；不带�
 
 test('命令行的调度设置和项目设置：和网页是同一份；写错了说清楚', () => {
   const s = prepared('cli-settings');
-  let out = s.relay(['settings', '--mode', 'dispatch', '--max', '5', '--no-wait', '--order', 'claude,codex']);
-  assert.match(out, /全自动：派活/);
+  let out = s.relay(['settings', '--max', '5', '--no-wait', '--order', 'claude,codex']);
+  assert.match(out, /全自动上限：5 棒/);
   const auto = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'auto.json'), 'utf8'));
-  assert.deepEqual([auto.dispatch, auto.maxStints, auto.waitForQuota, auto.order], [true, 5, false, ['claude', 'codex']]);
-  out = s.relay(['settings', '--mode', 'relay']);
-  assert.match(out, /全自动：接力/);
-  assert.match(s.relay(['settings', '--mode', 'xyz'], true), /不认识的方式「xyz」/);
+  assert.deepEqual([auto.maxStints, auto.waitForQuota, auto.order], [5, false, ['claude', 'codex']]);
+  out = s.relay(['settings', '--wait']);
+  assert.match(out, /等额度恢复：等/);
   assert.match(s.relay(['settings', '--max', '0'], true), /最多几棒 要是 1–100 之间的整数/);
 
   s.relay(['config', '--gate', 'true', '--protect', 'a.txt,conf/*.json']);

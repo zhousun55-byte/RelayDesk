@@ -468,11 +468,12 @@ test('群聊：讨论（轮流说）、对比（同时答）；投票不投自�
   for (const b of last.ballots) assert.notEqual(last.options.find((o: { key: string }) => o.key === b.choice).author, b.voter, '不投自己');
 });
 
-test('派活：强模型先拆成小步，弱模型一棒做一步，攒 3 棒强模型一起复核，最后终审；强模型一直没干活', () => {
+test('派活：强模型先拆成小步，弱模型一棒做一步，攒 3 棒强模型一起复核，最后终审；强模型一直没干活；每一棒记下 token 用量', () => {
   const s = prepared('dispatch');
-  setOrder(s, ['claude', 'codex'], { dispatch: true });
+  setOrder(s, ['claude', 'codex']);
   s.relay(['init']);
-  s.relay(['task', '做一件大事']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  assert.match(s.relay(['status']), /任务（派活）：做一件大事/);
   const out = s.relay(['auto']);
   assert.match(out, /✓ 验收通过：清单 4\/4 全部打勾/);
   assert.deepEqual(
@@ -494,14 +495,16 @@ test('派活：强模型先拆成小步，弱模型一棒做一步，攒 3 棒�
     .map((f) => fs.readFileSync(path.join(s.base, f), 'utf8'));
   assert.ok(prompts.some((p) => p.includes('这一棒只做任务清单里的第 1 步：「第一步：建 a.txt」')), '弱模型只拿到一步');
   assert.ok(prompts.some((p) => p.includes('第 4 步：「第四步：建 d.txt」')));
+  const st = s.stints();
+  assert.deepEqual(st[0].tokens, { input: 300, output: 40 }, 'Codex 拆解：每一轮报的用量');
+  assert.deepEqual(st[1].tokens, { input: 100, output: 20 }, 'Claude Code 干活：结束时报的用量');
 });
 
 test('派活：弱模型出错、没有别的弱模型时停下，写明每位弱模型怎么了；不换强模型干活', () => {
   const s = prepared('dispatch-noweak', { FAKE_CLAUDE_MODE: 'fail' });
-  setOrder(s, ['claude', 'codex'], { dispatch: true });
+  setOrder(s, ['claude', 'codex']);
   s.relay(['init']);
-  s.relay(['task', '做一件大事']);
-  const out = s.relay(['auto', '--no-wait']);
+  const out = s.relay(['auto', '--dispatch', '--no-wait', '做一件大事']);
   assert.match(out, /全自动停止：没有能用的弱模型：.+这次出错或做不下去/);
   assert.deepEqual(
     s.stints().map((x) => [x.kind, x.who.member]),
@@ -512,18 +515,18 @@ test('派活：弱模型出错、没有别的弱模型时停下，写明每位�
   );
 });
 
-test('派活时指定一位弱模型只做一棒：它只拿到清单里的下一步；设置里没开派活时照旧', () => {
+test('派活的任务指定一位弱模型只做一棒：它只拿到清单里的下一步；接力的任务照旧', () => {
   const s = prepared('dispatch-once');
-  setOrder(s, ['claude', 'codex'], { dispatch: true });
+  setOrder(s, ['claude', 'codex']);
   s.relay(['init']);
-  s.relay(['task', '做两件事', '--step', '甲', '乙']);
+  s.relay(['task', '--dispatch', '做两件事', '--step', '甲', '乙']);
   s.relay(['go', 'claude']);
   const latest = () => {
     const f = fs.readdirSync(s.base).filter((x) => x.startsWith('prompt-claude-')).map((x) => path.join(s.base, x));
     return fs.readFileSync(f.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0], 'utf8');
   };
   assert.match(latest(), /这一棒只做任务清单里的第 1 步：「甲」/);
-  setOrder(s, ['claude', 'codex']);
+  s.relay(['task', '做两件事', '--step', '甲', '乙']);
   s.relay(['go', 'claude']);
   assert.doesNotMatch(latest(), /这一棒只做/);
 });
