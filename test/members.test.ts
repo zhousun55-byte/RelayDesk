@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import vm from 'node:vm';
+import { NAMES } from './names';
 
 /**
  * 成员一律叫它用的模型、名单去重、删掉的不再加回来、Cursor 跟着桌面版选的模型、群聊分成几段。
@@ -32,52 +32,8 @@ const writeJson = (p: string, v: unknown) => {
   fs.writeFileSync(p, JSON.stringify(v));
 };
 
-/** 模型 id（工具报的、名单里写的、交接里自己写的）→ 给人看的名字。 */
-const NAMES: [string, string][] = [
-  ['gpt-6-sol', 'GPT-6 Sol'],
-  ['GPT-6', 'GPT-6'],
-  ['gpt-5.3-codex-high-fast', 'GPT-5.3 Codex'],
-  ['claude-opus-5-5', 'Claude Opus 5.5'],
-  ['opus', 'Claude Opus'],
-  ['Claude Opus 4.6 (Thinking)', 'Claude Opus 4.6'],
-  ['claude-3-5-sonnet-20241022', 'Claude 3.5 Sonnet'],
-  ['claude-sonnet-4-20250514', 'Claude Sonnet 4'],
-  ['claude-fable-5-1', 'Claude Fable 5.1'],
-  ['cursor-grok-4.6-high-fast', 'Grok 4.6'],
-  ['grok-4.7-high-fast', 'Grok 4.7'],
-  ['Grok 4.6 Fast', 'Grok 4.6'],
-  ['deepseek-flash', 'DeepSeek Flash'],
-  ['deepseek-flash[1m]', 'DeepSeek Flash'],
-  ['deepseek/deepseek-flash', 'DeepSeek Flash'],
-  ['deepseek-v4-pro', 'DeepSeek V4 Pro'],
-  ['GLM-5.3', 'GLM-5.3'],
-  ['mimo-v2.6-pro', 'MiMo V2.6 Pro'],
-  ['gemini-3.7-flash-high', 'Gemini 3.7 Flash'],
-  ['kimi-k2', 'Kimi K2'],
-  ['qwen3-coder-plus', 'Qwen3 Coder Plus'],
-  ['', ''],
-];
-
-test('成员叫它用的模型：gpt-6-sol → GPT-6 Sol、opus → Claude Opus、带思考强度和快慢的去掉；网页里的写法和后台一样', () => {
+test('成员叫它用的模型：gpt-6-sol → GPT-6 Sol、opus → Claude Opus、带思考强度和快慢的去掉', () => {
   for (const [id, want] of NAMES) assert.equal(names.llmName(id), want, id);
-  // 网页没有构建步骤，同一套规则写了两份：拿同一张表对照
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split('\n');
-  const pick = (name: string) => {
-    const i = src.findIndex((l) => new RegExp(`^(function ${name}\\(|const ${name} = )`).test(l));
-    assert.ok(i >= 0, `app.js 里没有 ${name}`);
-    if (/;\s*$/.test(src[i])) return src[i];
-    let j = i;
-    while (!/^(\}|\};)$/.test(src[j])) j++;
-    return src.slice(i, j + 1).join('\n');
-  };
-  const ctx: Record<string, unknown> = {};
-  vm.runInNewContext(`${['splitLabel', 'LLM_WORD', 'LLM_VARIANT', 'llmName', 'nameOf'].map(pick).join('\n')}\nresult = { llmName, nameOf };`, ctx);
-  const web = ctx.result as { llmName: (m: string) => string; nameOf: (label: string, model?: string) => string };
-  for (const [id] of NAMES) assert.equal(web.llmName(id), names.llmName(id), `网页和后台对「${id}」叫法不一样`);
-  // 记录里的「工具 · 模型」按模型叫；新的群聊记录里写的就是名字（两位同一个模型时后面带着工具，不能丢）
-  assert.equal(web.nameOf('Claude Code 官方账号 · claude-opus-5-5'), 'Claude Opus 5.5');
-  assert.equal(web.nameOf('Codex', undefined), 'Codex');
-  assert.equal(web.nameOf('DeepSeek Flash（OpenCode）', 'deepseek-flash'), 'DeepSeek Flash（OpenCode）');
   assert.equal(names.whoName({ label: 'Codex · gpt-6-sol' }), 'GPT-6 Sol');
   assert.equal(names.whoName({ label: 'Cursor Agent', model: 'grok-4.7-high-fast' }), 'Grok 4.7');
   assert.equal(names.whoName({ label: '不知道是谁' }), '不知道是谁');

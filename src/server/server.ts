@@ -1,12 +1,10 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { talkContext } from '../commands/talk';
 import { loadAutoSettings, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
-import { enableProvider, loadDetected, tidyRegistry, type DetectReport } from '../core/detect';
+import { enableProvider, loadDetected, tidyRegistry } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
 import { copyToClipboard, fillTemplate, reveal, runOpener, chooseFolder } from '../core/launch';
@@ -26,66 +24,18 @@ import { checkRoot, initProject, liveProjects, newTask } from '../ops/init';
 import { buildStamp, keeperMode } from '../ops/keeper';
 import { rollbackBefore, undoRollback } from '../ops/rollback';
 import { refreshBrief, relayBusy, trackAndGate } from '../ops/track';
-import { projectView, readRunLog, stintDetail } from '../ops/view';
+import { projectView, readRunLog, stintDetail, talkContext } from '../ops/view';
 import { unwatchAll, watchProject, watching } from '../ops/watch';
+import { VERSION } from '../core/version';
+import { detecting, detectNow, ensureDetected } from '../ops/autodetect';
 
 const WEB = path.join(__dirname, '..', 'web');
-const VERSION = (() => {
-  try {
-    return (JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'package.json'), 'utf8')) as { version: string }).version;
-  } catch {
-    return '?';
-  }
-})();
 
 /** 这个进程跑的是哪一份编译结果：网页看到它变了（接力台换了新版重启过），就自己刷新。 */
 const BUILD = buildStamp();
 
 /** 你自己在别的 AI 工具里接着做时，对它说的第一句话。 */
 export const HINT = '接着做这个项目：先读 .relay/接力本.md，再按 AGENTS.md（或 CLAUDE.md）里的「接力规矩」来。';
-
-// ---- 自动识别：接力台一启动就在后台识别一次（没识别过、或者上次是 12 小时以前） ----
-
-let detecting: Promise<unknown> | null = null;
-
-/**
- * 识别要十几秒，而且一路同步地问各家工具（版本、登录状态）：放在子进程里跑（relay detect --json），
- * 接力台自己不卡——卡住的时候桌面小程序会以为接力台停了，网页也会没反应。
- */
-function detectInChild(offline: boolean): Promise<{ report: DetectReport | null; changes: string[] }> {
-  return new Promise((resolve, reject) => {
-    const cli = path.join(__dirname, '..', 'cli.js');
-    const child = spawn(process.execPath, [cli, 'detect', '--json', ...(offline ? ['--offline'] : [])], { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    let err = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (c: string) => (out += c));
-    child.stderr.on('data', (c: string) => (err += c));
-    child.on('error', (e) => reject(new RelayError(`识别没能开始：${e.message}`, 'detect-failed')));
-    child.on('close', (code) => {
-      const tail = (err || out).trim().split('\n').slice(-3).join(' ');
-      if (code !== 0) return reject(new RelayError(`识别失败：${tail || `退出码 ${code}`}`, 'detect-failed'));
-      try {
-        const j = JSON.parse(out.slice(out.indexOf('{'))) as { report?: DetectReport; changes?: string[] };
-        resolve({ report: j.report ?? loadDetected(), changes: j.changes ?? [] });
-      } catch {
-        reject(new RelayError('识别的结果看不懂。', 'detect-failed'));
-      }
-    });
-  });
-}
-
-function ensureDetected(force = false): void {
-  if (detecting || process.env.RELAY_AUTODETECT === 'off') return;
-  const last = loadDetected();
-  if (!force && last && Date.now() - new Date(last.at).getTime() < 12 * 3600_000) return;
-  detecting = detectInChild(false)
-    .catch(() => undefined)
-    .finally(() => {
-      detecting = null;
-    });
-}
 
 // ---- 给网页看的成员 ----
 
@@ -251,7 +201,7 @@ export function createServer(opts: ServerOptions): http.Server {
     } catch {
       /* 名单坏了：网页上会报出来 */
     }
-    ensureDetected();
+    void ensureDetected();
   }
   const watchOn = (root: string) => {
     if (opts.watch && loadLedger(root).init) watchProject(root);
@@ -280,7 +230,7 @@ export function createServer(opts: ServerOptions): http.Server {
         members: memberViews(),
         settings: loadAutoSettings(),
         projects: projectList(pick ? null : root),
-        detecting: !!detecting,
+        detecting: detecting(),
         detectedAt: loadDetected()?.at ?? null,
         watching: !!w,
         watchError: w?.lastError ?? null,
@@ -346,7 +296,7 @@ export function createServer(opts: ServerOptions): http.Server {
       return pickFolder(root, !!loadLedger(root).init) ? { files: [], truncated: false } : projectFiles(root);
     },
     '/api/file': (q) => readProjectFile(dirOf(q, {}), q.get('path') ?? ''),
-    '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
+    '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: detecting() }),
   };
 
   const post: Record<string, Handler> = {
@@ -448,15 +398,7 @@ export function createServer(opts: ServerOptions): http.Server {
       return {};
     },
     '/api/detect': async (_q, b) => {
-      if (detecting) await detecting;
-      const run = detectInChild(b.offline === true);
-      const tracked: Promise<unknown> = run
-        .catch(() => undefined)
-        .finally(() => {
-          if (detecting === tracked) detecting = null;
-        });
-      detecting = tracked;
-      const r = await run;
+      const r = await detectNow(b.offline === true);
       return { report: r.report, changes: r.changes, members: memberViews() };
     },
     '/api/detect/use': (_q, b) => {

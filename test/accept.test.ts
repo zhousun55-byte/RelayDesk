@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import vm from 'node:vm';
 
 /**
  * 「是不是真做完了」这一类判断的回归测试（2026-09-25 审查找出的问题，每一条都是当时的反例）：
@@ -371,59 +370,4 @@ test('内置小代理的路径：链接指到项目外面、写链接、大小�
   assert.equal(fs.readFileSync(path.join(root, '.git', 'config'), 'utf8'), '[core]\n');
   assert.equal(fs.readFileSync(path.join(root, 'src', 'secret.ts'), 'utf8'), 'export {};\n');
   assert.equal(fs.readFileSync(path.join(root, '.relay', 'journal.jsonl'), 'utf8'), '');
-});
-
-test('网页切换项目：A 的请求晚回来也不会显示在 B 里（状态、对话、文件树、棒的详情、打开的文件都一样）；点棒上的按钮发往当前项目', async () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split('\n');
-  const fn = (name: string) => {
-    const i = src.findIndex((l) => new RegExp(`^(async )?function ${name}\\(`).test(l));
-    assert.ok(i >= 0, `app.js 里没有 ${name}`);
-    let j = i;
-    while (src[j] !== '}') j++;
-    return src.slice(i, j + 1).join('\n');
-  };
-  const code = ['q', 'ticket', 'stale', 'fail', 'setOffline', 'refresh', 'loadTalk', 'loadTree', 'loadDetail', 'loadDoc', 'switchProject', 'tabKey'].map(fn).join('\n\n');
-  const out: string[] = [];
-  const script = `
-let treeKey = '', stintsKey = '', streamThread = null, docSig = '', barSig = '', heroSig = '', tabsSig = '';
-const detailLoading = new Set();
-const S = { dir: 'A', st: null, gen: 0, seq: {}, talk: { rows: [], votes: [], status: { speaking: [], queue: [] } }, tree: null, treeRev: 0, thread: null, draft: false, fold: false, open: new Set(), detail: new Map(), tabs: [], tab: 0, docs: new Map(), ask: null, files: [], treeOpen: new Set(), treeFilter: '', onlyChanged: false, treeSel: '', offline: false };
-const node = () => ({ replaceChildren() {}, querySelector: () => null, hidden: true });
-const CE = { offline: node(), stream: node(), bar: node(), hero: node() };
-const store = { json: () => [] };
-const history = { replaceState() {} };
-const closeDrawers = () => {}, restoreDraft = () => {}, scrollBottom = () => {}, renderAll = () => {}, renderCenter = () => {}, renderRight = () => {}, toast = () => {}, fillDetail = () => {};
-const stintById = () => null;
-async function api(url) {
-  const u = new URL(url, 'http://x');
-  const dir = u.searchParams.get('dir');
-  await new Promise((r) => setTimeout(r, dir === 'A' ? 60 : 5));
-  const p = u.pathname;
-  if (p === '/api/state') return { project: { root: dir, stints: [{ id: 3, summary: dir + ' 的第 3 棒' }] } };
-  if (p === '/api/talk') return { rows: [{ from: dir }], votes: [], status: { speaking: [], queue: [] } };
-  if (p === '/api/tree') return { files: [dir + '.txt'], truncated: false };
-  if (p === '/api/stint') return { id: 3, project: dir };
-  if (p === '/api/file') return { text: dir + ' 的 README' };
-  throw new Error(p);
-}
-${code}
-(async () => {
-  refresh(); loadTalk(); loadTree(); loadDetail(3); loadDoc({ type: 'file', path: 'README.md' });
-  switchProject('B');
-  await new Promise((r) => setTimeout(r, 150));
-  out(JSON.stringify([S.dir, S.st && S.st.project.root, S.talk.rows[0] && S.talk.rows[0].from, S.tree && S.tree.files[0], S.detail.get(3) && S.detail.get(3).project, (S.docs.get(tabKey({ type: 'file', path: 'README.md' })) || {}).data]));
-  await loadDetail(3);
-  await loadDoc({ type: 'file', path: 'README.md' });
-  out(JSON.stringify([S.detail.get(3).project, S.docs.get(tabKey({ type: 'file', path: 'README.md' })).data.text, q('/api/stint?id=3')]));
-  done();
-})();`;
-  await new Promise<void>((resolve, reject) => {
-    try {
-      vm.runInNewContext(script, { setTimeout, URL, URLSearchParams, encodeURIComponent, TypeError, out: (x: string) => out.push(x), done: resolve });
-    } catch (e) {
-      reject(e);
-    }
-  });
-  assert.deepEqual(JSON.parse(out[0]), ['B', 'B', 'B', 'B.txt', null, null], '以前这里全是 A 的：状态、对话、文件树、第 3 棒详情、README');
-  assert.deepEqual(JSON.parse(out[1]), ['B', 'B 的 README', '/api/stint?id=3&dir=B']);
 });

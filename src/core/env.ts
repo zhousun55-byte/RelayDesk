@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,9 +21,12 @@ export function loginEnv(): Record<string, string> {
   if (loginCache) return loginCache;
   if (process.env.RELAY_LOGIN_PATH === 'off' || process.platform === 'win32') return (loginCache = {});
   const shell = process.env.SHELL || '/bin/zsh';
-  const r = spawnSync(shell, ['-ilc', `printf '${MARK}'; env -0`], {
+  // detached：登录 shell 在自己的会话里跑、没有控制终端。不然交互式的 zsh 会把终端的前台抢过去不还，
+  // 接力台再读键盘、切换按键模式就会被系统挂起（终端里的 relay 界面卡住）。Node 支持，只是类型里没写。
+  const opts: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = {
     encoding: 'utf8',
     timeout: 8000,
+    detached: true,
     env: {
       HOME: os.homedir(),
       USER: process.env.USER ?? '',
@@ -33,7 +36,8 @@ export function loginEnv(): Record<string, string> {
       LANG: process.env.LANG ?? 'en_US.UTF-8',
       PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
     },
-  });
+  };
+  const r = spawnSync(shell, ['-ilc', `printf '${MARK}'; env -0`], opts);
   const out: Record<string, string> = {};
   const raw = r.stdout ?? '';
   const at = raw.indexOf(MARK);

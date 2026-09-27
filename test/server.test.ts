@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { withFakes } from './fakes';
 import { CLI, sandbox, until, type Sandbox } from './helpers';
@@ -95,9 +96,9 @@ test('网页开着时盯着文件夹：你在别的工具里改文件、写交�
   const s = sandbox('srv-watch');
   withFakes(s);
   s.relay(['detect', '--offline']);
-  s.relay(['init', '做滤镜']);
   const ui = await startUi(s);
   try {
+    await ui.call('/api/init', { dir: s.repo, task: '做滤镜' });
     await ui.call(`/api/state${q(s)}`);
     s.write('filter.xmp', '<x/>\n');
     s.write('.relay/交接/第1棒-0924-2100-codex.md', '# 交接：Codex · gpt-6\n\n- 状态：已交接\n\n## 做了什么\n\n- 写了 filter.xmp\n');
@@ -170,9 +171,9 @@ test('网页接口：强弱可以改；投票出结果后采纳，写进任务�
   const s = sandbox('srv-vote');
   withFakes(s);
   s.relay(['detect', '--offline']);
-  s.relay(['init', '做滤镜']);
   const ui = await startUi(s);
   try {
+    await ui.call('/api/init', { dir: s.repo, task: '做滤镜' });
     // 重新识别在子进程里跑（接力台自己不卡）：结果照样带回来，名单照样更新，做完「正在识别」要复位。
     const d = await ui.call('/api/detect', { dir: s.repo, offline: true });
     assert.equal(d.status, 200, JSON.stringify(d.json));
@@ -209,9 +210,9 @@ test('网页接口：成员叫模型的名字、删掉的不再加回来；群�
   const s = sandbox('srv-talks');
   withFakes(s);
   s.relay(['detect', '--offline']);
-  s.relay(['init', '做滤镜']);
   const ui = await startUi(s);
   try {
+    await ui.call('/api/init', { dir: s.repo, task: '做滤镜' });
     const st = await ui.call(`/api/state${q(s)}`);
     const codex = st.json.members.find((m: { name: string }) => m.name === 'codex');
     assert.deepEqual([codex.llm, codex.tool, codex.app], ['GPT-6', 'Codex', null]);
@@ -375,15 +376,22 @@ test('还没有项目（从小程序启动，停在家目录）：网页请你�
 
 test('不许接入整个家目录这种大文件夹', async () => {
   const s = sandbox('srv-home');
-  const out = s.relay(['init'], false);
-  assert.match(out, /接入了/);
-  const bad = spawnRelay(s, ['init'], s.home);
-  assert.match(bad, /太大了|不像是一个项目/);
+  const ui = await startUi(s);
+  try {
+    assert.equal((await ui.call('/api/init', { dir: s.repo })).status, 200);
+    const bad = await ui.call('/api/init', { dir: s.home });
+    assert.notEqual(bad.status, 200);
+    assert.match(JSON.stringify(bad.json), /太大了|不像是一个项目/);
+  } finally {
+    ui.child.kill();
+  }
 });
 
-function spawnRelay(s: Sandbox, args: string[], cwd: string): string {
-  const { spawnSync } = require('node:child_process') as typeof import('node:child_process');
-  const r = spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: 'utf8', env: { ...s.env, HOME: s.home } });
-  return (r.stdout ?? '') + (r.stderr ?? '');
-}
-
+test('文件面板：.git 里的看不了（不分大小写的磁盘上，写成 .GIT 也一样）', () => {
+  const { readProjectFile } = require('../src/core/files') as typeof import('../src/core/files');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-files-'));
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.git', 'config'), '[remote]\n');
+  assert.throws(() => readProjectFile(root, '.git/config'), /不能看/);
+  if (fs.existsSync(path.join(root, '.GIT'))) assert.throws(() => readProjectFile(root, '.GIT/config'), /不能看/, '不分大小写的磁盘上 .GIT 就是 .git');
+});

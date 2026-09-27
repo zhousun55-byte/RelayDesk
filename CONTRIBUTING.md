@@ -1,4 +1,4 @@
-# 参与接力台
+# 参与接力台（网页版）
 
 欢迎提问题、提想法、提代码。接力台的界面、提示和文档都用简体中文，提交也请用中文写清楚改了什么、为什么改。
 
@@ -19,13 +19,19 @@ node dist/src/cli.js ui --port 7500        # 用刚编译的版本打开网页
 | 目录 | 放什么 |
 |---|---|
 | `src/core/` | 纯逻辑：账本、快照、交接和任务的格式、接力本、强弱、额度、群聊投票、各家工具的适配 |
-| `src/ops/` | 一个个动作：接入、记账（盯文件夹）、调度一棒 / 全自动、退回、给网页的视图 |
-| `src/commands/` | 命令行 |
+| `src/ops/` | 一个个动作：接入、记账（盯文件夹）、调度一棒 / 全自动、退回、自动识别、给网页的视图；`keeper.ts` 是桌面小程序的看门进程 |
+| `src/commands/` | 入口的两个命令：`ui` 打开网页（默认），`detect` 识别 AI 工具（网页在后台调它）。在终端里用的命令和界面在终端版 |
 | `src/server/` | 本机网页的接口 |
 | `src/web/` | 网页（纯 HTML / CSS / JS，不用框架、不用打包） |
 | `test/` | 测试；`fakes.ts` 里是假的 `claude` / `codex` 和假的模型接口 |
 
 整体设计、为什么这么做，见 [docs/设计说明.md](docs/设计说明.md)。
+
+## 和终端版共用的核心
+
+终端版（接力台 CLI）和网页版共用一份核心：`src/core/`（网页版多一个文件面板 `files.ts`）、`src/ops/` 里的 autodetect、go、init、rollback、track、view、watch，`src/commands/` 里的 detect、print，还有 `test/` 里的 helpers、fakes、names 和 accept、auto-unit、members、selfcheck、unit 这几个测试。
+
+**核心以终端版为准**：改核心先在终端版里改、测过，再在这里运行 `zsh scripts/sync-core.sh`（终端版不在 `~/接力台CLI` 的话，把它的文件夹写在后面）拷过来，然后 `npm test`。`test/sync.test.ts` 会比对两边，忘了拷就不过；只下载了网页版的，这一项跳过。
 
 ## 常见的改动
 

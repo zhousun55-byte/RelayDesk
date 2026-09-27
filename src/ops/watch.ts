@@ -1,11 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { errorMessage } from '../core/errors';
+import { pidAlive } from '../core/proc';
 import { trackAndGate, type TrackResult } from './track';
 
 /**
  * 盯着接入过的文件夹：文件一有变化（停下来几秒后）就对一次账；另外每分钟对一次，
- * 好发现「改到一半没动静了」的棒。接力台开着的时候一直在盯（网页、桌面小程序都算开着）。
+ * 好发现「改到一半没动静了」的棒。接力台开着的时候一直在盯（网页、桌面小程序、终端界面都算开着）。
  */
 
 const DEBOUNCE_MS = Number(process.env.RELAY_WATCH_DEBOUNCE_MS ?? 4000);
@@ -21,6 +22,40 @@ export function ignoredPath(rel: string): boolean {
     return !(p === '.relay/任务.md' || p.startsWith('.relay/交接/') || (p.startsWith('.relay/复核/') && p.endsWith('.md')));
   }
   return false;
+}
+
+/**
+ * 盯同一个项目的接力台可能不止一个（网页版和终端版都开着）：同一时间只让一个对账，不然会记重。
+ * 拿到了返回放锁的函数；别的接力台正在对账返回 null。锁的主人进程没了、或者拿了半小时还没放，算过期。
+ */
+function claim(root: string): (() => void) | null {
+  const dir = path.join(root, '.relay', 'runs');
+  const p = path.join(dir, 'track.lock');
+  for (let i = 0; i < 2; i++) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(p, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: 'wx' });
+      return () => {
+        try {
+          if ((JSON.parse(fs.readFileSync(p, 'utf8')) as { pid?: number }).pid === process.pid) fs.rmSync(p, { force: true });
+        } catch {
+          /* 已经没了 */
+        }
+      };
+    } catch (e) {
+      // 写不了锁（只读的磁盘之类）：照常对账
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') return () => undefined;
+      try {
+        const h = JSON.parse(fs.readFileSync(p, 'utf8')) as { pid?: number; at?: number };
+        if (h.pid && h.pid !== process.pid && pidAlive(h.pid) && Date.now() - (h.at ?? 0) < 30 * 60_000) return null;
+      } catch {
+        /* 别的进程刚建、还没写完：下一轮再看 */
+        return null;
+      }
+      fs.rmSync(p, { force: true });
+    }
+  }
+  return null;
 }
 
 export class ProjectWatcher {
@@ -77,14 +112,22 @@ export class ProjectWatcher {
       return;
     }
     this.running = true;
+    let release: (() => void) | null = null;
     try {
       if (!fs.existsSync(path.join(this.root, '.relay', 'journal.jsonl'))) return;
+      release = claim(this.root);
+      // 别的接力台正在给它对账：过一会儿再看
+      if (!release) {
+        this.again = true;
+        return;
+      }
       const r = await trackAndGate(this.root);
       this.lastError = null;
       if (r.changed) this.onChange(this.root, r);
     } catch (e) {
       this.lastError = errorMessage(e);
     } finally {
+      release?.();
       this.running = false;
       if (this.again && !this.closed) {
         this.again = false;

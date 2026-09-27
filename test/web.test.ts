@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { llmName } from '../src/core/names';
+import { NAMES } from './names';
 
 /**
  * 网页（纯内存，不开浏览器）：每家 AI 的图标。
@@ -282,4 +284,70 @@ result = { dispatch, relay: pageThreads().map((t) => t.id), page: pageOf({ mode:
     ctx
   );
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.result)), { dispatch: ['t1'], relay: ['t0', 't2'], page: 'dispatch', split: '强模型 3.2 万，弱模型 15.9 万 token（1 棒没报用量）', small: '860' });
+});
+
+test('网页里成员的叫法和后台一样：网页没有构建步骤，同一套规则写了两份，拿同一张表对照', () => {
+  const ctx: Record<string, unknown> = {};
+  vm.runInNewContext(`${['splitLabel', 'LLM_WORD', 'LLM_VARIANT', 'llmName', 'nameOf'].map(pick).join('\n')}\nresult = { llmName, nameOf };`, ctx);
+  const web = ctx.result as { llmName: (m: string) => string; nameOf: (label: string, model?: string) => string };
+  for (const [id] of NAMES) assert.equal(web.llmName(id), llmName(id), `网页和后台对「${id}」叫法不一样`);
+  // 记录里的「工具 · 模型」按模型叫；新的群聊记录里写的就是名字（两位同一个模型时后面带着工具，不能丢）
+  assert.equal(web.nameOf('Claude Code 官方账号 · claude-opus-5-5'), 'Claude Opus 5.5');
+  assert.equal(web.nameOf('Codex', undefined), 'Codex');
+  assert.equal(web.nameOf('DeepSeek Flash（OpenCode）', 'deepseek-flash'), 'DeepSeek Flash（OpenCode）');
+});
+
+test('网页切换项目：A 的请求晚回来也不会显示在 B 里（状态、对话、文件树、棒的详情、打开的文件都一样）；点棒上的按钮发往当前项目', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split('\n');
+  const fn = (name: string) => {
+    const i = src.findIndex((l) => new RegExp(`^(async )?function ${name}\\(`).test(l));
+    assert.ok(i >= 0, `app.js 里没有 ${name}`);
+    let j = i;
+    while (src[j] !== '}') j++;
+    return src.slice(i, j + 1).join('\n');
+  };
+  const code = ['q', 'ticket', 'stale', 'fail', 'setOffline', 'refresh', 'loadTalk', 'loadTree', 'loadDetail', 'loadDoc', 'switchProject', 'tabKey'].map(fn).join('\n\n');
+  const out: string[] = [];
+  const script = `
+let treeKey = '', stintsKey = '', streamThread = null, docSig = '', barSig = '', heroSig = '', tabsSig = '';
+const detailLoading = new Set();
+const S = { dir: 'A', st: null, gen: 0, seq: {}, talk: { rows: [], votes: [], status: { speaking: [], queue: [] } }, tree: null, treeRev: 0, thread: null, draft: false, fold: false, open: new Set(), detail: new Map(), tabs: [], tab: 0, docs: new Map(), ask: null, files: [], treeOpen: new Set(), treeFilter: '', onlyChanged: false, treeSel: '', offline: false };
+const node = () => ({ replaceChildren() {}, querySelector: () => null, hidden: true });
+const CE = { offline: node(), stream: node(), bar: node(), hero: node() };
+const store = { json: () => [] };
+const history = { replaceState() {} };
+const closeDrawers = () => {}, restoreDraft = () => {}, scrollBottom = () => {}, renderAll = () => {}, renderCenter = () => {}, renderRight = () => {}, toast = () => {}, fillDetail = () => {};
+const stintById = () => null;
+async function api(url) {
+  const u = new URL(url, 'http://x');
+  const dir = u.searchParams.get('dir');
+  await new Promise((r) => setTimeout(r, dir === 'A' ? 60 : 5));
+  const p = u.pathname;
+  if (p === '/api/state') return { project: { root: dir, stints: [{ id: 3, summary: dir + ' 的第 3 棒' }] } };
+  if (p === '/api/talk') return { rows: [{ from: dir }], votes: [], status: { speaking: [], queue: [] } };
+  if (p === '/api/tree') return { files: [dir + '.txt'], truncated: false };
+  if (p === '/api/stint') return { id: 3, project: dir };
+  if (p === '/api/file') return { text: dir + ' 的 README' };
+  throw new Error(p);
+}
+${code}
+(async () => {
+  refresh(); loadTalk(); loadTree(); loadDetail(3); loadDoc({ type: 'file', path: 'README.md' });
+  switchProject('B');
+  await new Promise((r) => setTimeout(r, 150));
+  out(JSON.stringify([S.dir, S.st && S.st.project.root, S.talk.rows[0] && S.talk.rows[0].from, S.tree && S.tree.files[0], S.detail.get(3) && S.detail.get(3).project, (S.docs.get(tabKey({ type: 'file', path: 'README.md' })) || {}).data]));
+  await loadDetail(3);
+  await loadDoc({ type: 'file', path: 'README.md' });
+  out(JSON.stringify([S.detail.get(3).project, S.docs.get(tabKey({ type: 'file', path: 'README.md' })).data.text, q('/api/stint?id=3')]));
+  done();
+})();`;
+  await new Promise<void>((resolve, reject) => {
+    try {
+      vm.runInNewContext(script, { setTimeout, URL, URLSearchParams, encodeURIComponent, TypeError, out: (x: string) => out.push(x), done: resolve });
+    } catch (e) {
+      reject(e);
+    }
+  });
+  assert.deepEqual(JSON.parse(out[0]), ['B', 'B', 'B', 'B.txt', null, null], '以前这里全是 A 的：状态、对话、文件树、第 3 棒详情、README');
+  assert.deepEqual(JSON.parse(out[1]), ['B', 'B 的 README', '/api/stint?id=3&dir=B']);
 });

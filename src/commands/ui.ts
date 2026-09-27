@@ -13,15 +13,15 @@ import { gateBusy } from '../ops/track';
 import { unwatchAll } from '../ops/watch';
 import { createServer, listen } from '../server/server';
 import { ok, warn } from './print';
-import { findRoot } from './relay';
+import { findRoot } from '../ops/init';
 
-function openBrowser(url: string): void {
+export function openBrowser(url: string): void {
   if (process.env.RELAY_TERMINAL === 'off') return;
   const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open';
   spawnSync(cmd, [url], { stdio: 'ignore' });
 }
 
-async function pingRelay(port: number): Promise<boolean> {
+export async function pingRelay(port: number): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/ping`, { signal: AbortSignal.timeout(1500) });
     const j = (await res.json()) as { app?: string };
