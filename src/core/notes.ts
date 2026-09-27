@@ -415,7 +415,8 @@ function workBullet(text: string): string {
   const all = bullets(text);
   // 「复核结论写入……：没问题」是复核这一棒真干的活，不算准备。
   const reading = /^(先|已|已经|完整|仔细|逐一|逐条|逐项|重新|实际)?(读|读取|阅读|通读|浏览|看|查看|了解|熟悉|复核(?!结论)|核对|核实|确认|检查|对照|跑了?|运行了?|执行了?|验证)|^(read|reviewed|checked|ran|verified)\b/i;
-  const bookkeeping = /交接文件|本交接|建了?交接|接力本|任务\.md|任务清单|打(?:了)?(?:个)?勾/;
+  // 「把任务.md 拆成了 7 步」是拆解那一棒真干的活，不算记账。
+  const bookkeeping = /^(?!.*拆(?:成|分成|为|解成))(?=.*(?:交接文件|本交接|建了?交接|接力本|任务\.md|任务清单|打(?:了)?(?:个)?勾))/;
   // 「没有修改 wc.py」说的是没做什么，别的条目都不是活时才用它。
   const nothing = /^(没有|没|未|并未)(修改|改动|改|动)/;
   const pick = (skip: RegExp[]) => all.findIndex((t) => !skip.some((re) => re.test(t)));

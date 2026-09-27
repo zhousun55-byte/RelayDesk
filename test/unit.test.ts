@@ -384,6 +384,9 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
     '# 交接：Claude Code 官方账号 · claude-opus-5\n\n## 做了什么\n\n- 读了 `.relay/接力本.md`、`.relay/任务.md`。\n- 跑了 `git --git-dir=.relay/snapshots --work-tree=. diff 0079438b57 32b91b70a8`：区间内只改了 `README.md`。\n- 确认工作树与结束快照一致。\n- 逐条对照任务：四样都在，内容属实。\n- 实际运行验证：按 README 原样跑了一遍。\n- 验证用的临时文件已全部删掉。\n- 结论写进 `.relay/复核/终审-0925-0842.md`：通过，全部完成，无未修复事项。\n'
   );
   assert.equal(opus.summary, '通过，全部完成，无未修复事项。');
+  // Grok 拆解的真实写法（2026-09-27 派活实测）：以前挑成「没有改项目代码……」
+  const plan = parseHandoff('# 交接：Grok 4.7\n\n## 做了什么\n\n- 把 `.relay/任务.md` 的「进度」拆成了 7 步。每步只改一个文件。\n- 没有改项目代码，没有新建 `todo.py`。\n');
+  assert.equal(plan.summary, '把 `.relay/任务.md` 的「进度」拆成了 7 步。每步只改一个文件。');
 });
 
 test('复核结论：认出复核的是第几棒、结论是哪一种', () => {
