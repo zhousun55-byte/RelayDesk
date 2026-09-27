@@ -2029,7 +2029,7 @@ function stintById(id) {
 }
 
 function stintSig(s) {
-  const targets = s.kind === 'review' && s.targets ? s.targets.map((id) => (stintById(id) || {}).reviews) : null;
+  const targets = s.kind !== 'work' && s.targets ? s.targets.map((id) => (stintById(id) || {}).reviews) : null;
   return JSON.stringify([s.status, s.summary, s.review, s.reviews, s.facts, s.gate, s.protectedHits, s.rolledBack, s.note, s.endedAt, s.who, s.kind, s.targets, s.log, s.quotaUntil, s.handoff, s.ghost, targets, looks.key]);
 }
 
@@ -2436,7 +2436,8 @@ function cardFoot(s) {
   if (s.gate && s.gate.status === 'fail') warn('检查没过');
   if (s.gate && s.gate.status === 'error') warn('检查没跑成', s.gate.detail);
   if (s.protectedHits) warn('改了保护的文件', s.protectedHits.join('\n'));
-  if (s.kind === 'review' && s.targets) {
+  // 复核、并进了复核的终审：列出复核了哪几棒、结论是什么
+  if (s.kind !== 'work' && s.targets) {
     for (const id of s.targets) {
       const tg = stintById(id);
       const r = tg && (tg.reviews || []).find((x) => x.by === s.id);

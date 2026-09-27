@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { recentOfficialModel } from './claude-log';
 import { agentEnv, envValue, scanApps, which } from './env';
 import { relayHome } from './paths';
@@ -92,6 +93,8 @@ export interface HarnessSpec {
   login(loc: Located): LoginInfo;
   model(loc: Located): ModelInfo;
   invoke(loc: Located, input: InvokeInput): Invocation;
+  /** 输出里不带 token 用量的工具：从它自己记的会话里读（sinceMs 之后这个项目的会话加起来）；读不到就是 null。 */
+  usage?(root: string, sinceMs: number): { input: number; output: number } | null;
 }
 
 // ---- 小工具 ----
@@ -644,6 +647,54 @@ export function dshHome(): string {
 }
 
 /**
+ * DeepSeek Harness 的无界面输出不带 token 用量，它自己的会话记录里有：~/.dsh/sessions/<项目>/session-<编号>/session.v4.jsonl.zstd，
+ * 每调一次模型一行 data.usage。<项目> 是路径的写法：/ 换成 -，非 ASCII 的字写成 ~四位十六进制，前面加 -，后面加 --。
+ * 输入把读缓存、写缓存的也算上（和别的工具日志里的一样）。
+ */
+export function dshUsage(root: string, sinceMs: number): { input: number; output: number } | null {
+  const unzstd = (zlib as unknown as { zstdDecompressSync?: (b: Buffer) => Buffer }).zstdDecompressSync;
+  if (!unzstd) return null;
+  const name = `-${root
+    .split('')
+    .map((ch) => (ch === '/' ? '-' : ch.charCodeAt(0) > 127 ? `~${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}` : ch))
+    .join('')}--`;
+  const dir = path.join(dshHome(), 'sessions', name);
+  let subs: string[] = [];
+  try {
+    subs = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  let input = 0;
+  let output = 0;
+  let seen = false;
+  const n = (v: unknown) => (typeof v === 'number' ? v : 0);
+  for (const d of subs) {
+    const f = path.join(dir, d, 'session.v4.jsonl.zstd');
+    let text = '';
+    try {
+      if (fs.statSync(f).mtimeMs < sinceMs) continue;
+      text = unzstd(fs.readFileSync(f)).toString('utf8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split('\n')) {
+      if (!line.includes('"usage"')) continue;
+      try {
+        const u = (JSON.parse(line) as { data?: { usage?: Record<string, unknown> } }).data?.usage;
+        if (!u || typeof u !== 'object') continue;
+        input += n(u.inputTokens) + n(u.cacheReadTokens) + n(u.cacheWriteTokens);
+        output += n(u.outputTokens);
+        seen = true;
+      } catch {
+        /* 坏行跳过 */
+      }
+    }
+  }
+  return seen ? { input, output } : null;
+}
+
+/**
  * 桌面版选的账号和模型（~/.dsh/profiles/desktop/cordis.patch.yml 里 agent-default-model 那一段）。
  * 无界面模式默认走接口密钥；接力台调度时带上这一段，让它和桌面版用同一个账号、同一个模型。
  */
@@ -710,6 +761,7 @@ function locateDsh(): Located | null {
 const dsh: HarnessSpec = {
   id: 'dsh',
   label: 'DeepSeek Harness',
+  usage: (root, sinceMs) => dshUsage(root, sinceMs),
   vendor: 'DeepSeek',
   rank: 35,
   workLevels: ['safe', 'full'],

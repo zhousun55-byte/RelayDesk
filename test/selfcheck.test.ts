@@ -585,3 +585,29 @@ test('没成的原因：连接类的错说「连不上服务器」；原话取�
   // 自定义命令和编程工具走同一套执行：回答原样，空行留着，回答里举的 JSON 例子不当成回答本身
   assert.equal(await ask(`printf '第一段\\n\\n{"text": "只是例子"}\\n第二段\\n'`), '第一段\n\n{"text": "只是例子"}\n第二段');
 });
+
+test('DeepSeek Harness 的 token 用量从它自己记的会话里读：这个项目、这一棒开始之后的会话加起来，输入含读缓存', () => {
+  const zlib = require('node:zlib') as { zstdCompressSync?: (b: Buffer) => Buffer };
+  if (!zlib.zstdCompressSync) return;
+  const dsh = tmpDir('dsh-home');
+  const root = '/Users/某人/项目 a';
+  const dir = path.join(dsh, 'sessions', '-' + '-Users-~67D0~4EBA-~9879~76EE a' + '--');
+  const write = (name: string, lines: unknown[], mtime?: number) => {
+    fs.mkdirSync(path.join(dir, name), { recursive: true });
+    const f = path.join(dir, name, 'session.v4.jsonl.zstd');
+    fs.writeFileSync(f, zlib.zstdCompressSync!(Buffer.from(lines.map((l) => JSON.stringify(l)).join('\n'))));
+    if (mtime) fs.utimesSync(f, mtime / 1000, mtime / 1000);
+  };
+  const call = (i: number, o: number, c: number) => ({ data: { usage: { inputTokens: i, outputTokens: o, cacheReadTokens: c, cacheWriteTokens: 0 }, stream: [{ chunk: { usage: { inputTokens: 999 } } }] } });
+  write('session-new', [{ data: { header: {} } }, call(100, 10, 1000), call(50, 5, 2000)]);
+  write('session-old', [call(7, 7, 7)], Date.now() - 3_600_000);
+  const keep = process.env.DSH_HOME;
+  process.env.DSH_HOME = dsh;
+  try {
+    assert.deepEqual(harness.dshUsage(root, Date.now() - 60_000), { input: 3150, output: 15 }, '只算这一棒开始之后的；流里的片段不重复算');
+    assert.equal(harness.dshUsage('/别的/项目', 0), null);
+  } finally {
+    if (keep === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = keep;
+  }
+});

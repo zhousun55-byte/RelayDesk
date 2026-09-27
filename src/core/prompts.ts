@@ -80,6 +80,8 @@ export interface FinalPromptInput extends StintPromptInput {
   from: string;
   to: string;
   reviewFile: string;
+  /** 派活：最后一批还没复核的棒，并进终审一起复核。 */
+  targets?: { id: number; label: string; tierWord: string }[];
 }
 
 export function finalPrompt(i: FinalPromptInput): string {
@@ -88,6 +90,12 @@ export function finalPrompt(i: FinalPromptInput): string {
     '',
     `任务清单已经全部打勾。请把整件事从头到尾过一遍，确认真的做完、做对了：`,
     '',
+    ...(i.targets?.length
+      ? [
+          `这几棒还没复核，一起复核：${i.targets.map((t) => `第 ${t.id} 棒（${t.label}，${t.tierWord}）`).join('、')}。逐棒对照它的交接看真实改动（接力本「先复核」一节有改动和方法），每棒写一份结论：${i.targets.map((t) => `\`${reviewFileFor(t.id)}\``).join('、')}（格式见接力本），「结论」一行只写：${VERDICT_CHOICES.join(' / ')}。`,
+          '',
+        ]
+      : []),
     `1. 任务、进度和约定见 \`${TASK_REL}\`；接力的经过见 \`${BRIEF_REL}\`。`,
     `2. 这件事的全部改动：\`${snapGit()} diff ${i.from.slice(0, 10)} ${i.to.slice(0, 10)}\`。`,
     `3. 对照任务逐条确认；${i.gateCommand ? `跑检查 \`${i.gateCommand}\`；` : ''}能运行的就实际运行一下。`,

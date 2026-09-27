@@ -337,6 +337,8 @@ class GoRunner {
   private reviewNow = false;
   /** 这次是不是派活（开始时定下，跑到一半换了任务也不变）。 */
   private readonly dispatch: boolean;
+  /** 派活：最后一批待复核的已经并进过一次终审（没复核上的再单独复核）。 */
+  private merged = false;
 
   constructor(
     private readonly root: string,
@@ -530,7 +532,16 @@ class GoRunner {
       prompt = reviewPrompt({ id, label: who.label, handoff, gateCommand: gate, targets: targets.map((t) => ({ id: t.id, label: t.who.label, tierWord: tierWord(t.who.tier) })) });
     } else if (kind === 'final') {
       const base = v.task?.snap ?? v.init?.snap ?? from;
-      prompt = finalPrompt({ id, label: who.label, handoff, gateCommand: gate, from: base, to: from, reviewFile: reviewFile! });
+      prompt = finalPrompt({
+        id,
+        label: who.label,
+        handoff,
+        gateCommand: gate,
+        from: base,
+        to: from,
+        reviewFile: reviewFile!,
+        targets: targets.map((t) => ({ id: t.id, label: t.who.label, tierWord: tierWord(t.who.tier) })),
+      });
     } else if (kind === 'plan') {
       prompt = planPrompt({ id, label: who.label, handoff, gateCommand: gate });
     } else if (step) {
@@ -639,7 +650,8 @@ class GoRunner {
     } catch {
       /* 没有日志 */
     }
-    const tokens = usageTotal(logText);
+    // 工具自己在输出里报的用量；不报的（DeepSeek Harness）从它自己记的会话里读
+    const tokens = usageTotal(logText) ?? findHarness(m.harness)?.usage?.(root, Date.parse(stint.startedAt) - 1000) ?? null;
     const closed = closeStint(root, { ...stint, who: ran, pid: process.pid, ...(tokens ? { tokens } : {}) }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
     // 调度拿着锁，这时只有检查命令在跑：它自己写的缓存、报告算接力台的改动，不算到哪一棒头上（不然下一轮会以为有别的 AI 在改文件）。
     if (kind === 'review' || kind === 'final' || closed.facts?.files || closed.factsError) await gateStint(root, id, cfg, { absorb: 'all' }).catch(() => undefined);
@@ -751,9 +763,11 @@ class GoRunner {
         const pending = pendingReviews(v);
         const dispatch = this.dispatch;
         if (!pending.length) this.reviewNow = false;
+        // 派活：清单做完了还有待复核的，不单独复核，并进终审（终审的人顺手写这几棒的复核，省一棒强模型）。
+        const merge = dispatch && taskComplete(task) && pending.length > 0 && !this.merged;
 
-        // 1. 有待复核、又有强模型能用：先复核。派活时攒够几棒、清单做完了、弱模型做不下去了才复核。
-        if (pending.length && (!dispatch || pending.length >= REVIEW_BATCH || taskComplete(task) || this.reviewNow)) {
+        // 1. 有待复核、又有强模型能用：先复核。派活时攒够几棒、弱模型做不下去了才复核。
+        if (pending.length && !merge && (!dispatch || pending.length >= REVIEW_BATCH || taskComplete(task) || this.reviewNow)) {
           const stuck = pending.filter((p) => (this.reviewTries.get(p.id) ?? 0) >= 2);
           if (stuck.length) {
             const ids = stuck.map((p) => p.id).join('、');
@@ -779,7 +793,7 @@ class GoRunner {
 
         // 2. 清单全部打勾：按验收来——复核、终审、检查都过了才收工（只有验收说通过才算完成）。
         if (taskComplete(task)) {
-          if (pending.length) {
+          if (pending.length && !merge) {
             const c = this.earliestCooling('strong');
             if (c && (await this.waitFor(c, '清单都打勾了，还有棒待复核，强模型都没额度'))) continue;
             return this.finish('needs-human', `全自动停止：清单都打勾了，第 ${pending.map((p) => p.id).join('、')} 棒待复核，没有能用的强模型`);
@@ -799,7 +813,8 @@ class GoRunner {
             const weak = [...this.weakFinals];
             const fr = this.pick('strong', [...doers, ...weak]) ?? this.pick('strong', weak);
             if (fr) {
-              const o = await this.runStint(fr, 'final');
+              const o = await this.runStint(fr, 'final', merge ? pending : []);
+              if (merge) this.merged = true;
               if (o.stint.status === 'failed') this.failed.add(fr.name);
               if (o.stint.who.tier !== 'strong') this.weakFinals.add(fr.name);
               continue;
@@ -807,6 +822,11 @@ class GoRunner {
             const c = this.earliestCooling('strong');
             if (c && (await this.waitFor(c, '清单都打勾了，要终审，强模型都没额度'))) continue;
             return this.finish('needs-human', `全自动停止：清单都打勾了，${acc.final.text}，没有能用的强模型`);
+          }
+          // 终审已经过了、还有待复核的（派活并进终审没轮上）：照常单独复核。
+          if (merge) {
+            this.merged = true;
+            continue;
           }
           // 最后一次改动之后还没跑检查：现在跑一次（记在最后一棒上），再看验收。
           if ((acc.gate.status === 'stale' || acc.gate.status === 'none') && this.gateRuns < 1) {
