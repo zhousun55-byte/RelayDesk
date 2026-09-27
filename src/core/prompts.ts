@@ -28,7 +28,7 @@ export function workPrompt(i: StintPromptInput): string {
   ].join('\n');
 }
 
-/** 派活：强模型把任务拆成弱模型一棒做得完的小步，只写清单，不写代码。 */
+/** 派活：强模型把任务拆成弱模型一棒做得完的小步，只写清单，不写代码。清单要短：写成逐字的规格，拆解就和直接做一样费。 */
 export function planPrompt(i: StintPromptInput): string {
   return [
     `你是「接力台」派来拆解任务的第 ${i.id} 棒：${i.label}。${ALONE}`,
@@ -36,9 +36,9 @@ export function planPrompt(i: StintPromptInput): string {
     '这个任务之后交给弱模型一棒一步地做，你负责拆：',
     `1. 先读 \`${BRIEF_REL}\` 和 \`${TASK_REL}\`，再读和任务有关的代码，想清楚整件事怎么做。`,
     `2. 把 \`${TASK_REL}\`「进度」里的清单改写成一步步的小步：每步一个弱模型一棒做得完、做完能验证（大约改一两个文件）。已经打勾的保留原样。`,
-    '3. 每步一行 `- [ ] …`；下面缩进写清楚：改哪些文件、要有哪些函数和行为、边界情况、怎么验证（跑什么命令、看到什么算对）。弱模型只照你写的做，要写具体，不写「优化一下」这种话。',
-    '4. 不要自己把活干一遍：项目里外都不写实现代码、不试跑实现，步骤里写做法和要求，不贴整段代码（函数签名、关键的一两行可以写）。代码留给弱模型写，复核时再由强模型把关。',
-    `5. 你只改 \`${TASK_REL}\`，不改代码、不建别的文件。交接写在 \`${i.handoff}\`：「做了什么」写拆成了几步，状态写「已交接」。`,
+    '3. 每步一行 `- [ ] …`；下面缩进几行写清楚：改哪些文件、要有哪些函数（写签名）和行为、要注意的边界、怎么验证。只写要求，不写逐字的期望输出、整段模板和一条条测试用例（测试由弱模型按要求自己写）；每步不超过 300 字。',
+    '4. 不要自己把活干一遍：项目里外都不写实现代码、不试跑（也不去试库函数怎么用）。代码留给弱模型写，最后由强模型终审把关。',
+    `5. 清单想好了一次写进 \`${TASK_REL}\`，不要一步一步地追加；你只改这个文件，不改代码、不建别的文件。交接写在 \`${i.handoff}\`：「做了什么」写拆成了几步，状态写「已交接」。`,
   ].join('\n');
 }
 
@@ -80,8 +80,8 @@ export interface FinalPromptInput extends StintPromptInput {
   from: string;
   to: string;
   reviewFile: string;
-  /** 派活：最后一批还没复核的棒，并进终审一起复核。 */
-  targets?: { id: number; label: string; tierWord: string }[];
+  /** 派活：最后一批还没复核的棒（编号），并进终审一起复核。 */
+  targets?: number[];
 }
 
 export function finalPrompt(i: FinalPromptInput): string {
@@ -92,7 +92,7 @@ export function finalPrompt(i: FinalPromptInput): string {
     '',
     ...(i.targets?.length
       ? [
-          `这几棒还没复核，一起复核：${i.targets.map((t) => `第 ${t.id} 棒（${t.label}，${t.tierWord}）`).join('、')}。逐棒对照它的交接看真实改动（接力本「先复核」一节有改动和方法），每棒写一份结论：${i.targets.map((t) => `\`${reviewFileFor(t.id)}\``).join('、')}（格式见接力本），「结论」一行只写：${VERDICT_CHOICES.join(' / ')}。`,
+          `这几棒还没复核，由你一起复核：${i.targets.map((n) => `第 ${n} 棒`).join('、')}。不用逐棒读交接、逐棒写结论：看全部改动和现在的代码就行，结论只写下面第 5 条那一份，接力台会把它记到这几棒上。`,
           '',
         ]
       : []),

@@ -427,11 +427,13 @@ function writerOf(v: LedgerView, by: Stint | null, mtimeMs: number, now: number)
 export function applyReviews(root: string, by: Stint | null, members: MemberInfo[] = allMembers(), now = new Date()): number[] {
   const v = loadLedger(root);
   const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
+  // 派活的终审一起复核了前面几棒，只写一份结论：也记到这几棒上。
+  const merged = new Map(v.stints.filter((x) => x.kind === 'final' && x.reviewFile && x.targets?.length).map((x) => [x.reviewFile!, x.targets!]));
   const marked: number[] = [];
   for (const f of listReviewFiles(root)) {
     const r = readReview(root, f.rel);
     if (!r || !reviewFilled(r)) continue;
-    for (const id of r.targets) {
+    for (const id of new Set([...r.targets, ...(merged.get(r.file) ?? [])])) {
       const s = v.stints.find((x) => x.id === id);
       // 只有干活的棒要复核。复核、终审的棒不算（终审的结论里常写「复核：第 5 棒终审」，5 是它自己）。
       if (!s || s.status === 'working' || s.kind !== 'work') continue;

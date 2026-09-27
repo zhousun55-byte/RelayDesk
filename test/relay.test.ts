@@ -489,7 +489,15 @@ test('派活：强模型先拆成小步，弱模型一棒做一步，中途不�
   );
   const merged = s.stints();
   assert.deepEqual(merged[5].targets, [2, 3, 4, 5], '弱模型的棒都并进终审一起复核');
-  assert.ok(merged.filter((x) => x.kind === 'work').every((x) => x.review === 'done'));
+  // 终审只写一份结论，接力台记到这几棒上（逐棒写复核最费强模型）
+  assert.deepEqual(fs.readdirSync(path.join(s.repo, '.relay/复核')).filter((f) => f.endsWith('.md')), [path.basename(merged[5].reviewFile)]);
+  assert.ok(merged.filter((x) => x.kind === 'work').every((x) => x.review === 'done' && x.reviews.at(-1).file === merged[5].reviewFile));
+  const finalPrompt = fs
+    .readdirSync(s.base)
+    .filter((f) => f.startsWith('prompt-codex-'))
+    .map((f) => fs.readFileSync(path.join(s.base, f), 'utf8'))
+    .find((p) => p.includes('派来做终审'));
+  assert.match(finalPrompt ?? '', /由你一起复核：第 2 棒、第 3 棒、第 4 棒、第 5 棒。不用逐棒读交接、逐棒写结论/);
   const prompts = fs
     .readdirSync(s.base)
     .filter((f) => f.startsWith('prompt-claude-'))

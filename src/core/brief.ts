@@ -127,7 +127,20 @@ export function buildBrief(input: BriefInput): string {
 
   // 待复核
   const pending = live.filter((x) => x.review === 'needed' && x.status !== 'working');
-  if (pending.length) {
+  // 派活的终审一起复核：只写一份结论（接力台记到每一棒上），不用逐棒看。
+  const merged = open?.kind === 'final' && open.targets?.length && open.reviewFile ? open : null;
+  if (pending.length && merged) {
+    s.push(
+      `## 先复核（${pending.length} 棒待复核）`,
+      '',
+      `终审一起复核第 ${merged.targets!.join('、')} 棒：看这件事的全部改动和现在的代码，不用逐棒看交接和改动。结论只写一份，写在 \`${merged.reviewFile}\`，接力台会记到这几棒上。「结论」一行只写这几种之一：${VERDICT_CHOICES.join(' / ')}。格式：`,
+      '',
+      '```markdown',
+      reviewTemplate(`终审（第 ${merged.id} 棒）`).trim(),
+      '```',
+      ''
+    );
+  } else if (pending.length) {
     const strong = input.members.filter((m) => m.tier === 'strong');
     s.push(`## 先复核（${pending.length} 棒待复核）`, '');
     s.push(

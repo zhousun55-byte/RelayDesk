@@ -146,10 +146,6 @@ function fakeScript(name: 'claude' | 'codex'): string {
     'fi',
     "if grep -q '派来做终审' \"$P\"; then",
     '  [ "$MODE" = final-fail ] && { echo "终审的时候出错了" >&2; exit 2; }',
-    "  for n in $(grep '这几棒还没复核' \"$P\" | grep -o '第 [0-9]* 棒' | grep -o '[0-9][0-9]*'); do",
-    '    mkdir -p .relay/复核',
-    `    printf '# 复核：第 %s 棒\\n\\n- 复核人：%s\\n- 结论：%s\\n\\n## 发现的问题和怎么处理的\\n\\n- 终审时一起看了，对得上\\n' "$n" "$WHO" "\${FAKE_REVIEW_VERDICT:-没问题}" > ".relay/复核/第\${n}棒.md"`,
-    '  done',
     `  R=$(sed -n 's/.*结论写到 ${BT}\\([^${BT}]*\\)${BT}.*/\\1/p' "$P" | head -1)`,
     // 真的 Codex 终审时标题写成了「复核：第 5 棒终审」（5 是终审自己这一棒）。
     `  SELF=$(echo "$H" | sed -n 's/.*第\\([0-9]*\\)棒.*/\\1/p')`,

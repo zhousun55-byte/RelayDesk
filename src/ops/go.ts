@@ -538,7 +538,7 @@ class GoRunner {
         from: base,
         to: from,
         reviewFile: reviewFile!,
-        targets: targets.map((t) => ({ id: t.id, label: t.who.label, tierWord: tierWord(t.who.tier) })),
+        targets: targets.map((t) => t.id),
       });
     } else if (kind === 'plan') {
       prompt = planPrompt({ id, label: who.label, handoff, gateCommand: gate });

@@ -632,6 +632,11 @@ test('接力本：有待复核时先写复核（给出改动文件、看文件�
   const clean = buildBrief({ task: parseTask(taskTemplate()), ledger: viewLedger([{ type: 'init', ts: T, snap: 'S0' }]), handoffs: new Map(), members: [], gateCommand: '', protectedPaths: [], nextId: 1, now: new Date(T) });
   assert.doesNotMatch(clean, /先复核/);
   assert.match(clean, /还没有写下任务/);
+  // 派活的终审一起复核：结论只写一份，不逐棒写
+  events.push({ type: 'stint', ts: T, stint: stint(3, { kind: 'final', via: 'relay', status: 'working', review: 'skip', to: undefined, endedAt: undefined, targets: [2], reviewFile: '.relay/复核/终审-第3棒-0927-1906.md' }) });
+  const fin = buildBrief({ task: parseTask('# 任务\n\n做滤镜\n\n## 进度\n\n- [x] 调色\n- [x] 导出\n'), ledger: viewLedger(events), handoffs, members: [], gateCommand: '', protectedPaths: [], nextId: 4, now: new Date(T) });
+  assert.match(fin, /终审一起复核第 2 棒.+结论只写一份，写在 `\.relay\/复核\/终审-第3棒-0927-1906\.md`/);
+  assert.doesNotMatch(fin, /复核\/第2棒\.md|每一棒写一份/);
 });
 
 test('盯文件夹：git、依赖、接力台自己写的都不管；任务、交接、复核结论要管', () => {
