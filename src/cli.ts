@@ -16,10 +16,13 @@ import {
   rollbackCommand,
   snapCommand,
   statusCommand,
+  stepCommand,
   stopCommand,
   taskCommand,
 } from './commands/relay';
-import { talkCommand, voteCommand } from './commands/talk';
+import { configCommand, settingsCommand } from './commands/settings';
+import { chatCommand, talkCommand, voteCommand } from './commands/talk';
+import { watchCommand } from './commands/watch';
 import { uiCommand } from './commands/ui';
 import { workersCommand } from './commands/workers';
 import { errorMessage } from './core/errors';
@@ -44,7 +47,9 @@ program
 program.addCommand(uiCommand(), { isDefault: true });
 program.addCommand(initCommand());
 program.addCommand(statusCommand());
+program.addCommand(watchCommand());
 program.addCommand(taskCommand());
+program.addCommand(stepCommand());
 program.addCommand(goCommand());
 program.addCommand(autoCommand());
 program.addCommand(reviewCommand());
@@ -56,8 +61,11 @@ program.addCommand(snapCommand());
 program.addCommand(briefCommand());
 program.addCommand(talkCommand());
 program.addCommand(voteCommand());
+program.addCommand(chatCommand());
 program.addCommand(detectCommand());
 program.addCommand(workersCommand());
+program.addCommand(settingsCommand());
+program.addCommand(configCommand());
 program.addCommand(doctorCommand());
 
 program.parseAsync(process.argv).catch((err: unknown) => {

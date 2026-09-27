@@ -10,7 +10,7 @@ import { enableProvider, loadDetected, tidyRegistry, type DetectReport } from '.
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
 import { copyToClipboard, fillTemplate, reveal, runOpener, chooseFolder } from '../core/launch';
-import { loadLedger, saveStint, type Stint } from '../core/ledger';
+import { loadLedger, markReview } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
 import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
 import { appNameOf, llmName, toolName } from '../core/names';
@@ -441,25 +441,9 @@ export function createServer(opts: ServerOptions): http.Server {
       return undoRollback(root);
     },
     '/api/mark': (q, b) => {
-      // 你说这一棒不用复核（比如其实是你自己改的）；review: 'needed' = 撤销，改回待复核。
       const root = dirOf(q, b);
       requireProject(root);
-      const v = loadLedger(root);
-      const s = v.stints.find((x) => x.id === Number(b.stint));
-      if (!s) throw new RelayError('没有这一棒。', 'no-stint');
-      if (s.status === 'working') throw new RelayError('这一棒还在进行中。', 'working');
-      if (b.review === 'needed') {
-        if (s.kind !== 'work') throw new RelayError('只有干活的棒要复核。', 'not-work');
-        // 撤销：去掉跳过时记的那句说明，改回待复核。
-        const next: Stint = { ...s, review: 'needed' };
-        const note = (s.note ?? '').replace(/\s*你标记为不用复核。\s*$/, '');
-        if (note) next.note = note;
-        else delete next.note;
-        saveStint(root, next);
-      } else {
-        const note = str(b.note)?.trim() || '你标记为不用复核。';
-        saveStint(root, { ...s, review: 'skip', note: [s.note, note].filter(Boolean).join(' ') });
-      }
+      markReview(root, Number(b.stint), b.review === 'needed' ? 'needed' : 'skip', str(b.note));
       refreshBrief(root);
       return {};
     },

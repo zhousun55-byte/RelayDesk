@@ -152,26 +152,31 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 
 ## 命令行
 
-网页能做的，命令行基本都能做：
+网页能做的，命令行都能做（传文件、看文件树除外）：
 
 | 命令 | 做什么 |
 |---|---|
 | `relay` / `relay ui` | 打开接力台网页 |
 | `relay init ["要做什么"]` | 接入当前文件夹（可以重复执行，缺什么补什么） |
 | `relay status` | 现在怎么样了：任务、进度、谁在做、待复核 |
+| `relay watch` | 一直开着看进度：任务、清单（下一步下面写做法）、谁在做、最近几棒，每 2 秒刷新，Ctrl-C 退出 |
 | `relay task "要做什么" --step 第一步 第二步` | 写下新任务（旧的存档） |
+| `relay step` / `relay step add 文字` / `done N` / `undo N` / `remove N` | 看清单、加一步、打勾、去掉勾、删一步 |
 | `relay go [谁]` | 让一个 AI 接着做一棒（不写谁就挑第一个有额度的） |
-| `relay review [谁]` | 请强模型复核所有待复核的棒 |
+| `relay review [谁]` | 请强模型复核所有待复核的棒；`--skip N` 标记第 N 棒不用复核，`--need N` 撤销 |
 | `relay auto ["要做什么"]` | 全自动做完；`--dispatch` 这一次用派活（`--relay` 这一次不用），`--no-wait` 都没额度时不等，`--max 20` 最多接力几棒 |
 | `relay stop` | 叫停 |
 | `relay diff [N]` | 看第 N 棒改了什么 |
 | `relay rollback N` / `relay rollback --undo` | 退回到第 N 棒之前 / 撤销退回 |
 | `relay snap` | 马上对一次账 |
 | `relay brief` | 打印接力本 |
-| `relay talk "问题" [--ask claude,codex] [--solo]` | 群聊 |
-| `relay vote "问题" [--option A B]` | 投票 |
+| `relay chat` | 终端里连续群聊：直接打字是讨论；`/对比`、`/投票 问题 \| 选项 \| 选项`、`/投 A`、`/采纳 A`、`/新群聊`、`/成员 名字`、`/退出` |
+| `relay talk "问题" [--ask claude,codex] [--solo]` | 问一句群聊；`--clear` 新群聊，`--list` 列出存档，`--resume N` 接着第 N 段 |
+| `relay vote "问题" [--option A B]` | 投票；不带问题显示最近一次，`--cast B` 你也投一票，`--adopt A` 采纳（写进任务的约定） |
 | `relay detect` | 重新识别这台电脑上的 AI 工具和接口 |
 | `relay workers list / add / edit / remove` | 管理成员名单 |
+| `relay settings` | 调度设置：`--mode dispatch`（派活）/ `relay`（接力）、`--level`、`--order`、`--max`、`--no-wait`、`--no-final` |
+| `relay config` | 项目设置：`--gate "npm test"` 检查命令、`--protect a.txt,config/*.json` 不许改的文件 |
 | `relay doctor` | 体检 |
 
 ## 文件都在哪

@@ -3,8 +3,8 @@ import path from 'node:path';
 import { Command } from 'commander';
 import { augmentPath } from '../core/env';
 import { RelayError } from '../core/errors';
-import { loadLedger, requireInit } from '../core/ledger';
-import { BRIEF_REL } from '../core/notes';
+import { loadLedger, markReview, requireInit } from '../core/ledger';
+import { BRIEF_REL, editTask, readTask, type TaskEdit } from '../core/notes';
 import { untilText } from '../core/quota';
 import { snapDiff, takeSnapshot } from '../core/snap';
 import { goLogTail, loadGoState, startGo, stopAllGo, stopGo, type GoState } from '../ops/go';
@@ -128,12 +128,49 @@ export function goCommand(): Command {
 
 export function reviewCommand(): Command {
   return new Command('review')
-    .description('请强模型复核所有待复核的棒（不指定人就挑第一个有额度的强模型）')
+    .description('请强模型复核所有待复核的棒（不指定人就挑第一个有额度的强模型）；--skip 标记某一棒不用复核')
     .argument('[谁]', '成员名')
-    .action(async (who: string | undefined) => {
+    .option('--skip <棒号>', '标记这一棒不用复核（比如其实是你自己改的）')
+    .option('--note <说明>', '和 --skip 一起用：为什么不用复核')
+    .option('--need <棒号>', '撤销「不用复核」，改回待复核')
+    .action(async (who: string | undefined, o: { skip?: string; note?: string; need?: string }) => {
       const root = requireRoot();
+      if (o.skip || o.need) {
+        const id = Number(o.skip ?? o.need);
+        markReview(root, id, o.skip ? 'skip' : 'needed', o.note);
+        refreshBrief(root);
+        ok(o.skip ? `第 ${id} 棒已标记为不用复核` : `第 ${id} 棒已改回待复核`);
+        return;
+      }
       await runAndWait(root, { mode: 'once', kind: 'review', ...(who ? { who } : {}) });
     });
+}
+
+/** 改清单：打勾、去掉勾、加一步、删一步（和网页上点的一样）。不带参数就列出来。 */
+export function stepCommand(): Command {
+  const show = (root: string) => {
+    const t = readTask(root);
+    if (!t.items.length) info('清单是空的。');
+    t.items.forEach((it, i) => info(`${String(i + 1).padStart(2)}. [${it.done ? 'x' : ' '}] ${it.text}${!it.done && it.note ? `\n       ${c.dim(it.note.replace(/\n/g, '\n       '))}` : ''}`));
+  };
+  const edit = (e: TaskEdit, said: string) => {
+    const root = requireRoot();
+    editTask(root, e);
+    refreshBrief(root);
+    ok(said);
+    show(root);
+  };
+  const nth = (n: string) => {
+    const i = Number(n);
+    if (!Number.isInteger(i) || i < 1) throw new RelayError(`「${n}」不是第几步`, 'no-item');
+    return i - 1;
+  };
+  const cmd = new Command('step').description('改任务清单：打勾、去掉勾、加一步、删一步。不带参数就列出来').action(() => show(requireRoot()));
+  cmd.command('add').description('在最后加一步').argument('<这一步...>').action((w: string[]) => edit({ op: 'add', text: w.join(' ') }, '已加入清单'));
+  cmd.command('done').description('第 N 步打勾').argument('<N>').action((n: string) => edit({ op: 'toggle', index: nth(n), done: true }, `第 ${n} 步已打勾`));
+  cmd.command('undo').description('去掉第 N 步的勾').argument('<N>').action((n: string) => edit({ op: 'toggle', index: nth(n), done: false }, `第 ${n} 步已去掉勾`));
+  cmd.command('remove').description('删掉第 N 步（连它下面的做法）').argument('<N>').action((n: string) => edit({ op: 'remove', index: nth(n) }, `第 ${n} 步已删掉`));
+  return cmd;
 }
 
 export function autoCommand(): Command {

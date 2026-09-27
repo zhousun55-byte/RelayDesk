@@ -368,6 +368,24 @@ export function saveStint(root: string, s: Stint): void {
   appendLedger(root, { type: 'stint', ts: new Date().toISOString(), stint: s });
 }
 
+/** 你说第 id 棒不用复核（比如其实是你自己改的）；needed = 撤销，改回待复核。网页和命令行共用。 */
+export function markReview(root: string, id: number, review: 'skip' | 'needed', note?: string): void {
+  const s = loadLedger(root).stints.find((x) => x.id === id);
+  if (!s) throw new RelayError('没有这一棒。', 'no-stint');
+  if (s.status === 'working') throw new RelayError('这一棒还在进行中。', 'working');
+  if (review === 'needed') {
+    if (s.kind !== 'work') throw new RelayError('只有干活的棒要复核。', 'not-work');
+    // 撤销：去掉跳过时记的那句说明，改回待复核。
+    const next: Stint = { ...s, review: 'needed' };
+    const rest = (s.note ?? '').replace(/\s*你标记为不用复核。\s*$/, '');
+    if (rest) next.note = rest;
+    else delete next.note;
+    saveStint(root, next);
+  } else {
+    saveStint(root, { ...s, review: 'skip', note: [s.note, note?.trim() || '你标记为不用复核。'].filter(Boolean).join(' ') });
+  }
+}
+
 /** 一棒在做什么：干活、复核、终审、拆解。 */
 export const KIND_WORD: Record<Stint['kind'], string> = { work: '干活', review: '复核', final: '终审', plan: '拆解' };
 
