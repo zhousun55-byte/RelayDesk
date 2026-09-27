@@ -96,17 +96,6 @@ export function initProject(dir: string, opts: InitOptions = {}): InitResult {
   return { root, actions, already };
 }
 
-/** 从当前文件夹往上找接入过的项目（像 git 找 .git 一样）；找不到就是当前文件夹。 */
-export function findRoot(start = process.cwd()): string {
-  let dir = path.resolve(start);
-  for (;;) {
-    if (fs.existsSync(path.join(dir, '.relay', 'journal.jsonl'))) return dir;
-    const up = path.dirname(dir);
-    if (up === dir) return path.resolve(start);
-    dir = up;
-  }
-}
-
 // ---- 接入过的文件夹（盯文件夹用） ----
 
 /** 最近打开过、而且接入过的文件夹。 */

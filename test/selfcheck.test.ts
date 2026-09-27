@@ -36,6 +36,7 @@ const harness = require('../src/core/harness') as typeof import('../src/core/har
 const members = require('../src/core/members') as typeof import('../src/core/members');
 const tier = require('../src/core/tier') as typeof import('../src/core/tier');
 const detect = require('../src/core/detect') as typeof import('../src/core/detect');
+const files = require('../src/core/files') as typeof import('../src/core/files');
 const go = require('../src/ops/go') as typeof import('../src/ops/go');
 const config = require('../src/core/config') as typeof import('../src/core/config');
 /* eslint-enable @typescript-eslint/no-require-imports */
@@ -388,7 +389,7 @@ test('上次接力台被关掉时留下的工具：进程号对得上、命令�
   }
 });
 
-test('小问题：写任务时说明里的 $$、$& 原样；Fable 算强、自动识别到又看不出模型的工具按弱；「已交接（没做完的写在下一步）」算交接了；没登录只认成句的说法；Copilot 只读时不许改文件、跑命令', () => {
+test('小问题：写任务时说明里的 $$、$& 原样；Fable 算强、自动识别到又看不出模型的工具按弱；「已交接（没做完的写在下一步）」算交接了；.GIT 这种写法也看不了；没登录只认成句的说法；Copilot 只读时不许改文件、跑命令', () => {
   const root = tmpDir('small');
   notes.setTask(root, '改部署脚本\n把 echo $$ 改成 echo "$PPID"，价格写成 $&9.99');
   const raw = fs.readFileSync(path.join(root, '.relay/任务.md'), 'utf8');
@@ -413,6 +414,11 @@ test('小问题：写任务时说明里的 $$、$& 原样；Fable 算强、自�
   assert.equal(state('快交接了，还在做'), 'working');
   assert.equal(state('全部完成'), 'finished');
   assert.equal(state('卡住了'), 'stuck');
+
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.git', 'config'), '[remote]\n');
+  assert.throws(() => files.readProjectFile(root, '.git/config'), /不能看/);
+  if (fs.existsSync(path.join(root, '.GIT'))) assert.throws(() => files.readProjectFile(root, '.GIT/config'), /不能看/, '不分大小写的磁盘上 .GIT 就是 .git');
 
   assert.equal(harness.explainFailure('claude-official', 'Error: tests failed in src/login.ts'), null);
   assert.equal(harness.explainFailure('codex', 'AssertionError at app.test.js:401'), null);

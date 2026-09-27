@@ -6,7 +6,6 @@ import { countedReviews, KIND_WORD, loadLedger, statusWord, stintTitle, tierWord
 import { archivedTaskTitles, handoffFilled, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
 import { whoName } from '../core/names';
 import { protocolState } from '../core/protocol';
-import type { TalkContext } from '../core/talk';
 import { untilText } from '../core/quota';
 import { goLogTail, loadGoState, type GoState } from './go';
 import { projectConfigSafe, relayBusy } from './track';
@@ -304,17 +303,4 @@ export function statusLines(root: string): string[] {
   }
   if (pv.protocol !== 'ok') out.push(pv.protocol === 'old' ? '提示：AGENTS.md / CLAUDE.md 里的接力规矩是旧版的，relay init 可以更新。' : '提示：AGENTS.md / CLAUDE.md 里没有接力规矩了，relay init 可以补上。');
   return out;
-}
-
-/** 群聊时给 AI 的项目背景：当前任务和进度。 */
-export function talkContext(root: string): () => TalkContext {
-  return () => {
-    const t = readTask(root);
-    if (t.empty) return { task: null };
-    const p = taskProgress(t);
-    const v = loadLedger(root);
-    const last = [...v.stints].reverse().find((s) => s.status !== 'working');
-    const phase = `进度 ${p.done}/${p.total}${last ? `；最近一棒：第 ${last.id} 棒 ${last.who.label}${last.summary ? `（${last.summary}）` : ''}` : ''}`;
-    return { task: { title: t.title, phaseText: phase, changes: [] } };
-  };
 }

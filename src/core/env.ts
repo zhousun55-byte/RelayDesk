@@ -22,7 +22,7 @@ export function loginEnv(): Record<string, string> {
   if (process.env.RELAY_LOGIN_PATH === 'off' || process.platform === 'win32') return (loginCache = {});
   const shell = process.env.SHELL || '/bin/zsh';
   // detached：登录 shell 在自己的会话里跑、没有控制终端。不然交互式的 zsh 会把终端的前台抢过去不还，
-  // 接力台再读键盘、切换按键模式就会被系统挂起（终端里的 relay 界面卡住）。Node 支持，只是类型里没写。
+  // 之后在终端里读键盘的命令（relay chat）会被系统挂起。Node 支持这个选项，只是类型里没写。
   const opts: SpawnSyncOptionsWithStringEncoding & { detached: boolean } = {
     encoding: 'utf8',
     timeout: 8000,
