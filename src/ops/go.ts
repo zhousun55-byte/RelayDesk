@@ -752,7 +752,8 @@ class GoRunner {
     let idle = 0;
     try {
       requireInit(this.root);
-      for (let guard = 0; guard < this.settings.maxStints * 3 + 10; guard++) {
+      // 防止没完没了的保险：派活一棒一步，步数多时棒数也多
+      for (let guard = 0; guard < Math.max(this.settings.maxStints, 50) * 3 + 10; guard++) {
         if (this.stopRequested) return this.finish('stopped', '全自动已停止：改到一半的内容还在文件夹里');
         track(this.root);
         const v = loadLedger(this.root);
@@ -856,7 +857,9 @@ class GoRunner {
         }
 
         // 4. 派人干活（派活时只派弱模型，一棒做清单里的一步）。
-        if (stints >= this.settings.maxStints) return this.finish('needs-human', `全自动停止：接力到上限 ${stints} 棒，任务还没做完`);
+        // 派活一棒只做一步：上限至少是步数的两倍（每步留一次重做），不然清单一长就停在半路
+        const cap = dispatch ? Math.max(this.settings.maxStints, task.items.length * 2) : this.settings.maxStints;
+        if (stints >= cap) return this.finish('needs-human', `全自动停止：接力到上限 ${stints} 棒，任务还没做完`);
         const w = this.pick(dispatch ? 'weak' : 'any');
         if (!w && dispatch) {
           // 弱模型都用不了：按「等额度」等最早恢复的弱模型，或者停下。不换强模型干活，也不复核（做到哪写在页面上，复核你来点）。

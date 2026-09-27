@@ -544,3 +544,13 @@ test('全自动 --no-final：这一次清单打完不终审，强模型做完就
     [['work', 'codex']]
   );
 });
+
+test('派活一棒只做一步：全自动上限比步数少时，按步数的两倍算，不停在半路', () => {
+  const s = prepared('dispatch-cap');
+  setOrder(s, ['claude', 'codex'], { maxStints: 2 });
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  const out = s.relay(['auto']);
+  assert.match(out, /✓ 验收通过：清单 4\/4 全部打勾/);
+  assert.equal(s.stints().filter((x) => x.kind === 'work').length, 4);
+});
