@@ -316,7 +316,7 @@ svg.i {
   }
 }
 .enter {
-  animation: rise 0.34s var(--ease) both;
+  animation: rise 0.34s var(--ease) backwards;
   animation-delay: var(--d, 0ms);
 }
 
@@ -1821,7 +1821,7 @@ button.busy::after {
 .verdict.accepted .no {
   background: var(--ink);
   color: var(--paper);
-  animation: land 0.6s var(--pop) both;
+  animation: land 0.6s var(--pop) backwards;
 }
 /* 验收通过：终点落定时弹一下，勾一笔画出来 */
 .verdict.accepted .no path {
@@ -2071,7 +2071,7 @@ button.busy::after {
   gap: 6px;
 }
 .opt .voters > * {
-  animation: pop 0.3s var(--pop) both;
+  animation: pop 0.3s var(--pop) backwards;
 }
 .opt .n {
   font-size: 13px;
@@ -2136,7 +2136,7 @@ button.busy::after {
   align-items: flex-start;
   gap: 8px;
   line-height: 1.55;
-  animation: rise 0.26s var(--ease) both;
+  animation: rise 0.26s var(--ease) backwards;
 }
 
 /* 最底下的输入框：浮在纸面上的一张磨砂纸 */
@@ -2378,7 +2378,7 @@ button.busy::after {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  animation: rise 0.36s var(--ease) both;
+  animation: rise 0.36s var(--ease) backwards;
 }
 .hero-head {
   display: flex;
@@ -2417,7 +2417,7 @@ button.busy::after {
   text-align: left;
   font-size: 13px;
   color: var(--ink-3);
-  animation: rise 0.36s 0.06s var(--ease) both;
+  animation: rise 0.36s 0.06s var(--ease) backwards;
   transition: box-shadow 0.18s, transform 0.22s var(--ease);
 }
 .notice:hover {
@@ -3096,7 +3096,7 @@ button.busy::after {
   padding: 18px 22px 24px;
 }
 .pane-in > * {
-  animation: rise 0.28s var(--ease) both;
+  animation: rise 0.28s var(--ease) backwards;
 }
 .pane-in > :nth-child(3) {
   animation-delay: 0.03s;
@@ -3106,6 +3106,7 @@ button.busy::after {
 }
 .settings .close {
   position: absolute;
+  z-index: 1;
   right: 12px;
   top: 12px;
 }
