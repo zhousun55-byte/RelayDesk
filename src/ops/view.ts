@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { acceptance, pendingWhy, type Acceptance } from '../core/acceptance';
 import { loadAutoSettings } from '../core/auto-settings';
-import { countedReviews, loadLedger, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
+import { countedReviews, KIND_WORD, loadLedger, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
 import { archivedTaskTitles, handoffFilled, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
 import { whoName } from '../core/names';
 import { protocolState } from '../core/protocol';
@@ -222,7 +222,7 @@ export function projectView(root: string): ProjectView {
   if (go && go.status === 'waiting') {
     now = { kind: 'waiting', text: go.phase };
   } else if (busy) {
-    now = { kind: 'relay', text: `${whoName(busy.who)} 正在${busy.kind === 'review' ? '复核' : busy.kind === 'final' ? '终审' : '干活'}（第 ${busy.id} 棒，接力台调度）`, stint: busy.id, since: busy.startedAt };
+    now = { kind: 'relay', text: `${whoName(busy.who)} 正在${KIND_WORD[busy.kind]}（第 ${busy.id} 棒，接力台调度）`, stint: busy.id, since: busy.startedAt };
   } else if (v.open) {
     now = { kind: 'native', text: `第 ${v.open.id} 棒进行中：${v.open.who.label === '不知道是谁' ? '有 AI 在改文件（还没写交接，不知道是谁）' : `${whoName(v.open.who)} 在做`}`, stint: v.open.id, since: v.open.startedAt };
   }

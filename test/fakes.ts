@@ -10,6 +10,7 @@ import type { Sandbox } from './helpers';
  * - 干活：在 work.txt 里加一行，把任务清单里第一个没打勾的打上勾，按提示词里给的文件名写交接；
  * - 复核：给「要复核的是」里的每一棒写复核结论；
  * - 终审：写终审结论，交接状态写「全部完成」；
+ * - 拆解（派活）：把任务清单换成 4 步；
  * - 只读（群聊 / 投票）：按提示词回答（投票时不投自己）。
  * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail / slow（先把进程号写进 FAKE_DIR/<名字>.pid，
  * 睡 30 秒再干活），FAKE_<名字>_WHO = 交接里写的身份；FAKE_REVIEW_SAY = 复核完说的那句话。
@@ -125,6 +126,14 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '    fi ;;',
     'esac',
     `H=$(sed -n 's/.*交接写在 ${BT}\\([^${BT}]*\\)${BT}.*/\\1/p' "$P" | head -1)`,
+    // 拆解：把「进度」换成 4 步（第一步下面带一行做法），交接写「拆成 4 步」。
+    "if grep -q '派来拆解' \"$P\"; then",
+    '  T=.relay/任务.md',
+    "  awk '/^## 进度/{print; print \"\"; print \"- [ ] 第一步：建 a.txt\"; print \"  - 改 a.txt：写一行 a\"; print \"- [ ] 第二步：建 b.txt\"; print \"- [ ] 第三步：建 c.txt\"; print \"- [ ] 第四步：建 d.txt\"; print \"\"; skip=1; next} skip && /^## /{skip=0} !skip{print}' \"$T\" > \"$T.tmp\" && mv \"$T.tmp\" \"$T\"",
+    `  [ -n "$H" ] && printf '# 交接：%s\\n\\n- 状态：已交接\\n\\n## 做了什么\\n\\n- 把任务拆成 4 步\\n' "$WHO" > "$H"`,
+    '  say "拆好了"',
+    '  exit 0',
+    'fi',
     "if grep -q '派来复核' \"$P\"; then",
     "  for n in $(grep '要复核的是' \"$P\" | grep -o '第 [0-9]* 棒' | grep -o '[0-9][0-9]*'); do",
     '    mkdir -p .relay/复核',

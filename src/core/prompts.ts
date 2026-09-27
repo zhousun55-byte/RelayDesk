@@ -28,6 +28,34 @@ export function workPrompt(i: StintPromptInput): string {
   ].join('\n');
 }
 
+/** 派活：强模型把任务拆成弱模型一棒做得完的小步，只写清单，不写代码。 */
+export function planPrompt(i: StintPromptInput): string {
+  return [
+    `你是「接力台」派来拆解任务的第 ${i.id} 棒：${i.label}。${ALONE}`,
+    '',
+    '这个任务之后交给弱模型一棒一步地做，你负责拆：',
+    `1. 先读 \`${BRIEF_REL}\` 和 \`${TASK_REL}\`，再读和任务有关的代码，想清楚整件事怎么做。`,
+    `2. 把 \`${TASK_REL}\`「进度」里的清单改写成一步步的小步：每步一个弱模型一棒做得完、做完能验证（大约改一两个文件）。已经打勾的保留原样。`,
+    '3. 每步一行 `- [ ] …`；下面缩进写清楚：改哪些文件、具体怎么改、怎么验证（跑什么命令、看到什么算对）。弱模型只照你写的做，要写具体，不写「优化一下」这种话。',
+    `4. 你只改 \`${TASK_REL}\`，不改代码、不建别的文件。交接写在 \`${i.handoff}\`：「做了什么」写拆成了几步，状态写「已交接」。`,
+  ].join('\n');
+}
+
+/** 派活：弱模型只做清单里的一步（强模型拆好的，做法写在这一步下面）。 */
+export function stepPrompt(i: StintPromptInput & { step: { index: number; text: string } }): string {
+  return [
+    `你是「接力台」派来接着做这个项目的第 ${i.id} 棒：${i.label}。${ALONE}`,
+    '',
+    `这一棒只做任务清单里的第 ${i.step.index} 步：「${i.step.text}」。怎么改、怎么验证写在 \`${TASK_REL}\` 里这一步下面，照着做。`,
+    '',
+    `1. 先读 \`${BRIEF_REL}\`（任务、上一棒留的话都在里面），再看 \`${TASK_REL}\` 里这一步。`,
+    `2. 只做这一步，不做后面的步骤；做完在 \`${TASK_REL}\` 里把它打勾。`,
+    '3. 照写的做不通、或者缺信息，就停下：交接状态写「卡住了」，写清楚卡在哪。不要自己换做法。',
+    `4. 交接写在 \`${i.handoff}\`，状态写「已交接」。`,
+    ...(i.gateCommand ? [`5. 收工前跑一遍检查：\`${i.gateCommand}\`。`] : []),
+  ].join('\n');
+}
+
 export interface ReviewPromptInput extends StintPromptInput {
   targets: { id: number; label: string; tierWord: string }[];
 }

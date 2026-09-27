@@ -143,15 +143,22 @@ export function autoCommand(): Command {
     .option('--full', '完全放开（工具不再拦任何操作；默认是安全档）')
     .option('--max <棒数>', '最多接力几棒')
     .option('--no-wait', '都没额度了就停下，不等')
+    .option('--dispatch', '这一次用派活：强模型拆成小步，弱模型一棒做一步，强模型每 3 棒复核一次')
+    .option('--relay', '这一次不用派活（设置里开着派活时）')
     .option('--force', '在别的工具里干到一半的那一位已经停下了（额度用完、关掉了），直接换人')
-    .action(async (words: string[], opts: { full?: boolean; max?: string; wait: boolean; force?: boolean }) => {
+    .action(async (words: string[], opts: { full?: boolean; max?: string; wait: boolean; dispatch?: boolean; relay?: boolean; force?: boolean }) => {
       const root = requireRoot();
       const text = words.join(' ').trim();
       if (text) newTask(root, text);
       await runAndWait(root, {
         mode: 'auto',
         ...(opts.force ? { force: true } : {}),
-        settings: { ...(opts.full ? { level: 'full' } : {}), ...(opts.max ? { maxStints: Number(opts.max) } : {}), ...(opts.wait === false ? { waitForQuota: false } : {}) },
+        settings: {
+          ...(opts.full ? { level: 'full' } : {}),
+          ...(opts.max ? { maxStints: Number(opts.max) } : {}),
+          ...(opts.wait === false ? { waitForQuota: false } : {}),
+          ...(opts.dispatch ? { dispatch: true } : opts.relay ? { dispatch: false } : {}),
+        },
       });
     });
 }

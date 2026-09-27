@@ -63,6 +63,7 @@ const ICONS = {
   minus: '<path d="M3.25 8h9.5"/>',
   arrow: '<path d="M3 8h10M9.25 4.25 13 8l-3.75 3.75"/>',
   ballot: '<path d="M2.75 8h10.5v5.25H2.75zM5.5 8V3h5v5M6.75 5.5h2.5"/>',
+  list: '<path d="M6.25 4h7M6.25 8h7M6.25 12h7"/><path d="M3 4h.01M3 8h.01M3 12h.01" stroke-width="2.2"/>',
   route: '<circle cx="8" cy="3.5" r="1.75"/><circle cx="8" cy="12.5" r="1.75" fill="currentColor"/><path d="M8 5.25v5.5"/>',
 };
 
@@ -1636,7 +1637,7 @@ function renderHero(mode) {
 
 // ----- 顶栏：项目 / 任务几，现在谁在做，待复核，清单，控制 -----
 
-const KIND_WORD = { work: '干活中', review: '复核中', final: '终审中' };
+const KIND_WORD = { work: '干活中', review: '复核中', final: '终审中', plan: '拆解中' };
 
 function renderBar(t) {
   const p = S.st.project;
@@ -2149,7 +2150,7 @@ function headEl(t, latest) {
   );
 }
 
-/** 清单：点方框打勾，悬停出现删除，最后一行直接写下一步。 */
+/** 清单：点方框打勾，悬停出现删除，最后一行直接写下一步。没做的步骤下面用小字写做法（派活时强模型写的）。 */
 function checklist(task) {
   let marked = false;
   return h(
@@ -2175,7 +2176,7 @@ function checklist(task) {
           },
           icon('check')
         ),
-        h('span', { class: 'step' }, it.text),
+        h('span', { class: 'step' }, h('span', { html: inline(esc(it.text)) }), !it.done && it.note ? h('small', { html: inline(esc(it.note)) }) : null),
         h('button', { class: 'x', 'aria-label': '删除这一步', 'data-tip': '删除', onclick: () => editStep({ op: 'remove', index: i }, () => S.st.project.task.items.splice(i, 1)) }, icon('x'))
       );
     }),
@@ -2293,7 +2294,7 @@ function summaryOf(s) {
   if (s.summary) return { text: s.summary };
   if (s.status === 'working') return { text: s.via === 'relay' ? '开始了' : '正在改文件', faint: true };
   if (s.note && FAILED.has(s.status)) return { text: s.note };
-  if (s.kind === 'review') return { text: '复核', faint: true };
+  if (s.kind === 'review' || s.kind === 'plan') return { text: s.kind === 'plan' ? '拆解' : '复核', faint: true };
   return { text: s.ghost || !s.handoff ? '没有交接' : '交接里没写做了什么', faint: true };
 }
 
@@ -2303,6 +2304,7 @@ function pillOf(s) {
   if (s.rolledBack) return h('span', { class: 'pill soft' }, '作废');
   if (s.kind === 'final' && s.verdictWord) return h('span', { class: 'pill' }, icon('search'), `终审 · ${s.verdictWord}`);
   if (s.kind === 'review') return h('span', { class: 'pill' }, icon('review'), '复核');
+  if (s.kind === 'plan') return h('span', { class: 'pill' }, icon('list'), '拆解');
   const [ic, word] = { handed: ['arrow', '已交接'], unfinished: ['', '没交接'], quota: ['', `额度用完${s.quotaUntil ? ` · ${clock(s.quotaUntil)} 恢复` : ''}`], failed: ['', '出错'], stopped: ['stop', '已停止'] }[s.status] || [];
   if (!word) return null;
   return h('span', { class: `pill${s.status === 'handed' ? '' : ' soft'}` }, s.status === 'failed' ? h('span', { class: 'rd' }) : ic ? icon(ic) : null, word);
@@ -4353,6 +4355,17 @@ function settingsBody(tab, redraw) {
     const sw = (key) => h('button', { class: 'switch', role: 'switch', 'aria-checked': String(!!s[key]), 'aria-label': key, onclick: () => save({ [key]: !s[key] }) }, h('span', { class: 'track' }));
     return [
       h('div', { class: 'set-title' }, '调度', mark.el),
+      h(
+        'div',
+        { class: 'row' },
+        h('span', { class: 'lbl' }, '全自动'),
+        h(
+          'div',
+          { class: 'seg', role: 'group', 'aria-label': '全自动' },
+          h('button', { 'aria-pressed': String(!s.dispatch), 'data-tip': '按顺序，谁有额度谁做', onclick: () => s.dispatch && save({ dispatch: false }) }, '接力'),
+          h('button', { 'aria-pressed': String(!!s.dispatch), 'data-tip': '强模型拆成小步，弱模型一棒做一步，强模型每 3 棒复核一次', onclick: () => !s.dispatch && save({ dispatch: true }) }, '派活')
+        )
+      ),
       h(
         'div',
         { class: 'row' },

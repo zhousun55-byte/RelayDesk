@@ -8,13 +8,13 @@ import { loadAutoSettings, normalizeAutoSettings, type AutoSettings } from '../c
 import { errorMessage, RelayError } from '../core/errors';
 import { refreshHarnessModel } from '../core/detect';
 import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from '../core/harness';
-import { countedReviews, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
+import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { pidAlive } from '../core/proc';
 import { allMembers, orderMembers, readyMembers, type MemberInfo } from '../core/members';
 import { llmName, whoName } from '../core/names';
-import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc } from '../core/notes';
-import { finalPrompt, reviewPrompt, workPrompt } from '../core/prompts';
+import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
+import { finalPrompt, planPrompt, reviewPrompt, stepPrompt, workPrompt } from '../core/prompts';
 import { clearQuota, detectQuota, markQuota, untilText } from '../core/quota';
 import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, type RunHandle, type RunResult } from '../core/runner';
 import { cause, plain } from '../core/cause';
@@ -25,8 +25,13 @@ import { applyReviews, closeStint, gateStint, projectConfig, projectConfigSafe, 
 /**
  * 接力台调度：替你让某个 AI 接着做一棒；或者「全自动」一直接力下去——
  * 额度用完换下一位，有待复核就先派强模型复核，任务清单全部打勾后请强模型终审，都没额度了就等。
+ * 派活（设置里打开）：强模型先把任务拆成小步，干活只派弱模型、一棒一步，攒够 REVIEW_BATCH 棒再请强模型一起复核；
+ * 弱模型都用不了时不换强模型干活，等额度或停下。
  * 一棒一棒都记在账本里，所以随时能停、能接着跑。
  */
+
+/** 派活时弱模型做满几棒，强模型复核一次。 */
+const REVIEW_BATCH = 3;
 
 export type GoStatus = 'running' | 'waiting' | 'done' | 'stopped' | 'needs-human' | 'failed';
 
@@ -67,6 +72,9 @@ export interface GoHooks {
   onUpdate?: (s: GoState) => void;
   onLine?: (line: string) => void;
 }
+
+/** 挑人时要强的、弱的，还是都行。 */
+type Tier = 'strong' | 'weak' | 'any';
 
 /** 给人看的名字：它用的模型（GPT-6 Sol），认不出模型写工具名。 */
 const nameOf = (m: MemberInfo) => llmName(m.model) || m.label;
@@ -277,6 +285,29 @@ function tmpOut(): string {
   return path.join(os.tmpdir(), `relay-out-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.txt`);
 }
 
+/** 清单里的一步（第几步从 1 数）。 */
+interface Step {
+  index: number;
+  text: string;
+}
+
+/** 清单里下一步还没做的。 */
+function nextStep(task: TaskDoc): Step | undefined {
+  const i = task.items.findIndex((x) => !x.done);
+  return i < 0 ? undefined : { index: i + 1, text: task.items[i].text };
+}
+
+/** 这个任务是什么时候写下的（没有就是接入的时候）。 */
+function taskSince(v: LedgerView): number {
+  return Date.parse([...v.events].reverse().find((e) => e.type === 'task')?.ts ?? v.init?.ts ?? '');
+}
+
+/** 这个任务派活时拆过没有：任务写下之后有一棒拆解交接了。 */
+function planned(v: LedgerView): boolean {
+  const since = taskSince(v);
+  return v.stints.some((s) => s.kind === 'plan' && s.status === 'handed' && !s.rolledBack && !(Date.parse(s.startedAt) < since));
+}
+
 interface StintOutcome {
   stint: Stint;
   /** 这一棒改了文件没有。 */
@@ -298,6 +329,8 @@ class GoRunner {
   private readonly weakFinals = new Set<string>();
   /** 收工前补跑检查的次数。 */
   private gateRuns = 0;
+  /** 派活时弱模型做不下去了：攒着的复核不等凑够就做。 */
+  private reviewNow = false;
 
   constructor(
     private readonly root: string,
@@ -428,8 +461,8 @@ class GoRunner {
     }
   }
 
-  /** 让一位成员跑一棒（干活 / 复核 / 终审）。 */
-  async runStint(m: MemberInfo, kind: Stint['kind'], targets: Stint[] = []): Promise<StintOutcome> {
+  /** 让一位成员跑一棒（干活 / 复核 / 终审 / 拆解）。step：派活时这一棒只做清单里的哪一步。 */
+  async runStint(m: MemberInfo, kind: Stint['kind'], targets: Stint[] = [], step?: Step): Promise<StintOutcome> {
     const root = this.root;
     const cfg = projectConfig(root);
     // 先把文件夹里的事对上账：有人（你自己在别的工具里）改到一半的，算它一棒，结束掉。
@@ -476,12 +509,12 @@ class GoRunner {
     saveStint(root, stint);
     refreshBrief(root);
     const handoffsBefore = new Set(listHandoffFiles(root).map((f) => f.rel));
-    const what = kind === 'review' ? '复核' : kind === 'final' ? '终审' : '干活';
+    const what = KIND_WORD[kind];
     this.state.current = { stint: id, member: m.name, label: who.label, kind, since: stint.startedAt, log: logRel };
     this.state.stints.push(id);
     this.phase(`第 ${id} 棒（${whoName(who)}）正在${what}`);
     const log = this.logger(logAbs);
-    log(`# ${stintTitle(stint)}（${tierWord(who.tier)}）${what}${targets.length ? `：第 ${targets.map((t) => t.id).join('、')} 棒` : ''}`);
+    log(`# ${stintTitle(stint)}（${tierWord(who.tier)}）${what}${targets.length ? `：第 ${targets.map((t) => t.id).join('、')} 棒` : ''}${step ? `：清单第 ${step.index} 步` : ''}`);
 
     const gate = cfg.gate.command.trim();
     let prompt: string;
@@ -490,6 +523,10 @@ class GoRunner {
     } else if (kind === 'final') {
       const base = v.task?.snap ?? v.init?.snap ?? from;
       prompt = finalPrompt({ id, label: who.label, handoff, gateCommand: gate, from: base, to: from, reviewFile: reviewFile! });
+    } else if (kind === 'plan') {
+      prompt = planPrompt({ id, label: who.label, handoff, gateCommand: gate });
+    } else if (step) {
+      prompt = stepPrompt({ id, label: who.label, handoff, gateCommand: gate, step });
     } else {
       prompt = workPrompt({ id, label: who.label, handoff, gateCommand: gate });
     }
@@ -590,7 +627,7 @@ class GoRunner {
     const ran = actualModel && !(who.model && who.model === actualModel) ? { ...who, model: actualModel, label: `${m.label} · ${actualModel}`, tier: who.model && sameModel(who.model, actualModel) ? who.tier : memberTier(m.agent, actualModel) } : who;
     const closed = closeStint(root, { ...stint, who: ran, pid: process.pid }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
     // 调度拿着锁，这时只有检查命令在跑：它自己写的缓存、报告算接力台的改动，不算到哪一棒头上（不然下一轮会以为有别的 AI 在改文件）。
-    if (kind !== 'work' || closed.facts?.files || closed.factsError) await gateStint(root, id, cfg, { absorb: 'all' }).catch(() => undefined);
+    if (kind === 'review' || kind === 'final' || closed.facts?.files || closed.factsError) await gateStint(root, id, cfg, { absorb: 'all' }).catch(() => undefined);
     // 终审的结论：收工时要看它（交接成功不等于终审通过）。
     if (kind === 'final' && reviewFile) {
       const r = readReview(root, reviewFile);
@@ -612,16 +649,22 @@ class GoRunner {
     return orderMembers(allMembers(this.settings.level), this.settings.order);
   }
 
-  /** 挑一位：能调度、没在等额度、这次没出过错。strong = 只要强的。 */
-  private pick(strong: boolean, exclude: string[] = []): MemberInfo | null {
-    const list = readyMembers(this.members()).filter((m) => !this.failed.has(m.name) && !exclude.includes(m.name));
-    return (strong ? list.find((m) => m.tier === 'strong') : list[0]) ?? null;
+  /** 挑一位：能调度、没在等额度、这次没出过错。tier = 只要强的 / 只要弱的 / 都行。 */
+  private pick(tier: Tier, exclude: string[] = []): MemberInfo | null {
+    return readyMembers(this.members()).find((m) => !this.failed.has(m.name) && !exclude.includes(m.name) && (tier === 'any' || m.tier === tier)) ?? null;
   }
 
-  /** 最早恢复额度的那一位（只看强的 / 看所有能调度的）。 */
-  private earliestCooling(strong: boolean): MemberInfo | null {
-    const list = this.members().filter((m) => m.canWork && m.cooling && !this.failed.has(m.name) && (!strong || m.tier === 'strong'));
+  /** 最早恢复额度的那一位。 */
+  private earliestCooling(tier: Tier): MemberInfo | null {
+    const list = this.members().filter((m) => m.canWork && m.cooling && !this.failed.has(m.name) && (tier === 'any' || m.tier === tier));
     return list.sort((a, b) => new Date(a.cooling!).getTime() - new Date(b.cooling!).getTime())[0] ?? null;
+  }
+
+  /** 派活时弱模型为什么都用不了（每一位一句）。 */
+  private weakWhy(): string {
+    const weak = this.members().filter((m) => m.tier === 'weak');
+    if (!weak.length) return '：名单里没有弱模型';
+    return `：${weak.map((m) => `${nameOf(m)}${this.failed.has(m.name) ? '这次出错或做不下去' : m.cooling ? cause.quota(m.cooling) : `不能派活（${plain(m.why ?? '不能用')}）`}`).join('；')}`;
   }
 
   private async waitFor(m: MemberInfo, why: string): Promise<boolean> {
@@ -650,7 +693,7 @@ class GoRunner {
         if (!m) throw new RelayError(`名单里没有「${this.opts.who}」`, 'no-agent');
         if (!m.canWork) throw new RelayError(`${nameOf(m)} 不能派活：${plain(m.why ?? '不能用')}`, 'cannot-drive');
       } else {
-        m = this.pick(kind === 'review');
+        m = this.pick(kind === 'review' ? 'strong' : 'any');
         if (!m) throw new RelayError(kind === 'review' ? '没有能复核的强模型：都没额度或没登录' : '没有能派活的成员：都没额度或没登录', 'nobody');
       }
       if (kind === 'review') {
@@ -660,7 +703,8 @@ class GoRunner {
         const o = await this.runStint(m, 'review', targets);
         return this.finishOnce(o);
       }
-      const o = await this.runStint(m, 'work');
+      // 派活时指定一位弱模型：它只做清单里下一步（强模型拆好的）。
+      const o = await this.runStint(m, 'work', [], this.settings.dispatch && m.tier === 'weak' ? nextStep(readTask(this.root)) : undefined);
       return this.finishOnce(o);
     } catch (e) {
       return this.finish(e instanceof RelayError && e.code === 'native-active' ? 'needs-human' : 'failed', errorMessage(e));
@@ -690,9 +734,11 @@ class GoRunner {
         const task = readTask(this.root);
         if (task.empty) return this.finish('needs-human', '全自动停止：还没写任务');
         const pending = pendingReviews(v);
+        const dispatch = this.settings.dispatch;
+        if (!pending.length) this.reviewNow = false;
 
-        // 1. 有待复核、又有强模型能用：先复核。
-        if (pending.length) {
+        // 1. 有待复核、又有强模型能用：先复核。派活时攒够几棒、清单做完了、弱模型做不下去了才复核。
+        if (pending.length && (!dispatch || pending.length >= REVIEW_BATCH || taskComplete(task) || this.reviewNow)) {
           const stuck = pending.filter((p) => (this.reviewTries.get(p.id) ?? 0) >= 2);
           if (stuck.length) {
             const ids = stuck.map((p) => p.id).join('、');
@@ -708,8 +754,9 @@ class GoRunner {
             return this.finish('needs-human', `全自动停止：复核两次没过，${why.join('；')}`);
           }
           const authors = pending.map((p) => p.who.member).filter(Boolean) as string[];
-          const reviewer = this.pick(true, authors) ?? this.pick(true);
+          const reviewer = this.pick('strong', authors) ?? this.pick('strong');
           if (reviewer) {
+            this.reviewNow = false;
             await this.runStint(reviewer, 'review', pending);
             continue;
           }
@@ -718,7 +765,7 @@ class GoRunner {
         // 2. 清单全部打勾：按验收来——复核、终审、检查都过了才收工（只有验收说通过才算完成）。
         if (taskComplete(task)) {
           if (pending.length) {
-            const c = this.earliestCooling(true);
+            const c = this.earliestCooling('strong');
             if (c && (await this.waitFor(c, '清单都打勾了，还有棒待复核，强模型都没额度'))) continue;
             return this.finish('needs-human', `全自动停止：清单都打勾了，第 ${pending.map((p) => p.id).join('、')} 棒待复核，没有能用的强模型`);
           }
@@ -732,17 +779,17 @@ class GoRunner {
             const finals = live.filter((x) => x.kind === 'final' && x.id > (lastWork?.id ?? 0));
             if (finals.length >= 2) return this.finish('needs-human', `全自动停止：终审两次没过，${acc.final.text}`);
             // 终审换一双眼睛：有别的强模型，就不请这个任务里干过活的来审；实际跑成弱模型的不再请。
-            const since = Date.parse([...v.events].reverse().find((e) => e.type === 'task')?.ts ?? v.init?.ts ?? '');
+            const since = taskSince(v);
             const doers = v.stints.filter((x) => x.kind === 'work' && !x.rolledBack && !(Date.parse(x.startedAt) < since)).map((x) => x.who.member).filter((x): x is string => !!x);
             const weak = [...this.weakFinals];
-            const fr = this.pick(true, [...doers, ...weak]) ?? this.pick(true, weak);
+            const fr = this.pick('strong', [...doers, ...weak]) ?? this.pick('strong', weak);
             if (fr) {
               const o = await this.runStint(fr, 'final');
               if (o.stint.status === 'failed') this.failed.add(fr.name);
               if (o.stint.who.tier !== 'strong') this.weakFinals.add(fr.name);
               continue;
             }
-            const c = this.earliestCooling(true);
+            const c = this.earliestCooling('strong');
             if (c && (await this.waitFor(c, '清单都打勾了，要终审，强模型都没额度'))) continue;
             return this.finish('needs-human', `全自动停止：清单都打勾了，${acc.final.text}，没有能用的强模型`);
           }
@@ -759,17 +806,45 @@ class GoRunner {
           return this.finish('needs-human', acc.headline);
         }
 
-        // 3. 派人干活。
+        // 3. 派活：这个任务还没拆过，先请强模型拆成小步。
+        if (dispatch && !planned(v)) {
+          const planner = this.pick('strong');
+          if (!planner) {
+            const c = this.earliestCooling('strong');
+            if (c && (await this.waitFor(c, '派活要先请强模型拆解，强模型都没额度'))) continue;
+            return this.finish('needs-human', '全自动停止：派活要先请强模型拆解，没有能用的强模型');
+          }
+          const o = await this.runStint(planner, 'plan');
+          // 没拆成（出错、没交接）：这次不再请它拆，换一位强模型；额度用完的自己会被跳过。
+          if (o.stint.status !== 'handed') {
+            if (o.stint.status !== 'quota' && o.stint.status !== 'stopped') this.failed.add(planner.name);
+            continue;
+          }
+          if (!taskProgress(readTask(this.root)).total) return this.finish('needs-human', `全自动停止：第 ${o.stint.id} 棒（${whoName(o.stint.who)}）拆解之后清单还是空的`);
+          continue;
+        }
+
+        // 4. 派人干活（派活时只派弱模型，一棒做清单里的一步）。
         if (stints >= this.settings.maxStints) return this.finish('needs-human', `全自动停止：接力到上限 ${stints} 棒，任务还没做完`);
-        const w = this.pick(false);
+        const w = this.pick(dispatch ? 'weak' : 'any');
+        if (!w && dispatch) {
+          // 弱模型都用不了：攒着的复核先做了；再按「等额度」等最早恢复的弱模型，或者停下。不换强模型干活。
+          if (pending.length && !this.reviewNow) {
+            this.reviewNow = true;
+            continue;
+          }
+          const c = this.earliestCooling('weak');
+          if (c && (await this.waitFor(c, '派活的弱模型都没额度'))) continue;
+          return this.finish('needs-human', `全自动停止：没有能用的弱模型${this.weakWhy()}`);
+        }
         if (!w) {
-          const c = this.earliestCooling(false);
+          const c = this.earliestCooling('any');
           if (c && (await this.waitFor(c, '能派活的都没额度'))) continue;
           const failed = [...this.failed].join('、');
           return this.finish('needs-human', `全自动停止：没有能派活的成员，都没额度或没登录${failed ? `；这次出错的：${failed}` : ''}`);
         }
         const before = taskProgress(task).done;
-        const o = await this.runStint(w, 'work');
+        const o = await this.runStint(w, 'work', [], dispatch ? nextStep(task) : undefined);
         stints++;
         if (o.stint.status === 'stopped') continue;
         if (o.stint.status === 'quota') continue;
@@ -781,7 +856,14 @@ class GoRunner {
         if (!o.changed && after <= before) {
           idle++;
           if (o.handoff?.state === 'stuck' || idle >= 2) {
-            if (w.tier !== 'strong' && this.pick(true, [w.name])) {
+            if (dispatch) {
+              // 派活：这位弱模型这次不再派，换别的弱模型；攒着的复核先做（强模型会顺手把问题改好）。
+              this.failed.add(w.name);
+              this.reviewNow = true;
+              idle = 0;
+              continue;
+            }
+            if (w.tier !== 'strong' && this.pick('strong', [w.name])) {
               this.failed.add(w.name);
               idle = 0;
               continue;

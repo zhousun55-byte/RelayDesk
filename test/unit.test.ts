@@ -247,6 +247,22 @@ test('任务清单：读出标题、进度、约定；模板里的占位不算�
   assert.equal(taskComplete(parseTask('# 任务\n\n做\n\n## 进度\n\n- [x] a\n- [X] b\n')), true);
 });
 
+test('派活时强模型在每一步下面缩进写的做法：读出来挂在那一步上；加一步、删一步时做法跟着自己那一步走', () => {
+  const raw = '# 任务\n\n做导出\n\n## 进度\n\n- [ ] 改 a.py\n  - 在 export() 里加 csv 分支\n  - 跑 pytest 看到 3 passed\n- [ ] 改 b.py\n\n## 约定\n\n- 别动 config\n';
+  assert.deepEqual(parseTask(raw).items, [
+    { done: false, text: '改 a.py', note: '在 export() 里加 csv 分支\n跑 pytest 看到 3 passed' },
+    { done: false, text: '改 b.py' },
+  ]);
+  const root = tmp('task-notes');
+  const file = path.join(root, '.relay', '任务.md');
+  fs.mkdirSync(path.dirname(file));
+  fs.writeFileSync(file, '# 任务\n\n做导出\n\n## 进度\n\n- [ ] 改 a.py\n- [ ] 改 b.py\n  - 加一个参数\n');
+  let t = editTask(root, { op: 'add', text: '改 c.py' });
+  assert.deepEqual(t.items.map((i) => [i.text, i.note]), [['改 a.py', undefined], ['改 b.py', '加一个参数'], ['改 c.py', undefined]], '加在最后一步的做法后面，不插到中间');
+  t = editTask(root, { op: 'remove', index: 1 });
+  assert.deepEqual(t.items.map((i) => [i.text, i.note]), [['改 a.py', undefined], ['改 c.py', undefined]], '删一步连它的做法一起删，不挂到上一步');
+});
+
 test('网页上改任务：改标题、打勾、加一步、删一步；模板里的占位换成第一步，别的内容不动', () => {
   const root = tmp('task-edit');
   const file = path.join(root, '.relay', '任务.md');

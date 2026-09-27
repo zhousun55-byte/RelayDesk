@@ -73,8 +73,8 @@ export interface ReviewMark {
 export interface Stint {
   /** 第几棒。 */
   id: number;
-  /** work 干活 / review 复核 / final 终审 */
-  kind: 'work' | 'review' | 'final';
+  /** work 干活 / review 复核 / final 终审 / plan 拆解（派活时强模型把任务拆成小步） */
+  kind: 'work' | 'review' | 'final' | 'plan';
   who: Who;
   /** relay = 接力台调度的；native = 你自己在工具里干的，接力台看到了。 */
   via: 'relay' | 'native';
@@ -368,9 +368,12 @@ export function saveStint(root: string, s: Stint): void {
   appendLedger(root, { type: 'stint', ts: new Date().toISOString(), stint: s });
 }
 
+/** 一棒在做什么：干活、复核、终审、拆解。 */
+export const KIND_WORD: Record<Stint['kind'], string> = { work: '干活', review: '复核', final: '终审', plan: '拆解' };
+
 /** 给人看的「第 7 棒 · Codex · gpt-6」。 */
 export function stintTitle(s: Pick<Stint, 'id' | 'who' | 'kind'>): string {
-  const k = s.kind === 'review' ? '（复核）' : s.kind === 'final' ? '（终审）' : '';
+  const k = s.kind === 'review' ? '（复核）' : s.kind === 'final' ? '（终审）' : s.kind === 'plan' ? '（拆解）' : '';
   return `第 ${s.id} 棒${k} · ${s.who.label}`;
 }
 

@@ -21,6 +21,8 @@ export const BRIEF_REL = '.relay/接力本.md';
 export interface TaskItem {
   done: boolean;
   text: string;
+  /** 这一步下面缩进写的做法（派活时强模型写给弱模型的：改哪些文件、怎么改、怎么验证）。 */
+  note?: string;
 }
 
 export interface TaskDoc {
@@ -82,9 +84,16 @@ export function parseTask(raw: string): TaskDoc {
   const title = (body.split('\n').find((l) => l.trim()) ?? '').trim();
   const items: TaskItem[] = [];
   const progress = section(raw, /进度|清单|步骤|todo/i);
+  let last: TaskItem | null = null;
   for (const l of progress.split('\n')) {
-    const m = l.match(/^\s*[-*+]\s+\[( |x|X|✓|√)\]\s+(.*)$/);
-    if (m && !PLACEHOLDER_ITEM.test(m[2].trim())) items.push({ done: m[1] !== ' ', text: m[2].trim() });
+    const m = l.match(ITEM_LINE);
+    if (m) {
+      last = PLACEHOLDER_ITEM.test(m[4].trim()) ? null : { done: m[2] !== ' ', text: m[4].trim() };
+      if (last) items.push(last);
+    } else if (last && NOTE_LINE.test(l)) {
+      const t = l.trim().replace(/^[-*+]\s+/, '');
+      last.note = last.note ? `${last.note}\n${t}` : t;
+    } else last = null;
   }
   const rulesRaw = section(raw, /约定|规矩|备注|决定/);
   const rules = PLACEHOLDER_ITEM.test(rulesRaw) ? '' : rulesRaw;
@@ -221,6 +230,15 @@ export function archivedTaskTitles(root: string): string[] {
 export type TaskEdit = { op: 'title'; text: string } | { op: 'toggle'; index: number; done?: boolean } | { op: 'add'; text: string } | { op: 'remove'; index: number };
 
 const ITEM_LINE = /^(\s*[-*+]\s+\[)( |x|X|✓|√)(\]\s+)(.*)$/;
+/** 紧跟在一步下面、缩进写的一行做法（不是另一步）。 */
+const NOTE_LINE = /^\s+\S/;
+
+/** 这一步连同它下面的做法，到哪一行为止（不含）。 */
+function itemEnd(lines: string[], at: number): number {
+  let j = at + 1;
+  while (j < lines.length && NOTE_LINE.test(lines[j]) && !ITEM_LINE.test(lines[j])) j++;
+  return j;
+}
 
 /** 「进度」一节在哪几行，每一步在第几行（和 parseTask 的 items 一一对应）。 */
 function progressLines(lines: string[]): { start: number; items: number[]; placeholders: number[] } | null {
@@ -275,7 +293,7 @@ export function editTask(root: string, edit: TaskEdit): TaskDoc {
       const text = oneLine(edit.text);
       if (!text) throw new RelayError('这一步是空的', 'empty');
       if (!sec.items.length && sec.placeholders.length) lines[sec.placeholders[0]] = `- [ ] ${text}`;
-      else if (sec.items.length) lines.splice(sec.items[sec.items.length - 1] + 1, 0, `- [ ] ${text}`);
+      else if (sec.items.length) lines.splice(itemEnd(lines, sec.items[sec.items.length - 1]), 0, `- [ ] ${text}`);
       else {
         const at = sec.start + 1;
         lines.splice(at, 0, '', `- [ ] ${text}`);
@@ -284,7 +302,7 @@ export function editTask(root: string, edit: TaskEdit): TaskDoc {
     } else {
       const at = sec.items[edit.index];
       if (at === undefined) throw new RelayError('清单里没有这一步。', 'no-item');
-      if (edit.op === 'remove') lines.splice(at, 1);
+      if (edit.op === 'remove') lines.splice(at, itemEnd(lines, at) - at);
       else lines[at] = lines[at].replace(ITEM_LINE, (_m, a: string, mark: string, b: string, text: string) => `${a}${(edit.done ?? mark === ' ') ? 'x' : ' '}${b}${text}`);
     }
   }
