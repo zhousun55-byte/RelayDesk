@@ -414,13 +414,15 @@ function firstBullet(text: string): string {
 function workBullet(text: string): string {
   const all = bullets(text);
   // 「复核结论写入……：没问题」是复核这一棒真干的活，不算准备。
-  const reading = /^(先|已|已经|完整|仔细|逐一|逐条|逐项|重新|实际)?(读|读取|阅读|通读|浏览|看|查看|了解|熟悉|复核(?!结论)|核对|核实|确认|检查|对照|跑了?|运行了?|执行了?|验证)|^(read|reviewed|checked|ran|verified)\b/i;
+  const reading = /^(开工|开始)?(先|已|已经|完整|仔细|逐一|逐条|逐项|重新|实际)?(读|读取|阅读|通读|浏览|看|查看|了解|熟悉|复核(?!结论)|核对|核实|确认|检查|对照|跑了?|运行了?|执行了?|验证)|^(read|reviewed|checked|ran|verified)\b/i;
   // 「把任务.md 拆成了 7 步」是拆解那一棒真干的活，不算记账。
   const bookkeeping = /^(?!.*拆(?:成|分成|为|解成))(?=.*(?:交接文件|本交接|建了?交接|接力本|任务\.md|任务清单|打(?:了)?(?:个)?勾))/;
   // 「没有修改 wc.py」说的是没做什么，别的条目都不是活时才用它。
   const nothing = /^(没有|没|未|并未)(修改|改动|改|动)/;
+  // 「我是弱模型，跳过复核」「只做了第 2 步，没碰后面的步骤」说的是这一棒的范围，不是干了什么（派活时弱模型常这么开头）
+  const scope = /^(我是弱模型|按(接力本|要求|规矩)|(只|仅)(做|复核)了?(第|最前面|上一棒|这一步)|没有?(碰|提前做|做)(第|后面))/;
   const pick = (skip: RegExp[]) => all.findIndex((t) => !skip.some((re) => re.test(t)));
-  let i = pick([reading, bookkeeping, nothing]);
+  let i = pick([reading, bookkeeping, nothing, scope]);
   if (i < 0) {
     // 每一条都以读、核对、记账开头：结论常写在分号后面（「核对全部差异；实现和测试符合任务，未发现问题」），用那半句。
     for (const t of all) {
@@ -428,7 +430,7 @@ function workBullet(text: string): string {
         .split(/[；;]/)
         .slice(1)
         .map((x) => x.trim())
-        .find((x) => x && ![reading, bookkeeping, nothing].some((re) => re.test(x)));
+        .find((x) => x && ![reading, bookkeeping, nothing, scope].some((re) => re.test(x)));
       if (part) return clip80(part);
     }
     i = pick([reading, bookkeeping]);

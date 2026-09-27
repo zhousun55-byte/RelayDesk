@@ -3515,3 +3515,15 @@ button.busy::after {
 ::view-transition-new(root) {
   animation-duration: 0.28s;
 }
+
+/* 群聊里的长回答先收起 */
+.ai .text.fold {
+  max-height: 15em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent);
+  mask-image: linear-gradient(to bottom, #000 62%, transparent);
+}
+.ai .unfold {
+  margin-top: 2px;
+  font-size: 12.5px;
+}

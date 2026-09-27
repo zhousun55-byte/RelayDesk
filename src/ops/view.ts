@@ -92,6 +92,8 @@ export interface ProjectView {
  */
 const summaryCache = new Map<string, { mtimeMs: number; summary: string }>();
 function liveSummary(root: string, s: Stint): string {
+  // 派活的一棒做的是哪一步，接力台自己记着：比从交接里挑一句准（弱模型交接开头常是「只做第 3 步、没碰后面的」这种话）
+  if (s.step && (s.status === 'handed' || s.status === 'working')) return `第 ${s.step.index} 步：${s.step.text}`;
   const kept = s.summary ?? '';
   if (!s.handoff || s.ghost) return kept;
   const file = path.join(root, s.handoff);

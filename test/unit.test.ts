@@ -387,6 +387,9 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
   // Grok 拆解的真实写法（2026-09-27 派活实测）：以前挑成「没有改项目代码……」
   const plan = parseHandoff('# 交接：Grok 4.7\n\n## 做了什么\n\n- 把 `.relay/任务.md` 的「进度」拆成了 7 步。每步只改一个文件。\n- 没有改项目代码，没有新建 `todo.py`。\n');
   assert.equal(plan.summary, '把 `.relay/任务.md` 的「进度」拆成了 7 步。每步只改一个文件。');
+  // DeepSeek 派活时的真实写法（2026-09-27 派活大任务）：开头是范围和读了什么，以前挑成「只做了第 2 步……」
+  const scoped = parseHandoff('# 交接：DeepSeek Harness · deepseek-flash\n\n## 做了什么\n\n- 开工先读 `.relay/接力本.md`、`.relay/任务.md`。\n- 我是弱模型，按接力本要求跳过「先复核」，直接做第 3 步。\n- 只做了第 2 步「行内 Markdown」，没碰后面的步骤。\n- 新建 `markdown.py`：`html_escape` 和 `render_inline`。\n');
+  assert.equal(scoped.summary, '新建 `markdown.py`：`html_escape` 和 `render_inline`。');
 });
 
 test('复核结论：认出复核的是第几棒、结论是哪一种', () => {

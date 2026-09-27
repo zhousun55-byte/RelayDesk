@@ -2247,13 +2247,33 @@ function talkRow(r) {
   return aiRow(r);
 }
 
+/** 长回答（超过 14 行或 900 字）先收起，点「展开」看全文：高度从收起的样子长开。 */
+function foldable(box, text) {
+  if (text.length <= 900 && text.split('\n').length <= 14) return [box];
+  box.classList.add('fold');
+  const btn = h(
+    'button',
+    {
+      class: 'link unfold',
+      onclick: () => {
+        const from = box.offsetHeight;
+        box.classList.remove('fold');
+        btn.remove();
+        if (!still()) box.animate([{ height: `${from}px`, overflow: 'hidden' }, { height: `${box.offsetHeight}px`, overflow: 'hidden' }], { duration: 280, easing: EASE.snap });
+      },
+    },
+    '展开'
+  );
+  return [box, btn];
+}
+
 function aiRow(r, compact) {
   const name = nameOf(r.who, r.model);
   return h(
     'div',
     { class: 'ai' },
     h('span', { class: 'who-tile', 'data-tip': memberByName(r.agent) ? memberTip(memberByName(r.agent)) : name }, tile({ agent: r.agent, label: r.who, model: r.model })),
-    h('div', null, h('div', { class: 'who' }, h('b', null, name), compact ? null : h('span', { class: 'time' }, clock(r.ts))), h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) })),
+    h('div', null, h('div', { class: 'who' }, h('b', null, name), compact ? null : h('span', { class: 'time' }, clock(r.ts))), ...foldable(h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) }), r.text)),
     compact ? null : h('div', { class: 'hover-acts' }, iconBtn('复制', 'copy', () => copyToast(r.text)))
   );
 }
@@ -2396,7 +2416,8 @@ function stintCard(s) {
         { class: 'who' },
         h('span', { class: 'who-tile', 'data-tip': whoTip(s.who) }, tile(s.who)),
         h('b', null, name === '不知道是谁' ? '身份不明' : name),
-        h('span', { class: 'mdl' }, { strong: '强', weak: '弱' }[s.who.tier] || ''),
+        // 只写「弱」：弱模型的棒要复核，强的不用标
+        s.who.tier === 'weak' ? h('span', { class: 'mdl' }, '弱') : null,
         pillOf(s),
         compact ? h('span', { class: 'say' }, sum.text) : null,
         spanOf(s)

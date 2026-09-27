@@ -494,8 +494,9 @@ test('派活：强模型先拆成小步，弱模型一棒做一步，中途不�
     .readdirSync(s.base)
     .filter((f) => f.startsWith('prompt-claude-'))
     .map((f) => fs.readFileSync(path.join(s.base, f), 'utf8'));
-  assert.ok(prompts.some((p) => p.includes('这一棒只做任务清单里的第 1 步：「第一步：建 a.txt」')), '弱模型只拿到一步');
-  assert.ok(prompts.some((p) => p.includes('第 4 步：「第四步：建 d.txt」')));
+  assert.ok(prompts.some((p) => p.includes('这一棒只做任务清单里的第 1 步：「建 a.txt」')), '弱模型只拿到一步（步骤自己写的「第一步：」去掉）');
+  assert.ok(prompts.some((p) => p.includes('第 4 步：「建 d.txt」')));
+  assert.equal(s.stints()[1].step.text, '建 a.txt');
   const st = s.stints();
   assert.deepEqual(st[0].tokens, { input: 300, output: 40 }, 'Codex 拆解：每一轮报的用量');
   assert.deepEqual(st[1].tokens, { input: 100, output: 20 }, 'Claude Code 干活：结束时报的用量');

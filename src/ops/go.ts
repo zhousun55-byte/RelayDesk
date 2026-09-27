@@ -294,10 +294,10 @@ interface Step {
   text: string;
 }
 
-/** 清单里下一步还没做的。 */
+/** 清单里下一步还没做的。步骤自己写了「第 3 步：」的去掉（不然提示和卡片上都是「第 3 步：第 3 步：……」）。 */
 function nextStep(task: TaskDoc): Step | undefined {
   const i = task.items.findIndex((x) => !x.done);
-  return i < 0 ? undefined : { index: i + 1, text: task.items[i].text };
+  return i < 0 ? undefined : { index: i + 1, text: task.items[i].text.replace(/^第\s*[\d一二三四五六七八九十百]+\s*步\s*[：:.、，,]?\s*/, '') || task.items[i].text };
 }
 
 /** 这个任务是什么时候写下的（没有就是接入的时候）。 */
@@ -510,6 +510,7 @@ class GoRunner {
       log: logRel,
       pid: process.pid,
       ...(targets.length ? { targets: targets.map((t) => t.id) } : {}),
+      ...(step ? { step } : {}),
       ...(reviewFile ? { reviewFile } : {}),
       ...(taskBefore ? { taskBefore } : {}),
     };
