@@ -39,6 +39,19 @@ function o(v: unknown): J {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as J) : {};
 }
 
+/**
+ * 工具自己报的 token 用量（各家字段名不一样：usage、tokenUsage、usageMetadata……），统一成一行记进日志：
+ * 输入把读缓存、写缓存的也算上。没报就没有这一行。
+ */
+export function usageLine(j: J): string | null {
+  const u = [j.usage, o(j.result).usage, o(j.data).usage, j.tokenUsage, j.usageMetadata].map(o).find((x) => Object.keys(x).length);
+  if (!u) return null;
+  const n = (...keys: string[]) => keys.reduce((sum, k) => sum + (typeof u[k] === 'number' ? (u[k] as number) : 0), 0);
+  const input = n('input_tokens', 'prompt_tokens', 'inputTokens', 'promptTokens', 'promptTokenCount', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'cacheReadTokens', 'cacheWriteTokens');
+  const output = n('output_tokens', 'completion_tokens', 'outputTokens', 'completionTokens', 'candidatesTokenCount');
+  return input || output ? `本轮用了 ${input} 输入 / ${output} 输出 token` : null;
+}
+
 function s(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
@@ -127,7 +140,7 @@ function claudeParser(): StreamParser {
         if (typeof j.num_turns === 'number') bits.push(`${j.num_turns} 轮`);
         if (typeof j.duration_ms === 'number') bits.push(`${Math.round(j.duration_ms / 1000)} 秒`);
         if (j.is_error) bits.push('出错');
-        return [`${bits.join('，')}）`];
+        return [`${bits.join('，')}）`, ...[usageLine(j)].filter((x): x is string => !!x)];
       }
       return [];
     },
@@ -158,10 +171,7 @@ function codexParser(): StreamParser {
         if (it.type === 'error') return NOISE.test(s(it.message)) ? [] : [`提示：${clip(s(it.message), 200)}`];
         return [];
       }
-      if (type === 'turn.completed') {
-        const u = o(j.usage);
-        return [`本轮用了 ${u.input_tokens ?? '?'} 输入 / ${u.output_tokens ?? '?'} 输出 token`];
-      }
+      if (type === 'turn.completed') return [usageLine(j) ?? '本轮用量没报'];
       if (type === 'turn.failed' || type === 'error') return [`出错：${clip(s(o(j.error).message) || s(j.message) || JSON.stringify(j), 300)}`];
       return [];
     },
@@ -203,7 +213,7 @@ function cursorParser(): StreamParser {
       }
       if (type === 'result') {
         final = last || s(j.result);
-        return [`结束（${s(j.subtype) || '完成'}${typeof j.duration_ms === 'number' ? `，${Math.round(j.duration_ms / 1000)} 秒` : ''}${j.is_error ? '，出错' : ''}）`];
+        return [`结束（${s(j.subtype) || '完成'}${typeof j.duration_ms === 'number' ? `，${Math.round(j.duration_ms / 1000)} 秒` : ''}${j.is_error ? '，出错' : ''}）`, ...[usageLine(j)].filter((x): x is string => !!x)];
       }
       return [];
     },
@@ -233,7 +243,7 @@ function agyParser(): StreamParser {
         const r = o(j.result);
         final = s(r.response);
         const denied = Array.isArray(r.denied_actions) ? r.denied_actions.length : 0;
-        return [`结束（${s(r.status) || '完成'}${denied ? `，${denied} 个操作被拒绝` : ''}）`];
+        return [`结束（${s(r.status) || '完成'}${denied ? `，${denied} 个操作被拒绝` : ''}）`, ...[usageLine(j)].filter((x): x is string => !!x)];
       }
       return [];
     },
@@ -285,7 +295,7 @@ function dshParser(): StreamParser {
       }
       if (type === 'final') {
         final = firstStr(j, ['text', 'answer', 'content', 'result', 'final']) || last;
-        return [...out, `结束（${firstStr(j, ['reason']) || '完成'}）`];
+        return [...out, `结束（${firstStr(j, ['reason']) || '完成'}）`, ...[usageLine(j)].filter((x): x is string => !!x)];
       }
       if (type === 'error') return [...out, `出错：${clip([firstStr(j, ['code']), firstStr(j, ['message', 'error'])].filter(Boolean).join(' '), 300)}`];
       if (type === 'status' || type === 'turn_end') {

@@ -222,6 +222,15 @@ export interface ToolCall {
 
 export class ToolChat {
   private msgs: J[] = [];
+  /** 这次对话一共用了多少 token（接口返回的 usage 加起来；输入含缓存）。 */
+  readonly used = { input: 0, output: 0 };
+
+  private count(data: J): void {
+    const u = o(data.usage);
+    const n = (k: string) => (typeof u[k] === 'number' ? (u[k] as number) : 0);
+    this.used.input += n('prompt_tokens') + n('input_tokens') + n('cache_read_input_tokens') + n('cache_creation_input_tokens');
+    this.used.output += n('completion_tokens') + n('output_tokens');
+  }
   /**
    * 模型回的思考内容（reasoning_content）要不要原样传回去。DeepSeek 等思考模型在连续调用工具时要求传回，
    * 缺了会报 400；个别接口不收这个字段，那就去掉再试一次，之后都不带。
@@ -254,6 +263,7 @@ export class ToolChat {
           timeoutMs
         )
       );
+      this.count(data);
       const content = arr(data.content);
       this.msgs.push({ role: 'assistant', content });
       const text = content.map((b) => (o(b).type === 'text' ? String(o(b).text ?? '') : '')).join('');
@@ -278,6 +288,7 @@ export class ToolChat {
       raw = await request(this.spec, 'chat', body(false), timeoutMs);
     }
     const data = o(raw);
+    this.count(data);
     const msg = o(o(arr(data.choices)[0]).message);
     const rawCalls = arr(msg.tool_calls);
     const text = typeof msg.content === 'string' ? msg.content : '';

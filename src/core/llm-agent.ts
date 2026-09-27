@@ -367,6 +367,9 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
     if (!finished && steps >= maxSteps) input.log(`到了 ${maxSteps} 步上限，停下。`);
   } catch (e) {
     return { finalText, steps, stopped: false, timedOut: false, error: errorMessage(e) };
+  } finally {
+    // 和编程工具日志里的用量同一个说法（runner.ts 的 usageLine）
+    if (chat.used.input || chat.used.output) input.log(`本轮用了 ${chat.used.input} 输入 / ${chat.used.output} 输出 token`);
   }
   return { finalText, steps, stopped: false, timedOut: false };
 }

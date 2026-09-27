@@ -312,6 +312,7 @@ test('内置小代理的路径：链接指到项目外面、写链接、大小�
   ];
   const results: string[] = [];
   class FakeChat {
+    used = { input: 0, output: 0 };
     n = 0;
     user(): void {}
     size(): number {
