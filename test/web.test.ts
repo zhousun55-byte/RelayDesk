@@ -259,3 +259,12 @@ test('网页：人带上的文件——最后一段全是反引号括起来的�
   assert.equal(fileLabel(up), '截屏 2026-09-26 22.39.31.png');
   assert.equal(fileLabel('docs/0926-2310-x.md'), '0926-2310-x.md', '只去掉传上来的文件前面加的时间');
 });
+
+test('网页的一棒：没成的（出错、额度用完、中途停了）卡片上那一句写原因，不写「交接里没写做了什么」', () => {
+  const ctx: Record<string, unknown> = {};
+  vm.runInNewContext(`${['FAILED', 'summaryOf'].map(pick).join('\n\n')}\nresult = summaryOf;`, ctx);
+  const summaryOf = ctx.result as (s: Record<string, unknown>) => { text: string; faint?: boolean };
+  assert.equal(summaryOf({ status: 'failed', note: '退出码 1，原话：Cannot use this model', handoff: 'a.md' }).text, '退出码 1，原话：Cannot use this model');
+  assert.equal(summaryOf({ status: 'quota', note: '额度用完，15:00 恢复', handoff: 'a.md' }).text, '额度用完，15:00 恢复');
+  assert.equal(summaryOf({ status: 'handed', note: '你标记过不用复核', handoff: 'a.md' }).text, '交接里没写做了什么', '交了的一棒：说明不顶替摘要');
+});

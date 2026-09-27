@@ -389,14 +389,14 @@ function firstBullet(text: string): string {
 }
 
 /**
- * 「做了什么」里挑一条当一句话摘要：跳过开头「读了接力本」「完整读取……」「复核当前……」这种准备和核对，
+ * 「做了什么」里挑一条当一句话摘要：跳过开头「读了接力本」「完整读取……」「复核当前……」「跑了 git diff……」这种准备和核对，
  * 还有「建了本交接文件」「任务清单打勾」这种记账、「没有修改 wc.py」这种没做什么的，找第一条真干了活的；
- * 「wc.py：」这种小标题接上它下面的第一条。都是准备和记账就用第一条。
+ * 「wc.py：」这种小标题接上它下面的第一条；「结论写进 `…md`：通过……」只留冒号后面。都是准备和记账就用第一条。
  */
 function workBullet(text: string): string {
   const all = bullets(text);
   // 「复核结论写入……：没问题」是复核这一棒真干的活，不算准备。
-  const reading = /^(先|已|已经|完整|仔细|逐一|重新)?(读|读取|阅读|通读|浏览|看|查看|了解|熟悉|复核(?!结论)|核对|核实|确认|检查)|^(read|reviewed|checked)\b/i;
+  const reading = /^(先|已|已经|完整|仔细|逐一|逐条|逐项|重新|实际)?(读|读取|阅读|通读|浏览|看|查看|了解|熟悉|复核(?!结论)|核对|核实|确认|检查|对照|跑了?|运行了?|执行了?|验证)|^(read|reviewed|checked|ran|verified)\b/i;
   const bookkeeping = /交接文件|本交接|建了?交接|接力本|任务\.md|任务清单|打(?:了)?(?:个)?勾/;
   // 「没有修改 wc.py」说的是没做什么，别的条目都不是活时才用它。
   const nothing = /^(没有|没|未|并未)(修改|改动|改|动)/;
@@ -416,7 +416,8 @@ function workBullet(text: string): string {
   }
   if (i < 0) return clip80(all[0] ?? '');
   const t = all[i];
-  return clip80(/[:：]$/.test(t) && all[i + 1] ? `${t}${all[i + 1]}` : t);
+  const verdict = t.match(/^结论(?:已)?(?:写进|写入|写到|记在)[^：:]*[：:]\s*(.+)$/)?.[1];
+  return clip80(verdict ?? (/[:：]$/.test(t) && all[i + 1] ? `${t}${all[i + 1]}` : t));
 }
 
 export function parseHandoff(raw: string, file = '', mtimeMs = 0, bornMs?: number): HandoffDoc {

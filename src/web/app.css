@@ -1376,17 +1376,17 @@ button.busy::after {
 .checks li:hover {
   background: color-mix(in srgb, var(--fog) 80%, transparent);
 }
-.checks .st {
+.checks .step {
   flex: 1;
   min-width: 0;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
-.checks li.done .st {
+.checks li.done .step {
   color: var(--ink-3);
   text-decoration: line-through;
   text-decoration-color: var(--ink-4);
 }
-.checks li.next .st {
+.checks li.next .step {
   font-weight: 600;
 }
 .checks .box {
@@ -2107,8 +2107,14 @@ button.busy::after {
   position: relative;
 }
 .opt:hover .adopt,
-.opt:focus-within .adopt {
+.opt:focus-within .adopt,
+.opt.lead .adopt {
   opacity: 1;
+}
+@media (hover: none) {
+  .opt .adopt {
+    opacity: 1;
+  }
 }
 .opt.adopted {
   background: color-mix(in srgb, var(--fog) 80%, transparent);

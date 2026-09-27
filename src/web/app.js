@@ -2130,19 +2130,17 @@ function updateLive() {
   }
 }
 
-/** 任务：日子、第几个任务、清单进度是刻度；标题是人写的字（写在「：」前面的是标题，后面的是说明）。 */
+/** 任务：日子是刻度（清单进度在顶栏）；标题是人写的字（写在「：」前面的是标题，后面的是说明）。 */
 function headEl(t, latest) {
   const task = S.st.project.task;
   const raw = latest ? task.title : t.title;
   const cut = raw.indexOf('：');
   const [title, lead] = cut > 3 && cut < 40 && cut < raw.length - 1 ? [raw.slice(0, cut), raw.slice(cut + 1)] : [raw, ''];
   const sub = [lead, latest ? task.body.split('\n').slice(1).join('\n').trim() : ''].filter(Boolean).join('\n');
-  const bits = [dayClock(t.from)];
-  if (latest && task.total) bits.push(`清单 ${task.done}/${task.total}`);
   return h(
     'header',
     { class: 'head' },
-    h('div', { class: 'cap' }, bits.join(' · ')),
+    h('div', { class: 'cap' }, dayClock(t.from)),
     latest ? h('h2', { class: 'ttl', role: 'button', tabindex: '0', 'data-tip': '改标题', html: inline(esc(title)), onclick: editTitle, onkeydown: (e) => e.key === 'Enter' && editTitle() }) : h('h2', { class: 'ttl', html: inline(esc(title)) }),
     sub ? h('p', { class: 'sub' }, sub.length > 400 ? `${sub.slice(0, 400)}…` : sub) : null,
     latest ? checklist(task) : null,
@@ -2177,7 +2175,7 @@ function checklist(task) {
           },
           icon('check')
         ),
-        h('span', { class: 'st' }, it.text),
+        h('span', { class: 'step' }, it.text),
         h('button', { class: 'x', 'aria-label': '删除这一步', 'data-tip': '删除', onclick: () => editStep({ op: 'remove', index: i }, () => S.st.project.task.items.splice(i, 1)) }, icon('x'))
       );
     }),
@@ -2288,9 +2286,13 @@ function countedReview(s) {
   return [...(s.reviews || [])].reverse().find((r) => !r.weak && !r.void) || null;
 }
 
+/** 没成的一棒（额度用完、出错、中途停了）：卡片上那一句写原因。 */
+const FAILED = new Set(['quota', 'failed', 'stopped']);
+
 function summaryOf(s) {
   if (s.summary) return { text: s.summary };
   if (s.status === 'working') return { text: s.via === 'relay' ? '开始了' : '正在改文件', faint: true };
+  if (s.note && FAILED.has(s.status)) return { text: s.note };
   if (s.kind === 'review') return { text: '复核', faint: true };
   return { text: s.ghost || !s.handoff ? '没有交接' : '交接里没写做了什么', faint: true };
 }
@@ -2548,7 +2550,7 @@ function detailBox(s) {
     );
   }
   if (s.gate) box.append(h('section', null, h('h5', null, '检查'), h('div', { class: 'pre' }, `${{ pass: '通过', fail: '没通过', error: '没跑成' }[s.gate.status] || s.gate.status}${s.gate.command ? ` · ${s.gate.command}` : ''}${s.gate.detail ? `\n\n${s.gate.detail}` : ''}`)));
-  if (s.note) box.append(h('section', null, h('h5', null, '说明'), h('p', { class: 'aside' }, s.note)));
+  if (s.note && summaryOf(s).text !== s.note) box.append(h('section', null, h('h5', null, '说明'), h('p', { class: 'aside' }, s.note)));
   const acts = [];
   const pending = s.review === 'needed' && s.status !== 'working' && !s.rolledBack;
   if (s.facts && s.facts.files) acts.push(h('button', { class: 'btn small', onclick: () => openDiff(s.id) }, icon('diff'), '改动'));

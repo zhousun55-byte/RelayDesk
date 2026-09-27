@@ -363,6 +363,11 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
   // Codex 终审的真实写法（2026-09-26 界面实测）：三条都以读、核对、记账开头，以前挑成「已读接力本……」
   const final = parseHandoff('# 交接：Codex · gpt-6-sol\n\n## 做了什么\n\n- 已读接力本、任务清单、前两棒交接及复核记录。\n- 核对 `b3c24c1c73 → 1e88667341` 的全部源码差异与当前文件；search 实现和测试符合任务，未发现需修复的问题。\n- 写入 `.relay/复核/终审-第3棒-0926-1750.md`，结论「没问题」；终审步骤已在任务清单打勾。\n');
   assert.equal(final.summary, 'search 实现和测试符合任务，未发现需修复的问题。');
+  // Claude Opus 终审的真实写法（2026-09-25 接力台试跑）：以前挑成「跑了 `git … diff …`：区间内……」
+  const opus = parseHandoff(
+    '# 交接：Claude Code 官方账号 · claude-opus-5\n\n## 做了什么\n\n- 读了 `.relay/接力本.md`、`.relay/任务.md`。\n- 跑了 `git --git-dir=.relay/snapshots --work-tree=. diff 0079438b57 32b91b70a8`：区间内只改了 `README.md`。\n- 确认工作树与结束快照一致。\n- 逐条对照任务：四样都在，内容属实。\n- 实际运行验证：按 README 原样跑了一遍。\n- 验证用的临时文件已全部删掉。\n- 结论写进 `.relay/复核/终审-0925-0842.md`：通过，全部完成，无未修复事项。\n'
+  );
+  assert.equal(opus.summary, '通过，全部完成，无未修复事项。');
 });
 
 test('复核结论：认出复核的是第几棒、结论是哪一种', () => {
