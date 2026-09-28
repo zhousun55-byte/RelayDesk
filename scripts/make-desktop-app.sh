@@ -82,6 +82,8 @@ fi
 # 1. 小程序本体：一小段一直在后台开着的 AppleScript，调用启动脚本；手动打开时出错会弹窗说原因。
 #    RELAY_AT_LOGIN=1（登录时由系统带起来）：只在后台启动接力台，不打开网页。
 #    每 10 秒看一眼：接力台没了就在后台重新拉起（拉不起来就过 5 分钟再试）；你在网页上点了「关闭」，它也退出。
+# 记下旧图标，装完对比：换了图标才去刷新程序坞的图标缓存
+OLD_ICON="$(shasum "$APP/Contents/Resources/relay.icns" 2>/dev/null | cut -d' ' -f1)"
 esc="${LAUNCHER//\\/\\\\}"
 esc="${esc//\"/\\\"}"
 rm -rf "$APP"
@@ -175,6 +177,14 @@ LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.
   done
 # 登记这一份要放在注销之后：注销在后时，启动台把接力台整个从列表里拿掉了。
 "$LSR" -f "$APP" >/dev/null 2>&1 || true
+# 启动台、程序坞自己还存着一份图标缓存，版本号变了也不一定重读：图标换了就把那份缓存挪进废纸篓、让程序坞重开（一两秒）。
+NEW_ICON="$(shasum "$APP/Contents/Resources/relay.icns" 2>/dev/null | cut -d' ' -f1)"
+if [[ -n "$OLD_ICON" && "$OLD_ICON" != "$NEW_ICON" ]]; then
+  DOCK_CACHE="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null)com.apple.dock.iconcache"
+  [[ -f "$DOCK_CACHE" ]] && mv "$DOCK_CACHE" "$HOME/.Trash/com.apple.dock.iconcache-$(date +%Y%m%d-%H%M%S)" 2>/dev/null
+  killall Dock >/dev/null 2>&1 || true
+  mdimport "$APP" >/dev/null 2>&1 || true
+fi
 
 # 4. 登录电脑时，由系统在后台把它带起来（不打开网页）。「系统设置 → 通用 → 登录项」里能看到、能关掉。
 xml() { print -r -- "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
