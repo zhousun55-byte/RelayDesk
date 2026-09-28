@@ -16,7 +16,7 @@ RelayDesk lets these AIs **take turns in the same project folder**, and makes su
 
 There is also a **group chat**: ask several AIs the same thing. *Compare* asks them at once without seeing each other; *Vote* collects anonymous proposals and one vote per AI, weak or strong, with no voting for yourself. The adopted plan goes into the task's rules, and every later leg follows it.
 
-> The web app is available in English and Chinese: click **EN / 中** at the bottom left (the first visit follows your browser language). Detailed documentation is in Chinese ([README.md](README.md), [docs/设计说明.md](docs/设计说明.md)). RelayDesk is used most on macOS; the CLI and web app also run on Linux. Windows support (folder picker, Show in folder, clipboard) is written but not yet tested on a real machine.
+> The web app is available in English and Chinese: click **EN / 中** at the bottom left (the first visit follows your browser language). Detailed documentation is in Chinese ([README.md](README.md), [docs/设计说明.md](docs/设计说明.md)). RelayDesk is used most on macOS; the CLI and web app also run on Linux. There is a native Windows version (double-click `install-windows.cmd`, no WSL needed); it has not been tested on a real Windows machine yet.
 
 ## Get started
 
@@ -30,7 +30,9 @@ git clone <repo url> agent-relay && cd agent-relay && zsh scripts/make-desktop-a
 
 This installs dependencies, builds, puts a **RelayDesk** app (named 接力台) in `/Applications` (or `~/Applications` without write access) that starts in the background at login, and opens the web page. No Dock or desktop icon, no terminal window. Open it later from Launchpad or Spotlight, or at http://127.0.0.1:7388. To remove it: `zsh scripts/make-desktop-app.sh --remove`.
 
-Linux and Windows (or if you don't want it running in the background):
+Windows 10 / 11: put the folder somewhere it will stay and double-click `install-windows.cmd`. It installs Node.js and Git with winget if they are missing, installs dependencies, builds, adds **接力台** (RelayDesk) to the Start menu, starts it in the background at login, and opens the web page. No console window, no desktop icon. To remove it: `install-windows.cmd --remove`.
+
+Linux (or if you don't want it running in the background):
 
 ```bash
 git clone <repo url> agent-relay && cd agent-relay && npm install && npm run build && npm start

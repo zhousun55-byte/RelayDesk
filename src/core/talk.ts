@@ -8,6 +8,7 @@ import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteMod
 import { fillTemplate } from './launch';
 import { runLlmAgent } from './llm-agent';
 import { llmName, toolName } from './names';
+import { shellArgv } from './proc';
 import { redactSecrets } from './redact';
 import { detectQuota, noteLimits } from './quota';
 import { clip, lastError, logTail, startRun, toolLines, type RunResult } from './runner';
@@ -356,7 +357,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
   let make: () => Invocation;
   if (tpl) {
     const out = tpl.includes(OUT_PLACEHOLDER) ? outFile : undefined;
-    const argv = ['sh', '-c', fillTemplate(tpl, out ? { out } : {})];
+    const argv = shellArgv(fillTemplate(tpl, out ? { out } : {}));
     make = () => ({ argv, stdin: prompt, format: 'text', env: { NO_COLOR: '1' }, ...(out ? { outFile: out } : {}) });
   } else {
     const spec = findHarness(agent.harness);

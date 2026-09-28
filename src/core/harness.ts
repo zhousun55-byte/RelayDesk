@@ -5,6 +5,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { recentOfficialModel } from './claude-log';
 import { agentEnv, envValue, scanApps, which } from './env';
+import { resolveExec } from './proc';
 import { relayHome } from './paths';
 import { codexLimits, type Limit } from './quota';
 
@@ -107,7 +108,8 @@ function home(): string {
 }
 
 function run(argv: string[], timeoutMs = 15_000, dropEnv?: RegExp, extraEnv: Record<string, string> = {}): { code: number; out: string; err: string } {
-  const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: timeoutMs, env: agentEnv(extraEnv, dropEnv), cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'] });
+  const e = resolveExec(argv);
+  const r = spawnSync(e.file, e.args, { encoding: 'utf8', timeout: timeoutMs, env: agentEnv(extraEnv, dropEnv), cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, windowsVerbatimArguments: e.verbatim });
   return { code: r.status ?? -1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() };
 }
 

@@ -15,7 +15,7 @@
 
 另外还有**群聊**：把几个 AI 拉进一个群，对同一件事各出主意。「对比」时几个 AI 同时回答、互相看不到，弱模型不会跟着强模型的思路走；**投票**时方案匿名、一个 AI 一票不分强弱、不能投自己，弱模型的好想法也不会被埋没。定下来的方案写进任务的「约定」，之后接力的每一棒都会遵守。
 
-> 网页有中文和英文，左下角一键切换（第一次打开按浏览器的语言）；文档是中文的，英文简介见 [README.en.md](README.en.md)。目前在 macOS 上用得最多；Linux 上命令行和网页都能用；Windows 上按同样的做法写了（选文件夹、在资源管理器里显示、复制），但还没实测过。后台常驻的「接力台」小程序只有 macOS 有。
+> 网页有中文和英文，左下角一键切换（第一次打开按浏览器的语言）；文档是中文的，英文简介见 [README.en.md](README.en.md)。目前在 macOS 上用得最多；Linux 上命令行和网页都能用；Windows 上有原生版（双击 `install-windows.cmd` 装好，不用 WSL），还没在真机上跑过。
 
 ## 三分钟上手
 
@@ -29,13 +29,15 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && zsh scripts/m
 
 它会装好依赖、编译好，在「应用程序」文件夹（`/Applications`，没有写权限时放 `~/Applications`）里放一个「接力台」并让它登录电脑时自己在后台启动，最后打开网页。桌面和程序坞上都不挂图标，也不弹终端窗口。接力台意外退出、或者编译出了新版本，它几秒内在后台重新拉起（手上有活时等活干完），开着的网页会自己刷新成新版。以后要打开网页，在启动台或聚焦搜索（⌘ 空格）里打开「接力台」，或者在浏览器里打开 http://127.0.0.1:7388 。在网页「设置」里点「关闭接力台」，它就停下，直到你下次打开「接力台」或重新登录。不想要了：`zsh scripts/make-desktop-app.sh --remove`。
 
-Linux、Windows（或者不想让它在后台常驻）：
+Windows 10 / 11：把文件夹放在一个以后不挪动的地方，双击里面的 `install-windows.cmd`。没有 Node.js、Git 的，它用系统自带的 winget 装；然后装依赖、编译，在开始菜单里放一个「接力台」，登录电脑时在后台启动，最后打开网页。以后从开始菜单打开，不弹黑窗口，桌面上不放图标；意外退出、编译出新版本，一样几秒内在后台重新拉起。不想要了：在这个文件夹里执行 `install-windows.cmd --remove`。
+
+Linux（或者不想让它在后台常驻）：
 
 ```bash
 git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install && npm run build && npm start
 ```
 
-`npm start` 会打开网页，按 Ctrl-C 停下。Windows 上在 PowerShell 里执行同样几条（`&&` 要 PowerShell 7；旧版 PowerShell 一条一条执行）。想在终端里到处用 `relay` 命令，再执行一次 `npm link`。
+`npm start` 会打开网页，按 Ctrl-C 停下（Windows 上也能这样用：在 PowerShell 里一条一条执行）。想在终端里到处用 `relay` 命令，再执行一次 `npm link`。
 
 然后：
 
@@ -215,7 +217,7 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 
 - Claude Code、Codex 这些编程工具自己读文件、联网、跑命令，按它们自己的权限设置来；接力台的脱敏只管它自己发出去的东西。
 - 检查命令没有隔离：它照样能读写文件、联网。检查命令是项目代码的一部分，别人给的项目先看一眼再接入。
-- 只在 macOS 上正式用过；Linux 只在 CI 里跑过测试。
+- 只在 macOS 上正式用过；Linux 只在 CI 里跑过测试；Windows 版的做法按 Windows 的规矩写了、用测试按 Windows 的规矩算过，还没在真机上跑过。
 
 ## 常见问题
 

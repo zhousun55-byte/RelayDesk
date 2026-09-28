@@ -1,7 +1,7 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { agentEnv } from './env';
+import { killTree, spawnTool } from './proc';
 import type { Invocation, StreamFormat } from './harness';
 import { cause, looksOffline } from './cause';
 import { claudeLimits, type Limit } from './quota';
@@ -510,23 +510,10 @@ export function describeArgv(argv: string[]): string {
     .join(' ');
 }
 
-function killGroup(pid: number | undefined, sig: NodeJS.Signals): void {
-  if (!pid) return;
-  try {
-    process.kill(-pid, sig);
-  } catch {
-    try {
-      process.kill(pid, sig);
-    } catch {
-      /* 已经结束 */
-    }
-  }
-}
-
 export function startRun(req: RunRequest): RunHandle {
   const inv = req.invocation;
   fs.mkdirSync(path.dirname(req.logPath), { recursive: true });
-  const prefix = req.cwd.endsWith('/') ? req.cwd : `${req.cwd}/`;
+  const prefix = req.cwd.endsWith(path.sep) ? req.cwd : `${req.cwd}${path.sep}`;
   const write = (line: string) => {
     const full = `${hms()} ${line.split(prefix).join('')}`;
     try {
@@ -546,16 +533,15 @@ export function startRun(req: RunRequest): RunHandle {
   let stderrLines = 0;
   let killTimer: NodeJS.Timeout | null = null;
 
-  const child = spawn(inv.argv[0], inv.argv.slice(1), {
+  const child = spawnTool(inv.argv, {
     cwd: req.cwd,
     env: agentEnv(inv.env ?? {}, inv.dropEnv),
-    detached: true,
     stdio: [inv.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
 
   const terminate = () => {
-    killGroup(child.pid, 'SIGTERM');
-    if (!killTimer) killTimer = setTimeout(() => killGroup(child.pid, 'SIGKILL'), 5000);
+    killTree(child.pid, 'SIGTERM');
+    if (!killTimer) killTimer = setTimeout(() => killTree(child.pid, 'SIGKILL'), 5000);
   };
   let late: string | undefined;
   const giveUp = (why: string) => {

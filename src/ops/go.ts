@@ -10,7 +10,7 @@ import { refreshHarnessModel } from '../core/detect';
 import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from '../core/harness';
 import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, taskMode, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
-import { pidAlive } from '../core/proc';
+import { killTree, pidAlive } from '../core/proc';
 import { allMembers, orderMembers, readyMembers, spareFirst, type MemberInfo } from '../core/members';
 import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
@@ -203,6 +203,7 @@ export async function stopAllGo(timeoutMs = 10_000): Promise<void> {
  */
 function toolGroup(pgid: number, exe: string | undefined): number[] {
   if (!exe) return [];
+  if (process.platform === 'win32') return winToolAlive(pgid, exe) ? [pgid] : [];
   const r = spawnSync('ps', ['-axo', 'pid=,pgid=,command='], { encoding: 'utf8' });
   if (r.status !== 0) return [];
   const group = (r.stdout ?? '').split('\n').flatMap((l) => {
@@ -213,12 +214,24 @@ function toolGroup(pgid: number, exe: string | undefined): number[] {
   return group.some((x) => x.cmd.includes(exe) || (x.cmd.split(/\s+/)[0] ?? '').endsWith(name)) ? group.map((x) => x.pid) : [];
 }
 
+/** Windows 没有进程组：看这个进程号现在的命令行里有没有这个工具的名字（npm 装的工具是 node 在跑它的 .js，名字在路径里）。 */
+function winToolAlive(pid: number, exe: string): boolean {
+  if (!pidAlive(pid)) return false;
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf8', timeout: 20_000, windowsHide: true });
+  const name = path.basename(exe).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+  return !!name && (r.stdout ?? '').toLowerCase().includes(name);
+}
+
 /** 上次接力台被关掉时留下、还在跑的工具（连同它起的子进程）：结束掉（不然两个 AI 同时改一个文件夹）。返回结束了没有。 */
 function killLeftover(prev: GoState | null): boolean {
   const pid = prev?.current?.toolPid;
   if (!pid || !prev || pidAlive(prev.pid)) return false;
   const group = toolGroup(pid, prev.current?.toolExe);
   if (!group.length) return false;
+  if (process.platform === 'win32') {
+    killTree(pid, 'SIGKILL');
+    return true;
+  }
   try {
     process.kill(-pid, 'SIGKILL');
   } catch {

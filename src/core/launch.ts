@@ -2,24 +2,31 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { which } from './env';
+import { shellArgv, spawnTool } from './proc';
 
 /** 给 sh 用的单引号转义。 */
 export function shq(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+/** 给 cmd.exe 用的双引号（里面的双引号写两遍）。 */
+function cmdq(s: string): string {
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
 /**
- * 把命令模板里的 {{名字}} 换成转义好的值。模板里给占位符加了引号（"{{dir}}"）也照样对：
+ * 把命令模板里的 {{名字}} 换成转义好的值（Mac/Linux 按 sh 的单引号，Windows 按 cmd.exe 的双引号）。模板里给占位符加了引号（"{{dir}}"）也照样对：
  * 连引号一起替换，不会变成 "'路径'"。
  */
-export function fillTemplate(cmd: string, vars: Record<string, string>): string {
+export function fillTemplate(cmd: string, vars: Record<string, string>, win = process.platform === 'win32'): string {
   return cmd.replace(/(["']?)\{\{(\w+)\}\}\1/g, (whole, _q: string, key: string) =>
-    Object.prototype.hasOwnProperty.call(vars, key) ? shq(vars[key]) : whole
+    Object.prototype.hasOwnProperty.call(vars, key) ? (win ? cmdq : shq)(vars[key]) : whole
   );
 }
 
-/** 简单的 sh 分词（认单双引号和反斜杠），只用来找命令名和 open -a 的应用名。 */
-export function shellWords(cmd: string): string[] {
+/** 简单的 sh 分词（认单双引号和反斜杠；Windows 上反斜杠是路径，照原样），只用来找命令名和 open -a 的应用名。 */
+export function shellWords(cmd: string, win = process.platform === 'win32'): string[] {
   const out: string[] = [];
   let cur = '';
   let quote: '"' | "'" | null = null;
@@ -28,12 +35,12 @@ export function shellWords(cmd: string): string[] {
     const c = cmd[i];
     if (quote) {
       if (c === quote) quote = null;
-      else if (c === '\\' && quote === '"' && i + 1 < cmd.length) cur += cmd[++i];
+      else if (c === '\\' && !win && quote === '"' && i + 1 < cmd.length) cur += cmd[++i];
       else cur += c;
     } else if (c === '"' || c === "'") {
       quote = c;
       has = true;
-    } else if (c === '\\' && i + 1 < cmd.length) {
+    } else if (c === '\\' && !win && i + 1 < cmd.length) {
       cur += cmd[++i];
       has = true;
     } else if (/\s/.test(c)) {
@@ -56,12 +63,6 @@ export interface CommandCheck {
   problem?: string;
 }
 
-function whichSh(bin: string): string | null {
-  const r = spawnSync('sh', ['-c', `command -v ${shq(bin)}`], { encoding: 'utf8', timeout: 5000 });
-  const out = (r.stdout ?? '').trim();
-  return r.status === 0 && out ? out.split('\n')[0] : null;
-}
-
 /** 检查一条启动命令能不能用：命令在不在 PATH；open -a 的 App 装没装；cursor 是不是被 cursor-agent 顶替了。 */
 export function checkCommand(cmd: string): CommandCheck {
   const words = shellWords(cmd.replace(/\{\{\w+\}\}/g, 'X'));
@@ -74,7 +75,7 @@ export function checkCommand(cmd: string): CommandCheck {
     const r = spawnSync('open', ['-Ra', app], { encoding: 'utf8', timeout: 8000 });
     return r.status === 0 ? { ok: true, found: `${app}.app` } : { ok: false, problem: `找不到叫「${app}」的 App。看看「应用程序」文件夹里它的准确名字。` };
   }
-  const found = bin.includes('/') ? (fs.existsSync(bin) ? bin : null) : whichSh(bin);
+  const found = which(bin);
   if (!found) return { ok: false, problem: `找不到命令「${bin}」。它装了吗？装在终端能直接运行的位置了吗？` };
   if (bin === 'cursor') {
     let real = found;
@@ -100,7 +101,7 @@ export interface OpenerResult {
 /** 跑一条「打开」命令：等它退出（open / cursor 这类一两秒就返回），最多等 timeoutMs，然后放手不管。 */
 export function runOpener(cmd: string, cwd: string, timeoutMs = 15_000): Promise<OpenerResult> {
   return new Promise((resolve) => {
-    const child = spawn('sh', ['-c', cmd], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawnTool(shellArgv(cmd), { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     const keep = (c: string) => {
       output = (output + c).slice(-4000);

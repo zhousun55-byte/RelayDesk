@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process';
 import { checkEnv } from './env';
+import { killTree, shellArgv, spawnTool } from './proc';
 import type { RelayConfig } from './types';
 
 export interface GateResult {
@@ -20,7 +20,7 @@ export function runGate(worktree: string, cfg: RelayConfig, timeoutMs = 10 * 60_
   const cmd = cfg.gate.command.trim();
   if (!cmd) return Promise.resolve({ status: 'pass', command: GATE_NONE, detail: '没有配置检查命令，按通过处理。' });
   return new Promise((resolve) => {
-    const child = spawn('sh', ['-c', cmd], { cwd: worktree, env: checkEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const child = spawnTool(shellArgv(cmd), { cwd: worktree, env: checkEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     const keep = (c: string) => {
       out = (out + c).slice(-8000);
@@ -33,11 +33,7 @@ export function runGate(worktree: string, cfg: RelayConfig, timeoutMs = 10 * 60_
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        if (child.pid) process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        /* 已经结束 */
-      }
+      killTree(child.pid, 'SIGKILL');
     }, timeoutMs);
     child.on('error', (err) => {
       clearTimeout(timer);

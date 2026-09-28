@@ -3,6 +3,7 @@ import path from 'node:path';
 import { Command } from 'commander';
 import { loadAutoSettings } from '../core/auto-settings';
 import { loadDetected } from '../core/detect';
+import { which } from '../core/env';
 import { errorMessage } from '../core/errors';
 import { checkCommand } from '../core/launch';
 import { loadLedger } from '../core/ledger';
@@ -33,8 +34,8 @@ export function doctor(dir: string): DoctorLine[] {
   if (g.status === 0) add('ok', (g.stdout || 'git').trim());
   else add('bad', '找不到 git。先安装 git（macOS 上执行 xcode-select --install）。');
 
-  const w = spawnSync('sh', ['-c', 'command -v relay'], { encoding: 'utf8' });
-  if (w.status === 0 && w.stdout.trim()) add('ok', `终端里可以直接用 relay 命令（${w.stdout.trim()}）`);
+  const w = which('relay');
+  if (w) add('ok', `终端里可以直接用 relay 命令（${w}）`);
   else add('warn', `终端里还不能直接打 relay。到 agent-relay 文件夹执行 npm link；或用 node ${path.join(__dirname, '..', 'cli.js')}`);
 
   try {

@@ -94,11 +94,12 @@ function mergedPath(): string {
   const home = os.homedir();
   const parts: string[] = [];
   const login = loginEnv().PATH;
-  if (login) parts.push(...login.split(':'));
-  parts.push(...(process.env.PATH ?? '').split(':'));
-  parts.push(path.join(home, '.local/bin'), path.join(home, '.npm-global/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin');
+  if (login) parts.push(...login.split(path.delimiter));
+  parts.push(...(process.env.PATH ?? '').split(path.delimiter));
+  if (process.platform === 'win32') parts.push(path.join(process.env.APPDATA ?? path.join(home, 'AppData', 'Roaming'), 'npm'), path.join(home, '.local', 'bin'));
+  else parts.push(path.join(home, '.local/bin'), path.join(home, '.npm-global/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin');
   const seen = new Set<string>();
-  return parts.filter((p) => p && !seen.has(p) && (seen.add(p), true)).join(':');
+  return parts.filter((p) => p && !seen.has(p) && (seen.add(p), true)).join(path.delimiter);
 }
 
 /**
@@ -130,6 +131,8 @@ export function agentEnv(extra: Record<string, string> = {}, drop?: RegExp): Nod
   // 接力台自己怎么运行的（由小程序看着、登录时启动），不带给 AI 工具。
   delete env.RELAY_KEEPER;
   delete env.RELAY_AT_LOGIN;
+  // Windows 上变量名不分大小写，继承来的常叫 Path：先去掉，免得子进程里有两个 PATH。
+  for (const k of Object.keys(env)) if (k.toUpperCase() === 'PATH') delete env[k];
   env.PATH = mergedPath();
   return { ...env, NO_COLOR: '1', FORCE_COLOR: '0', ...extra };
 }
@@ -149,21 +152,28 @@ export function checkEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-/** 在合并后的 PATH 里找可执行文件（只认真的文件，不认 shell 别名 / 函数）。 */
-export function which(bin: string): string | null {
-  if (bin.includes('/')) return isExec(bin) ? bin : null;
-  for (const dir of mergedPath().split(':')) {
-    const p = path.join(dir, bin);
-    if (isExec(p)) return p;
+/**
+ * 在合并后的 PATH 里找可执行文件（只认真的文件，不认 shell 别名 / 函数）。
+ * Windows 上按 PATHEXT 补扩展名（claude → claude.exe / codex.cmd）；npm 在旁边放的无扩展名 sh 脚本不算。
+ */
+export function which(bin: string, win = process.platform === 'win32'): string | null {
+  const exts = win ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : [];
+  const names = !win || exts.some((e) => bin.toUpperCase().endsWith(e.toUpperCase())) ? [bin] : exts.map((e) => bin + e.toLowerCase());
+  const pick = (base: string) => names.map((n) => path.join(base, n)).find((p) => isExec(p, win)) ?? null;
+  if (bin.includes('/') || (win && bin.includes('\\'))) return pick('');
+  for (const dir of mergedPath().split(path.delimiter)) {
+    const p = dir && pick(dir);
+    if (p) return p;
   }
   return null;
 }
 
-function isExec(p: string): boolean {
+/** 是能执行的文件。Windows 上没有「可执行」这一位，看扩展名（上面按 PATHEXT 补的）就够了。 */
+function isExec(p: string, win: boolean): boolean {
   try {
     const st = fs.statSync(p);
     if (!st.isFile()) return false;
-    fs.accessSync(p, fs.constants.X_OK);
+    if (!win) fs.accessSync(p, fs.constants.X_OK);
     return true;
   } catch {
     return false;

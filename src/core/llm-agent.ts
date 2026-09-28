@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { agentEnv, checkEnv } from './env';
@@ -7,6 +6,7 @@ import { errorMessage } from './errors';
 import { git } from './git';
 import type { Level } from './harness';
 import { ToolChat, type ToolCall, type ToolDef } from './llm';
+import { killTree, shellArgv, spawnTool } from './proc';
 import { matchProtected } from './protected';
 import { clip } from './runner';
 import type { ApiSpec } from './types';
@@ -270,7 +270,7 @@ function search(root: string, args: Record<string, unknown>): string {
 
 function shell(root: string, cmd: string, timeoutMs: number, shouldStop: () => boolean, env = agentEnv()): Promise<string> {
   return new Promise((resolve) => {
-    const child = spawn('sh', ['-c', cmd], { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawnTool(shellArgv(cmd), { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     const keep = (c: string) => {
       out = (out + c).slice(-12_000);
@@ -279,13 +279,7 @@ function shell(root: string, cmd: string, timeoutMs: number, shouldStop: () => b
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', keep);
     child.stderr?.on('data', keep);
-    const kill = () => {
-      try {
-        if (child.pid) process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        /* 已结束 */
-      }
-    };
+    const kill = () => killTree(child.pid, 'SIGKILL');
     const timer = setTimeout(kill, timeoutMs);
     const poll = setInterval(() => shouldStop() && kill(), 1000);
     child.on('error', (e) => {
