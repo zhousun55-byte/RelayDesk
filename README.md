@@ -162,7 +162,7 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 | `relay watch` | 一直开着看进度：任务、清单（下一步下面写做法）、谁在做、最近几棒，每 2 秒刷新，Ctrl-C 退出 |
 | `relay task "要做什么" --step 第一步 第二步` | 写下新任务（旧的存档）；`--dispatch` 写成派活的任务 |
 | `relay step` / `relay step add 文字` / `done N` / `undo N` / `remove N` | 看清单、加一步、打勾、去掉勾、删一步 |
-| `relay go [谁]` | 让一个 AI 接着做一棒（不写谁就挑第一个有额度的） |
+| `relay go [谁]` | 让一个 AI 接着做一棒（不写谁就挑第一个有额度的；指名的那位在等额度会先拦下，确定已经恢复了加 `--force`） |
 | `relay review [谁]` | 请强模型复核所有待复核的棒；`--skip N` 标记第 N 棒不用复核，`--need N` 撤销 |
 | `relay auto ["要做什么"]` | 全自动做完（派活的任务用派活）；`--dispatch` 这一次用派活（`--relay` 这一次不用），`--no-wait` 都没额度时不等，`--max 20` 最多接力几棒 |
 | `relay stop` | 叫停 |
@@ -247,7 +247,7 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 
 **Gemini（Antigravity）提示「「某条命令」没获准运行」？** 它的设置里「工具执行」是逐条确认，无界面时要确认的命令一律被拒。在 Antigravity 设置里把工具执行改成 proceed-in-sandbox（沙箱里的命令自动运行，出不了项目、连不了网）。
 
-**提示「连不上服务器」？** 工具连不上它的服务器，原话是它自己报的错（超时、连接被断、反复重连）。多半是网络或代理：Codex 用 ChatGPT 账号登录时走 chatgpt.com，在终端运行 `curl -I https://chatgpt.com` 看能不能连上；开着 Clash 这类代理的，换一个节点，或者让 chatgpt.com 走能用的节点。
+**提示「连不上服务器」？** 工具连不上它的服务器，原话是它自己报的错（超时、连接被断、反复重连）。工具一直在重连（Codex 断网时会一直等下去）的，连着 3 分钟都连不上接力台就把它停掉，全自动换下一位。多半是网络或代理：Codex 用 ChatGPT 账号登录时走 chatgpt.com，在终端运行 `curl -I https://chatgpt.com` 看能不能连上；开着 Clash 这类代理的，换一个节点，或者让 chatgpt.com 走能用的节点。
 
 **提示「3 分钟没有输出，已停止」？** 这位 AI 3 分钟一点动静都没有，多半是卡住或断网了。群聊里再发一次，或者换一位。
 
