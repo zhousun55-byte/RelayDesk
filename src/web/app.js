@@ -82,6 +82,8 @@ function iconBtn(label, name, onclick, kbd, cls = '') {
 }
 
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** 格点的伪随机数（0～999）：同一个格子每次都一样，边缘毛毛的但不闪。 */
+const hash = (i, j) => (((i * 73856093) ^ (j * 19349663)) >>> 0) % 1000;
 /** 缓动，和 app.css 的 --snap / --exit / --spring 同一套（弹簧是 CSS 的 linear()，不支持的浏览器退回贝塞尔）。 */
 const EASE = (() => {
   const css = getComputedStyle(document.documentElement);
@@ -112,15 +114,111 @@ function flip(box, mutate) {
   }
 }
 
-/** 分段按钮：选中的那一块滑到按下的按钮下面。 */
+/** 分段按钮：选中的那一块滑到按下的按钮下面；换了一块，身后留一串点（segWake）。 */
 function syncSegs(root = document) {
   for (const seg of root.querySelectorAll('.seg')) {
-    const on = seg.querySelector('[aria-pressed="true"]');
+    const btns = [...seg.querySelectorAll(':scope > button')];
+    const on = btns.find((b) => b.getAttribute('aria-pressed') === 'true');
     if (!on || !on.offsetWidth) continue;
     seg.style.setProperty('--tx', `${on.offsetLeft - 2}px`);
     seg.style.setProperty('--tw', `${on.offsetWidth}px`);
+    const i = btns.indexOf(on);
+    const was = Number(seg.dataset.on);
+    seg.dataset.on = String(i);
     if (!seg.classList.contains('ready')) requestAnimationFrame(() => seg.classList.add('ready'));
+    else if (i !== was) segWake(seg, i > was ? 1 : -1);
   }
+}
+
+/**
+ * 在 host 里临时垫一层画布（底色之上、滑块和字之下，见 .specks）：每帧调 draw(ctx, 毫秒, 宽, 高)，返回 false 就收掉。
+ * 同一处连着切：上一层直接换掉。
+ */
+function underlay(host, draw) {
+  host.querySelector(':scope > .specks')?.remove();
+  const W = host.clientWidth;
+  const H = host.clientHeight;
+  if (still() || !W || !H) return;
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const cv = h('canvas', { class: 'specks', 'aria-hidden': 'true' });
+  cv.width = W * dpr;
+  cv.height = H * dpr;
+  host.prepend(cv);
+  const ctx = cv.getContext('2d');
+  const ink = getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#151515';
+  let t0 = 0;
+  const frame = (now) => {
+    if (!cv.isConnected) return;
+    t0 ||= now;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = ink;
+    if (draw(ctx, now - t0, W, H)) requestAnimationFrame(frame);
+    else cv.remove();
+  };
+  requestAnimationFrame(frame);
+}
+
+/**
+ * 分段按钮换了一块：滑块身后留一串 4px 一格的细点（滑动的拖影拆成一格一格的点）。
+ * 滑块的后沿经过哪儿，哪儿的点就亮，再分三档变小；滑得快拖得长，停下来就散完。
+ */
+function segWake(seg, dir) {
+  const pill = getComputedStyle(seg, '::before');
+  const edge = () => new DOMMatrixReadOnly(pill.transform).m41 + (dir > 0 ? 0 : parseFloat(pill.width));
+  const from = edge();
+  const tx = parseFloat(seg.style.getPropertyValue('--tx'));
+  const to = dir > 0 ? tx : tx + parseFloat(seg.style.getPropertyValue('--tw'));
+  const dots = [];
+  let last = from;
+  underlay(seg, (ctx, t, W, H) => {
+    if (!dots.length) {
+      for (let x = 2; x < W; x += 4) {
+        if ((x - from) * dir < 0 || (x - to) * dir > 0) continue;
+        for (let y = 6; y <= H - 6; y += 4) {
+          const r = hash(x, y);
+          if (r > 180) dots.push({ x, y, s: 0.6 + r / 2500, thr: (r % 5) - 2, on: -1 });
+        }
+      }
+    }
+    const e = edge();
+    let live = t < 80 || Math.abs(e - last) > 0.1;
+    last = e;
+    for (const d of dots) {
+      if (d.on < 0) {
+        if ((e - d.x - d.thr) * dir <= 0) continue;
+        d.on = t;
+      }
+      const k = Math.ceil(3 - (t - d.on) / 70) / 3;
+      if (k <= 0) continue;
+      live = true;
+      ctx.globalAlpha = 0.18 + 0.3 * k;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, 1.3 * d.s * k, 0, 6.2832);
+      ctx.fill();
+    }
+    return live && t < 1000;
+  });
+}
+
+/** 开关拨过去的那一下：打开时墨点跟着圆钮一颗颗铺满（随后 CSS 的底色接上），关上时从圆钮离开的那头一颗颗散掉。 */
+function switchSpecks(sw) {
+  const on = sw.getAttribute('aria-checked') === 'true';
+  const dots = [];
+  underlay(sw.querySelector('.track'), (ctx, t, W, H) => {
+    if (!dots.length) for (let x = 1.5; x < W; x += 3) for (let y = 1.5; y < H; y += 3) dots.push([x, y, 20 + 150 * (on ? x / W : 1 - x / W) + hash(x * 2, y * 2) / 25]);
+    let live = on && t < 320;
+    for (const [x, y, at] of dots) {
+      const p = clamp((t - at) / 60, 0, 1);
+      const k = Math.ceil((on ? p : 1 - p) * 3) / 3;
+      if (p < 1) live = true;
+      if (!k) continue;
+      ctx.beginPath();
+      ctx.arc(x, y, 2.2 * k, 0, 6.2832);
+      ctx.fill();
+    }
+    return live;
+  });
 }
 
 function esc(s) {
@@ -1238,7 +1336,7 @@ function newThread() {
 
 const VIEWS = ['relay', 'dispatch', 'chat'];
 
-/** 换一页（还没画）：记下从哪边切过来的，画完后新内容从那一边滑进来（renderAll 里的 swapIn）。 */
+/** 换一页（还没画）：记下往哪边切（1 往右、-1 往左），画完后新内容顺着这个方向滑进来、纸上的点扫一遍（renderAll 里的 swapIn、flowSweep）。 */
 function showView(v) {
   if (S.view === v) return false;
   S.swap = VIEWS.indexOf(v) > VIEWS.indexOf(S.view) ? 1 : -1;
@@ -1252,7 +1350,7 @@ function showView(v) {
 function swapIn(dir) {
   if (still()) return;
   for (const el of [CE.bar, CE.chat, CE.hero, CE.doc]) {
-    if (!el.hidden) el.animate([{ opacity: 0, transform: `translateX(${dir * 22}px)` }, { opacity: 1, transform: 'none' }], { duration: 490, easing: EASE.spring });
+    if (!el.hidden) el.animate([{ opacity: 0, transform: `translateX(${-dir * 22}px)` }, { opacity: 1, transform: 'none' }], { duration: 490, easing: EASE.spring });
   }
 }
 
@@ -1314,7 +1412,7 @@ function renderLeft() {
     leftSig = sig;
     drawLeft();
   }
-  for (const b of LE.seg.children) {
+  for (const b of LE.seg.querySelectorAll(':scope > button')) {
     const on = b.dataset.view === S.view;
     b.setAttribute('aria-pressed', String(on));
     b.setAttribute('aria-selected', String(on));
@@ -1560,8 +1658,6 @@ function buildCenter() {
   CE.doc = h('section', { class: 'pane', hidden: true });
   CE.hero = h('section', { class: 'hero', hidden: true });
   CE.flow = h('canvas', { class: 'flow', 'aria-hidden': 'true', hidden: true });
-  CE.hero.addEventListener('pointermove', flowPointer);
-  CE.hero.addEventListener('pointerleave', flowPointer);
   $('#center').append(CE.flow, CE.offline, CE.cfgBad, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
 }
 
@@ -1618,9 +1714,8 @@ function renderCenter() {
     CE.chat.style.setProperty('--compose-h', '0px');
   }
   document.title = S.st.project.name && !S.st.project.pick ? `${S.st.project.name} · 接力台` : '接力台';
-  // 空闲页的点阵流：等字和输入框放好了再算（要给它们留白）
-  if (CE.hero.hidden) flowHide();
-  else flowShow(mode === 'pick' ? 'pick' : chat ? 'chat' : S.view === 'dispatch' ? 'dispatch' : 'relay', `${mode}:${S.view}:${S.st.project.root}`);
+  // 切页时扫过去的点用这一页的走向（见 flowSweep）
+  FLOW.kind = mode === 'pick' ? 'pick' : S.view;
 }
 
 // ----- 空闲：小标题、要人看的一行、输入框 -----
@@ -1689,7 +1784,7 @@ function renderHero(mode) {
   setComposerKind(chat ? 'talk' : 'task');
 }
 
-// ----- 空闲页的点阵流：纸上本来就有的点，顺着一笔弯过来的线变大、变密（连续的一笔，拆成一格一格的点） -----
+// ----- 切页的那一下：纸上本来就有的点，顺着切过去的方向亮一遍、再散掉（连续的一笔，拆成一格一格的点） -----
 
 /**
  * 每一页一种走向（在中间这一栏里的归一化坐标，三次贝塞尔，可以有几条）：
@@ -1721,8 +1816,9 @@ const FLOW_LINES = {
   },
 };
 const FLOW_STEP = 10;
-const LENS_R = 96;
-const FLOW = { key: '', kind: 'relay', w: 0, h: 0, dpr: 1, cols: 0, rows: 0, marks: [], t0: 0, raf: 0, done: true, lens: null, drawn: null, ink: '#151515', resize: 0 };
+/** 前沿走完这一栏要多久（略先快后慢）；每个点分三档变大、停一下、再分三档变小（一格一格地变，不是连续地缩放）。点亮得短，看到的是一道往前走的点，不是铺满再褪。 */
+const SWEEP = { front: 600, grow: 45, hold: 40, fade: 150 };
+const FLOW = { kind: 'relay', w: 0, h: 0, dpr: 1, marks: [], t0: 0, raf: 0, ink: '#151515' };
 
 const smooth = (a, b, x) => {
   const t = clamp((x - a) / (b - a), 0, 1);
@@ -1766,9 +1862,10 @@ function nearSeg(segs, a, b, x, y, out) {
 
 /**
  * 算出每个格点上画什么：纸上的点（20px 一个）离线近就变大变深；线的正中间再加密成 10px 一个。
- * 拐弯处最密；往后越散越宽，并且分成几股（参考图里一行一行的点）。字和输入框周围留白。
+ * 拐弯处最密；往后越散越宽，并且分成几股（参考图里一行一行的点）。keep：字和输入框那一块，离它越近越淡，里面不画。
+ * 什么时候亮：前沿从 dir 那一边（1 从左、-1 从右）扫过来碰到它，再错开几十毫秒（前沿是毛边，不是一条直线）。
  */
-function flowMarks() {
+function flowMarks(keep, dir) {
   const { w: W, h: H } = FLOW;
   const spec = FLOW_LINES[FLOW.kind] || FLOW_LINES.relay;
   const lines = spec.lines.map((pts) => {
@@ -1777,14 +1874,9 @@ function flowMarks() {
   });
   const [w0, w1, w2] = spec.w;
   const knee = spec.knee;
-  // 字和输入框那一块：离它越近点越淡，里面不画
-  const inner = CE.hero.querySelector('.hero-in');
-  const c = CE.flow.getBoundingClientRect();
-  const ib = inner && inner.getBoundingClientRect();
-  const keep = ib && ib.width ? [ib.left - c.left - 24, ib.top - c.top - 20, ib.right - c.left + 24, ib.bottom - c.top + 20] : null;
   const cols = Math.floor(W / FLOW_STEP) + 1;
   const rows = Math.floor((H - 2) / FLOW_STEP) + 1;
-  const marks = new Array(cols * rows).fill(null);
+  const marks = [];
   const far = (3.4 * w2) ** 2;
   const best = [0, 0, 0, 0, 0];
   for (let j = 0; j < rows; j++) {
@@ -1794,7 +1886,7 @@ function flowMarks() {
       let I = 0;
       let ang = 0;
       let at = 0;
-      const r = (((i * 73856093) ^ (j * 19349663)) >>> 0) % 1000;
+      const r = hash(i, j);
       for (const L of lines) {
         best[0] = Infinity;
         nearSeg(L.coarse, 0, L.coarse.length - 1, x, y, best);
@@ -1826,7 +1918,8 @@ function flowMarks() {
       const paper = i % 2 === 0 && j % 2 === 0;
       if (paper ? I < 0.04 : I < 0.24) continue;
       const q = paper ? I : (I - 0.24) / 0.76;
-      marks[j * cols + i] = {
+      const u = clamp(dir > 0 ? x / W : 1 - x / W, 0, 1);
+      marks.push({
         x,
         y,
         a: ang,
@@ -1834,21 +1927,12 @@ function flowMarks() {
         ry: paper ? 1.05 + 0.75 * q : 0.8 + 0.6 * q,
         al: paper ? 0.09 + 0.26 * q : 0.07 + 0.26 * q,
         ring: I > 0.55 && r < 240 && at > knee,
-        delay: at * 620 + r * 0.06,
-      };
+        on: SWEEP.front * (1 - (1 - u) ** 0.8) + r * 0.07,
+        hold: SWEEP.hold * (0.5 + r / 1000),
+      });
     }
   }
-  Object.assign(FLOW, { cols, rows, marks });
-}
-
-/** 放大镜：鼠标附近的点大一点（离得越近越大）。 */
-function lensAt(x, y) {
-  const L = FLOW.lens;
-  if (!L) return 0;
-  const d = Math.hypot(x - L.x, y - L.y);
-  if (d >= LENS_R) return 0;
-  const f = 1 - d / LENS_R;
-  return f * f;
+  return marks;
 }
 
 function flowMark(ctx, m, k) {
@@ -1864,116 +1948,55 @@ function flowMark(ctx, m, k) {
   }
 }
 
-/** 画一块区域（放大镜挪动时只重画它经过的地方）；reveal：刚显出来，每个点按先后从无到有。返回还有没有没显完的。 */
-function flowPaint(x0, y0, x1, y1, now) {
+/** 一个点亮起后第 age 毫秒有多大（0～1，三档）；-1：已经散完。 */
+function sweepK(age, hold) {
+  const { grow, fade } = SWEEP;
+  if (age < grow) return Math.ceil((age / grow) * 3) / 3;
+  if (age < grow + hold) return 1;
+  const f = (age - grow - hold) / fade;
+  return f < 1 ? Math.ceil((1 - f) * 3) / 3 : -1;
+}
+
+function flowFrame(now) {
   const ctx = CE.flow.getContext('2d');
+  const t = now - FLOW.t0;
   ctx.setTransform(FLOW.dpr, 0, 0, FLOW.dpr, 0, 0);
-  ctx.save();
-  ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
-  ctx.beginPath();
-  ctx.rect(x0, y0, x1 - x0, y1 - y0);
-  ctx.clip();
+  ctx.clearRect(0, 0, FLOW.w, FLOW.h);
   ctx.fillStyle = ctx.strokeStyle = FLOW.ink;
-  const pad = 8;
-  const i0 = Math.max(0, Math.floor((x0 - pad) / FLOW_STEP));
-  const i1 = Math.min(FLOW.cols - 1, Math.ceil((x1 + pad) / FLOW_STEP));
-  const j0 = Math.max(0, Math.floor((y0 - 2 - pad) / FLOW_STEP));
-  const j1 = Math.min(FLOW.rows - 1, Math.ceil((y1 - 2 + pad) / FLOW_STEP));
-  let pending = false;
-  for (let j = j0; j <= j1; j++) {
-    for (let i = i0; i <= i1; i++) {
-      const m = FLOW.marks[j * FLOW.cols + i];
-      const x = i * FLOW_STEP;
-      const y = 2 + j * FLOW_STEP;
-      const f = lensAt(x, y);
-      if (m) {
-        let k = 1;
-        if (!FLOW.done) {
-          const p = (now - FLOW.t0 - m.delay) / 420;
-          if (p < 1) pending = true;
-          if (p <= 0) continue;
-          if (p < 1) k = 1 - (1 - p) ** 3;
-        }
-        flowMark(ctx, m, k * (1 + 0.6 * f));
-      } else if (f > 0.02 && i % 2 === 0 && j % 2 === 0) {
-        ctx.globalAlpha = 0.09 + 0.08 * f;
-        ctx.beginPath();
-        ctx.arc(x, y, 1.05 * (1 + 1.3 * f), 0, 6.2832);
-        ctx.fill();
-      }
-    }
+  let live = false;
+  for (const m of FLOW.marks) {
+    const k = t < m.on ? 0 : sweepK(t - m.on, m.hold);
+    if (k < 0) continue;
+    live = true;
+    if (k > 0) flowMark(ctx, m, k);
   }
-  ctx.restore();
-  return pending;
+  FLOW.raf = live ? requestAnimationFrame(flowFrame) : 0;
+  if (!live) CE.flow.hidden = true;
 }
 
-function flowTick(now) {
+/** 切了页（新的一页已经放好）：点从 dir 那一边扫过来，扫完画布就收起来，平时纸上只有原来的点。 */
+function flowSweep(dir) {
+  cancelAnimationFrame(FLOW.raf);
   FLOW.raf = 0;
-  if (CE.flow.hidden) return;
-  if (!FLOW.done) {
-    if (flowPaint(0, 0, FLOW.w, FLOW.h, now)) FLOW.raf = requestAnimationFrame(flowTick);
-    else FLOW.done = true;
-    FLOW.drawn = FLOW.lens;
-    return;
-  }
-  const a = FLOW.drawn;
-  const b = FLOW.lens;
-  if (a === b) return;
-  const R = LENS_R + 10;
-  const boxes = [a, b].filter(Boolean);
-  flowPaint(Math.min(...boxes.map((L) => L.x)) - R, Math.min(...boxes.map((L) => L.y)) - R, Math.max(...boxes.map((L) => L.x)) + R, Math.max(...boxes.map((L) => L.y)) + R, now);
-  FLOW.drawn = b;
-}
-
-/** 空闲页出来了：换了一页（或第一次）就让点一格一格显出来；只是大小变了，直接画好。 */
-function flowShow(kind, key) {
+  CE.flow.hidden = true;
+  if (still()) return;
   const box = CE.flow.parentNode.getBoundingClientRect();
   const W = Math.round(box.width);
   const H = Math.round(box.height);
-  CE.flow.hidden = false;
-  if (key === FLOW.key && W === FLOW.w && H === FLOW.h) return;
-  const fresh = key !== FLOW.key;
+  if (!W || !H) return;
+  const inner = !CE.hero.hidden && CE.hero.querySelector('.hero-in');
+  const ib = inner && inner.getBoundingClientRect();
+  const keep = ib && ib.width ? [ib.left - box.left - 24, ib.top - box.top - 20, ib.right - box.left + 24, ib.bottom - box.top + 20] : null;
   const dpr = Math.min(2, devicePixelRatio || 1);
-  Object.assign(FLOW, { key, kind, w: W, h: H, dpr, ink: getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#151515' });
+  Object.assign(FLOW, { w: W, h: H, dpr, ink: getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#151515' });
+  FLOW.marks = flowMarks(keep, dir);
   CE.flow.width = W * dpr;
   CE.flow.height = H * dpr;
   CE.flow.style.width = `${W}px`;
   CE.flow.style.height = `${H}px`;
-  flowMarks();
-  cancelAnimationFrame(FLOW.raf);
-  FLOW.raf = 0;
-  FLOW.done = !fresh || still();
+  CE.flow.hidden = false;
   FLOW.t0 = performance.now();
-  if (FLOW.done) {
-    flowPaint(0, 0, W, H, 0);
-    FLOW.drawn = FLOW.lens;
-  } else FLOW.raf = requestAnimationFrame(flowTick);
-}
-
-function flowHide() {
-  if (CE.flow.hidden) return;
-  CE.flow.hidden = true;
-  cancelAnimationFrame(FLOW.raf);
-  FLOW.raf = 0;
-  FLOW.key = '';
-  FLOW.lens = FLOW.drawn = null;
-}
-
-/** 换了浅色 / 深色、窗口大小变了：照原样重画（不重放）。 */
-function flowRedraw() {
-  if (!CE.flow || CE.flow.hidden) return;
-  clearTimeout(FLOW.resize);
-  FLOW.resize = setTimeout(() => {
-    FLOW.w = 0;
-    flowShow(FLOW.kind, FLOW.key);
-  }, 120);
-}
-
-function flowPointer(e) {
-  if (CE.flow.hidden || still() || e.pointerType === 'touch') return;
-  const r = CE.flow.getBoundingClientRect();
-  FLOW.lens = e.type === 'pointerleave' ? null : { x: e.clientX - r.left, y: e.clientY - r.top };
-  if (!FLOW.raf) FLOW.raf = requestAnimationFrame(flowTick);
+  FLOW.raf = requestAnimationFrame(flowFrame);
 }
 
 // ----- 顶栏：项目 / 任务几，现在谁在做，待复核，清单，控制 -----
@@ -4848,7 +4871,7 @@ function membersPane(redraw) {
       ['strong', 'weak'].map((t) => h('button', { 'data-t': t, 'aria-pressed': String(m.tier === t), onclick: () => m.tier !== t && setTier(t) }, t === 'strong' ? '强' : '弱'))
     );
     const paint = (t) => {
-      for (const b of seg.children) b.setAttribute('aria-pressed', String(b.dataset.t === t));
+      for (const b of seg.querySelectorAll(':scope > button')) b.setAttribute('aria-pressed', String(b.dataset.t === t));
       syncSegs(seg);
       look.replaceChildren(tile({ ...m, tier: t }, 's28', m.cooling ? 'cooling' : ''));
     };
@@ -5012,7 +5035,7 @@ function addSheet(title, inputs, agentOf, redraw) {
           'data-t': t,
           onclick: () => {
             tier = t;
-            for (const b of seg.children) b.setAttribute('aria-pressed', String(b.dataset.t === tier));
+            for (const b of seg.querySelectorAll(':scope > button')) b.setAttribute('aria-pressed', String(b.dataset.t === tier));
             syncSegs(layer);
           },
         },
@@ -5276,15 +5299,16 @@ mqNarrow.addEventListener('change', () => {
   renderAll();
 });
 
+// 开关原地拨过去了（重画出来的新开关不算）：墨点铺满或散掉
+new MutationObserver((recs) => {
+  for (const r of recs) if (r.target.classList.contains('switch') && r.oldValue !== r.target.getAttribute('aria-checked')) switchSpecks(r.target);
+}).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['aria-checked'], attributeOldValue: true });
+
 addEventListener('resize', () => {
   if (SUG.menu) updateSuggest();
   if (WIRE.card) drawWires();
   syncSegs();
 });
-// 中间这一栏大小变了（窗口、收起左右栏）、换了浅色 / 深色：点阵流照原样重画
-new ResizeObserver(flowRedraw).observe($('#center'));
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', flowRedraw);
-new MutationObserver(flowRedraw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 // ---------- 开始 ----------
 
@@ -5296,6 +5320,7 @@ function renderAll() {
   renderRight();
   if (S.swap) {
     swapIn(S.swap);
+    flowSweep(S.swap);
     S.swap = 0;
   }
 }

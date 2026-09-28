@@ -2,7 +2,8 @@
    骨架规整（细线、线路、编号），这是「神性」的一半；纸面颗粒、点阵纸、钉上去的小条和细线，是「人性」的一半。
    只有黑白灰，外加一颗小红点：只有要人管的地方是红的。全站一种字（Albert Sans 配苹方），等宽字只给代码。
    动画只动 transform 和 opacity（点阵流画在画布上、网点进场动遮罩，都只在一小块上）；进来、出去都有过渡，减少动态效果时全部关掉。
-   2026-09-28 按两张海报加的细节：连续的东西拆成一格一格的点（点阵流、点线、网点进场），瑞士版式的对准标记和裁切角。 */
+   2026-09-28 按两张海报加的细节：连续的东西拆成一格一格的点（点阵流、点线、网点进场），瑞士版式的对准标记和裁切角。
+   点只在切换的那一下冒出来：切页时顺着方向扫一遍，分段按钮的滑块身后留一串，开关一颗颗铺满或散掉；平时纸上只有原来的点。 */
 
 @font-face {
   font-family: 'Albert Sans';
@@ -920,8 +921,9 @@ button.busy::after {
   border-radius: 8px;
   box-shadow: inset 0 0 0 1px var(--ink-4);
   position: relative;
+  isolation: isolate;
   flex: none;
-  transition: background 0.2s, box-shadow 0.2s;
+  transition: background 0s, box-shadow 0.2s;
 }
 .switch .track::after {
   content: '';
@@ -937,17 +939,20 @@ button.busy::after {
 .switch[aria-checked='true'] {
   color: var(--ink);
 }
+/* 打开：墨点先跟着圆钮铺满（app.js 的 switchSpecks），底色随后接上；关上：底色立刻撤，点一颗颗散掉 */
 .switch[aria-checked='true'] .track {
   background: var(--ink);
   box-shadow: none;
+  transition: background 0s 0.28s, box-shadow 0.2s;
 }
 .switch[aria-checked='true'] .track::after {
   transform: translateX(11px);
   background: var(--paper);
 }
-/* 分段：选中的那一块是滑过去的 */
+/* 分段：选中的那一块是滑过去的，身后留一串点（app.js 的 segWake） */
 .seg {
   position: relative;
+  isolation: isolate;
   display: inline-flex;
   flex: none;
   padding: 2px;
@@ -970,6 +975,16 @@ button.busy::after {
 }
 .seg.ready::before {
   transition: transform 0.49s var(--spring), width 0.49s var(--spring);
+}
+/* 切换的那一下临时垫在底下的细点：在底色之上、滑块和字之下，画完就拿掉 */
+.specks {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  pointer-events: none;
 }
 .seg button {
   position: relative;
@@ -2505,7 +2520,7 @@ button.busy::after {
 
 /* ---------- 空闲：一个小标题、要人看的一行、输入框 ---------- */
 
-/* 点阵流：和纸上的点对齐的一层画布，只在空闲页出现（见 app.js 的 flowShow） */
+/* 点阵流：和纸上的点对齐的一层画布，只在切页的那一下扫过去（见 app.js 的 flowSweep），平时收着 */
 .flow {
   position: absolute;
   left: 0;
@@ -3661,6 +3676,7 @@ button.busy::after {
     animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
   }
   .stop.live .no::after {
     display: none;
