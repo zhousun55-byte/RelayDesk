@@ -8,8 +8,8 @@ import { plain } from './cause';
  *
  * 清单打勾只说明「AI 说做完了」。能收工还要：
  * - 每一棒弱模型的活都有强模型复核过，而且结论是没问题 / 已修好 / 已退回（有问题、证据不足、没写清楚都不算）；
- * - 开着终审时，最后一棒干活之后有一次终审：交接成功、实际是强模型、结论通过、终审之后没人再改文件；
- * - 配了检查命令时，最后一次改动之后跑过检查，而且通过了；
+ * - 开着终审时，最后一棒干活之后有一次终审：交接成功、实际是强模型、结论通过、终审之后没人再改文件，而且之后没有算数的终审否决它；
+ * - 配了检查命令时，最后一次改动之后按现在配的命令跑过检查，而且通过了；
  * - 证据都读得到（配置文件没坏、每一棒的改动都读得到）。读不到就是「没法判断」，不能当成通过。
  */
 
@@ -103,12 +103,14 @@ export function acceptance(input: AcceptInput): Acceptance {
   const lastWork = [...live].reverse().find((s) => s.kind === 'work');
   const finals = closed.filter((s) => s.kind === 'final' && s.id > (lastWork?.id ?? 0));
   const changedAfter = (f: Stint) => live.some((x) => x.id > f.id && changed(x));
-  const good = [...finals].reverse().find((f) => f.status === 'handed' && f.who.tier === 'strong' && !!f.verdict && FINAL_PASS.has(f.verdict) && !changedAfter(f));
+  // 最近一次算数的终审（交接成功、实际强模型、留了结论）说了算：它没通过，更早的通过也不作数。
+  const latest = [...finals].reverse().find((f) => f.status === 'handed' && f.who.tier === 'strong' && !!f.verdict);
+  const good = latest && FINAL_PASS.has(latest.verdict!) && !changedAfter(latest) ? latest : undefined;
   let final: Acceptance['final'] = { required: input.finalRequired, ok: !input.finalRequired, text: input.finalRequired ? '还没终审' : '没开终审' };
   if (input.finalRequired) {
     if (good) final = { required: true, ok: true, stint: good.id, text: `${whoName(good.who)} 终审过了` };
     else {
-      const f = finals.at(-1);
+      const f = latest && !FINAL_PASS.has(latest.verdict!) ? latest : finals.at(-1);
       const text = !f
         ? '还没终审'
         : f.status !== 'handed'
@@ -131,6 +133,8 @@ export function acceptance(input: AcceptInput): Acceptance {
     const lastChange = [...closed].reverse().find(changed);
     const gated = [...closed].reverse().find((s) => s.gate);
     if (!gated) gate = { command: input.gateCommand, status: 'none', text: '还没跑过检查' };
+    // 检查命令改过：以前按旧命令跑的结果不算现在的检查。
+    else if (gated.gate!.status !== 'error' && gated.gate!.command.trim() !== input.gateCommand.trim()) gate = { command: input.gateCommand, status: 'stale', stint: gated.id, text: '检查命令改过之后还没跑检查' };
     else if (lastChange && gated.id < lastChange.id) gate = { command: input.gateCommand, status: 'stale', stint: gated.id, text: `第 ${lastChange.id} 棒改了文件之后还没跑检查` };
     else if (gated.gate!.status === 'pass') gate = { command: input.gateCommand, status: 'pass', stint: gated.id, text: '检查通过' };
     else if (gated.gate!.status === 'fail') gate = { command: input.gateCommand, status: 'fail', stint: gated.id, text: `检查没过（第 ${gated.id} 棒之后）` };

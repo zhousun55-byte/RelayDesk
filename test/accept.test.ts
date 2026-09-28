@@ -209,6 +209,14 @@ test('验收：清单打勾不等于做完——开着终审却没终审、终�
   // 终审之后又有人改了文件（复核棒改的也算）
   a = acceptance({ ...base, ledger: view([work, good, stint(3, { kind: 'review', who: STRONG, review: 'skip' })]) });
   assert.match(a.final.text, /^终审之后文件又改过$/);
+  // 旧终审通过、新终审否决：以新的为准（弱模型的、没交接成功的终审不算否决）
+  const again = stint(3, { kind: 'final', who: STRONG, review: 'skip', verdict: 'problem', facts: { files: 0, added: 0, removed: 0, paths: [] } });
+  a = acceptance({ ...base, ledger: view([work, good, again]) });
+  assert.equal(a.state, 'blocked');
+  assert.equal(a.final.stint, 3);
+  assert.match(a.final.text, /有问题，还没修/);
+  assert.equal(acceptance({ ...base, ledger: view([work, good, { ...again, who: WEAK }]) }).state, 'accepted');
+  assert.equal(acceptance({ ...base, ledger: view([work, good, { ...again, status: 'failed', verdict: undefined }]) }).state, 'accepted');
   // 都对：通过
   a = acceptance({ ...base, ledger: view([work, good]) });
   assert.equal(a.state, 'accepted');
@@ -228,6 +236,11 @@ test('验收：清单打勾不等于做完——开着终审却没终审、终�
   assert.equal(acceptance({ ...g, ledger: view([{ ...work, gate: { status: 'fail', command: 'npm test' } }]) }).state, 'blocked');
   assert.equal(acceptance({ ...g, ledger: view([{ ...work, gate: { status: 'error', command: '', detail: '配置文件坏了' } }]) }).gate.status, 'error');
   assert.equal(acceptance({ ...g, ledger: view([{ ...work, gate: { status: 'pass', command: 'npm test' } }]) }).state, 'accepted');
+  // 检查命令改过：按旧命令跑过的通过不算
+  a = acceptance({ ...g, gateCommand: 'npm run lint && npm test', ledger: view([{ ...work, gate: { status: 'pass', command: 'npm test' } }]) });
+  assert.equal(a.state, 'blocked');
+  assert.equal(a.gate.status, 'stale');
+  assert.match(a.gate.text, /检查命令改过/);
   // 证据读不到：没法判断，不能算通过
   a = acceptance({ ...base, finalRequired: false, configError: '.relay/config.json 不是合法的 JSON', ledger: view([work]) });
   assert.equal(a.state, 'unknown');
