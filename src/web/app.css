@@ -336,7 +336,7 @@ svg.i {
 .card.enter .slip {
   -webkit-mask: radial-gradient(circle, #000 var(--ht), transparent calc(var(--ht) + 0.8px)) 0 0 / 6px 6px;
   mask: radial-gradient(circle, #000 var(--ht), transparent calc(var(--ht) + 0.8px)) 0 0 / 6px 6px;
-  animation: halftone 0.34s cubic-bezier(0.45, 0, 0.55, 1) backwards;
+  animation: halftone 0.34s var(--ease) backwards;
   animation-delay: var(--d, 0ms);
 }
 /* 数字变了：新的数从下面翻上来 */
@@ -987,6 +987,12 @@ button.busy::after {
   height: 100%;
   border-radius: inherit;
   pointer-events: none;
+}
+/* 侧栏收起、打开时扫过的点：盖在这一栏上面（左右由 app.js 的 sideSweep 给），扫完就拿掉 */
+.specks.side {
+  inset: 0 auto auto auto;
+  z-index: 4;
+  border-radius: 0;
 }
 .seg button {
   position: relative;
