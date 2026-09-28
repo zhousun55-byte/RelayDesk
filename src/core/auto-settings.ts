@@ -75,7 +75,7 @@ export function normalizeAutoSettings(raw: unknown): AutoSettings {
  */
 export function langNote(lang: AutoSettings['lang'] = safeLang()): string {
   if (lang !== 'en') return '';
-  return '\n\nLanguage: the person running this relay reads English. Write everything meant for people (handoff contents, review findings, replies, checklist steps you add) in English. Keep the words the relay parses exactly as given above, in Chinese: section headings, status words, verdict choices and file names.';
+  return '\n\nLanguage: the person running RelayDesk reads English. Write everything meant for people (handoff contents, review findings, replies, checklist steps you add) in English. Keep the words RelayDesk parses exactly as given above, in Chinese: section headings, status words, verdict choices and file names.';
 }
 
 function safeLang(): AutoSettings['lang'] {

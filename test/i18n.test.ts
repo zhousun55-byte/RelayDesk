@@ -59,7 +59,7 @@ test('英文版：后台送来的状态、结论、验收、恢复时间换成�
     ['已交接', 'Handed off'],
     ['复核：没问题（Codex · gpt-6）', 'Review: No problems (Codex · gpt-6)'],
     ['待复核 · 只有弱模型复核过，不算数', "Needs review · Only a weak model reviewed it, so it doesn't count"],
-    ['接力台中途被关掉了，这一棒没跑完。', 'The relay was closed midway, so this leg did not finish.'],
+    ['接力台中途被关掉了，这一棒没跑完。', 'RelayDesk was closed midway, so this leg did not finish.'],
     ['明天 09:30 恢复', 'back tomorrow 09:30'],
     ['15:00 恢复', 'back 15:00'],
     ['3 分钟没有输出，已停止', 'No output for 3 min, stopped'],

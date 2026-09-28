@@ -1,8 +1,8 @@
 {
-  "name": "agent-relay",
+  "name": "relaydesk",
   "version": "2.0.0",
   "private": true,
-  "description": "接力台：额度用完换谁接着做都不怕。多个 AI 在同一个项目文件夹里轮流接着做，弱模型做的由强模型复核，改坏了能退回；还能拉进群里讨论、投票。",
+  "description": "接力台（RelayDesk）：额度用完换谁接着做都不怕。多个 AI 在同一个项目文件夹里轮流接着做，弱模型做的由强模型复核，改坏了能退回；还能拉进群里讨论、投票。",
   "license": "MIT",
   "type": "commonjs",
   "bin": {
