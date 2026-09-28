@@ -5237,12 +5237,15 @@ function membersPane(redraw) {
   ];
 }
 
-/** 成员名字底下一行：在哪个工具里跑（名字就是工具名时不重复写），现在能不能用。 */
+/** 接力台对这个工具实测到什么程度：都实测过的不写。 */
+const TESTED_WORD = { partial: '部分实测', no: '没实测' };
+
+/** 成员名字底下一行：在哪个工具里跑（名字就是工具名时不重复写）、实测到什么程度、现在能不能用。 */
 function memberNote(m) {
   const name = memberName(m);
   const tool = m.kind === 'app' ? (m.tool && m.tool !== name ? `${m.tool} 桌面版` : '桌面程序') : m.tool && m.tool !== name ? m.tool : '';
   const state = m.cooling ? `额度用完 · ${m.coolingText}` : !m.canWork && m.kind !== 'app' ? '不可调度' : limitsText(m);
-  return [tool, state, m.update ? '命令行需要更新' : ''].filter(Boolean).join(' · ');
+  return [tool, TESTED_WORD[m.tested], state, m.update ? '命令行需要更新' : ''].filter(Boolean).join(' · ');
 }
 
 const LIMIT_WORD = { '5h': '5 小时', '7d': '一周', '7d-opus': 'Opus' };

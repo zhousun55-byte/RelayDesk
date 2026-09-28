@@ -222,6 +222,7 @@ test('网页接口：成员叫模型的名字、删掉的不再加回来；群�
     assert.deepEqual([codex.limits, codex.limitsAt], [[{ kind: '5h', used: 0 }, { kind: '7d', used: 41, resetsAt: later }], at]);
     const claude = st.json.members.find((m: { name: string }) => m.name === 'claude');
     assert.ok(!('limits' in claude) && !('limitsAt' in claude), '没报过额度的不带这两个字段');
+    assert.deepEqual([codex.tested, claude.tested], ['yes', 'yes'], '实测到什么程度（网页只写部分实测、没实测）');
 
     assert.equal((await ui.call('/api/talk/say', { dir: s.repo, text: '第一段', ask: ['codex'] })).status, 200);
     await until(15_000, async () => (await ui.call(`/api/talk${q(s)}`)).json.rows.some((r: { kind: string }) => r.kind === 'ai'), '回话');

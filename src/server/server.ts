@@ -9,6 +9,7 @@ import { saveRelayConfig } from '../core/config';
 import { enableProvider, loadDetected, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
+import { findHarness } from '../core/harness';
 import { copyToClipboard, fillTemplate, reveal, runOpener, chooseFolder } from '../core/launch';
 import { loadLedger, markReview } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
@@ -116,6 +117,8 @@ function memberViews() {
     /** 工具自己报的额度窗口（kind：5h / 7d / 7d-opus，used：百分比，resetsAt：恢复时间）；没报过就不带。 */
     ...(m.limits ? { limits: m.limits, limitsAt: m.limitsAt } : {}),
     detected: !!m.agent.detected,
+    /** 接力台对这个工具实测到什么程度：yes 改文件、跑命令都实测过 / partial 实测过一部分 / no 按官方参数写的；接口、桌面程序不带。 */
+    tested: findHarness(m.harness)?.tested ?? null,
     /** 要升级才用得上最新模型（命令行太旧）：写明怎么升级。别的识别说明不用管，不给。 */
     update: (m.harness && report?.harnesses.find((h) => h.id === m.harness)?.model.note) || null,
     agent: m.agent,
