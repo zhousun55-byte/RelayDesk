@@ -1,0 +1,18 @@
+{
+  "fill" : "automatic",
+  "groups" : [
+    {
+      "layers" : [
+        { "image-name" : "marks.png", "name" : "marks" }
+      ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.25 },
+      "translucency" : { "enabled" : false, "value" : 0 }
+    },
+    {
+      "layers" : [
+        { "image-name" : "paper.png", "name" : "paper" }
+      ]
+    }
+  ],
+  "supported-platforms" : { "squares" : [ "macOS" ] }
+}

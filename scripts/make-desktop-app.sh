@@ -12,7 +12,9 @@
 
 set -e
 DIR="${0:A:h:h}"
-BUNDLE_ID="local.relay.desktop"
+# 包标识：9-29 从 local.relay.desktop 换成 local.relay.app（新版 macOS 的启动台按旧标识一直缓存着第一版图标，换标识它才当新程序重取）
+BUNDLE_ID="local.relay.app"
+ALL_IDS=("$BUNDLE_ID" "local.relay.desktop")
 AGENT_LABEL="local.relay.login"
 AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
 LAUNCHER="$DIR/scripts/open-relay.sh"
@@ -20,7 +22,7 @@ OLD_APP="$HOME/Desktop/接力台.app"
 
 # 是不是我们生成的小程序（按包标识认，别动名字碰巧一样的别的程序）。
 ours() {
-  [[ -d "$1" ]] && [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null)" == "$BUNDLE_ID" ]]
+  [[ -d "$1" ]] && (( ${ALL_IDS[(Ie)$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null)]} ))
 }
 
 # 挪进废纸篓（不直接删；名字后面加上时间，免得和废纸篓里的重名）。
@@ -31,7 +33,10 @@ trash() {
 
 # 正在运行的小程序：请它退出（它会先请接力台正常关闭），等它真的退出。
 quit_app() {
-  osascript -e "if application id \"$BUNDLE_ID\" is running then tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+  local id
+  for id in $ALL_IDS; do
+    osascript -e "if application id \"$id\" is running then tell application id \"$id\" to quit" >/dev/null 2>&1 || true
+  done
   local i
   for i in {1..40}; do
     pgrep -f '/接力台\.app/Contents/MacOS/applet' >/dev/null 2>&1 || return 0
@@ -83,7 +88,8 @@ fi
 #    RELAY_AT_LOGIN=1（登录时由系统带起来）：只在后台启动接力台，不打开网页。
 #    每 10 秒看一眼：接力台没了就在后台重新拉起（拉不起来就过 5 分钟再试）；你在网页上点了「关闭」，它也退出。
 # 记下旧图标，装完对比：换了图标才去刷新程序坞的图标缓存
-OLD_ICON="$(shasum "$APP/Contents/Resources/relay.icns" 2>/dev/null | cut -d' ' -f1)"
+icon_sig() { cat "$APP/Contents/Resources/relay.icns" "$APP/Contents/Resources/Assets.car" 2>/dev/null | shasum | cut -d' ' -f1; /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist" 2>/dev/null; }
+OLD_ICON="$([[ -d "$APP" ]] && icon_sig)"
 esc="${LAUNCHER//\\/\\\\}"
 esc="${esc//\"/\\\"}"
 rm -rf "$APP"
@@ -155,10 +161,19 @@ if [[ -f "$DIR/scripts/icon.png" ]]; then
     sips -z $((s * 2)) $((s * 2)) "$DIR/scripts/icon.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
   done
   iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/relay.icns"
-  # 新版系统优先用 Assets.car 里的图标；去掉它和脚本编译自带的 applet.icns，让上面的 icns 生效。
   rm -f "$APP/Contents/Resources/Assets.car" "$APP/Contents/Resources/applet.icns"
   /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST" >/dev/null 2>&1 || true
   /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile relay" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string relay" "$PLIST"
+  # 新版 macOS（26 起）的图标：scripts/AppIcon.icon（纸一层、点和圈一层，圆角、玻璃边、阴影由系统加）编成 Assets.car。
+  # 只给旧格式的 icns 时，新系统会把它缩小、套上一圈白底。装了 Xcode 就现编，没装用仓库里编好的；旧系统照样用上面的 icns。
+  CAR="$DIR/scripts/Assets.car"
+  if xcrun --find actool >/dev/null 2>&1 && xcrun actool "$DIR/scripts/AppIcon.icon" --compile "$TMP" --platform macosx --minimum-deployment-target 11.0 --app-icon AppIcon --output-partial-info-plist "$TMP/icon.plist" >/dev/null 2>&1 && [[ -f "$TMP/Assets.car" ]]; then
+    CAR="$TMP/Assets.car"
+  fi
+  if [[ -f "$CAR" ]]; then
+    cp "$CAR" "$APP/Contents/Resources/Assets.car"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$PLIST"
+  fi
 else
   print "（没能生成图标，先用系统默认的。）"
 fi
@@ -171,14 +186,14 @@ codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 touch "$APP"
 LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 # 系统里还登记着同一个包标识的别的副本（废纸篓里的、试装的）时，启动台可能拿到它的旧图标：先注销这些登记，文件不动。
-"$LSR" -dump 2>/dev/null | awk -v id="$BUNDLE_ID" '/^path:/ { p = $0; sub(/^path:[ ]+/, "", p); sub(/ \(0x[0-9a-f]+\)$/, "", p) } /^identifier:/ && $2 == id { print p }' |
+"$LSR" -dump 2>/dev/null | awk -v ids="${(j: :)ALL_IDS}" 'BEGIN { n = split(ids, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 } /^path:/ { p = $0; sub(/^path:[ ]+/, "", p); sub(/ \(0x[0-9a-f]+\)$/, "", p) } /^identifier:/ && ($2 in want) { print p }' |
   while IFS= read -r other; do
     [[ "$other" -ef "$APP" ]] || "$LSR" -u "$other" >/dev/null 2>&1 || true
   done
 # 登记这一份要放在注销之后：注销在后时，启动台把接力台整个从列表里拿掉了。
 "$LSR" -f "$APP" >/dev/null 2>&1 || true
 # 启动台、程序坞自己还存着一份图标缓存，版本号变了也不一定重读：图标换了就把那份缓存挪进废纸篓、让程序坞重开（一两秒）。
-NEW_ICON="$(shasum "$APP/Contents/Resources/relay.icns" 2>/dev/null | cut -d' ' -f1)"
+NEW_ICON="$(icon_sig)"
 if [[ -n "$OLD_ICON" && "$OLD_ICON" != "$NEW_ICON" ]]; then
   DOCK_CACHE="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null)com.apple.dock.iconcache"
   [[ -f "$DOCK_CACHE" ]] && mv "$DOCK_CACHE" "$HOME/.Trash/com.apple.dock.iconcache-$(date +%Y%m%d-%H%M%S)" 2>/dev/null

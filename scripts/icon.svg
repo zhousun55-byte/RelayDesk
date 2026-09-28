@@ -3,7 +3,9 @@
     接力台的图标：一道点从空心圈走到实心点，越走越重（三档，和切模式时扫过去的那一道一样分档变大）——
     一位 AI 起头，换着人一棒棒接下去，落到做完。旁边一颗红点：弱模型做的那几棒，待复核。纸是网页里的点阵纸。
     路上的点是沿一条三次曲线等距取的，挨着它们的纸点让开。改了这个文件，要重新画 scripts/icon.png
-    （1024 像素、透明底；用浏览器画，快速查看画出来是白底）。
+    （1024 像素、透明底；用浏览器画，快速查看画出来是白底），给旧系统用；新版 macOS 用的是 scripts/AppIcon.icon
+    （同样的画面拆成纸、点和圈两层 1024 满版的图，圆角、玻璃边、阴影由系统加），编好的在 scripts/Assets.car，
+    改了要把两层图重画、用 Xcode 的 actool 重新编（make-desktop-app.sh 里有命令）。
   -->
   <defs>
     <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fdfdfc"/><stop offset="1" stop-color="#f2f2ef"/></linearGradient>
