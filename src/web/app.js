@@ -1979,7 +1979,7 @@ const BASE = { relay: 1.09, dispatch: 2.5, chat: 2.75 };
 const AURA = { relay: 1.2, dispatch: 3, chat: 3 };
 const TRAIL_R = 84;
 const TRAIL_T = 260;
-const PAPER = { kind: 'relay', from: '', curve: 'relay', w: 0, h: 0, dpr: 1, ink: '#151515', dot: 'rgba(21, 21, 21, 0.09)', dot2: 'rgba(21, 21, 21, 0.2)', aura: null, keep: null, holes: [], holeSig: '', trail: [], sweep: null, last: null, raf: 0 };
+const PAPER = { kind: 'relay', from: '', curve: 'relay', w: 0, h: 0, dpr: 1, ink: '#151515', dot: 'rgba(21, 21, 21, 0.09)', dot2: 'rgba(21, 21, 21, 0.2)', lift: 1, aura: null, keep: null, holes: [], holeSig: '', trail: [], sweep: null, last: null, raf: 0 };
 
 const smooth = (a, b, x) => {
   const t = clamp((x - a) / (b - a), 0, 1);
@@ -2178,10 +2178,11 @@ function paperDraw(box, now) {
       if (t < m.on) continue;
       const k = sweepK(t - m.on, m.hold);
       if (k <= 0 || m.x < x0 - 12 || m.x > x1 + 12 || m.y < y0 - 12 || m.y > y1 + 12) continue;
-      if (PAPER.kind !== 'relay') mark(path(fills, 'ink', m.al), PAPER.kind, m.x, m.y, 1.2 * m.rx * k, 0.6 + 0.6 * m.ry * k);
+      const al = Math.min(0.6, m.al * PAPER.lift);
+      if (PAPER.kind !== 'relay') mark(path(fills, 'ink', al), PAPER.kind, m.x, m.y, 1.2 * m.rx * k, 0.6 + 0.6 * m.ry * k);
       else {
         const [rx, ry] = m.ring ? [m.rx * 1.3 * k, m.ry * 1.3 * k] : [m.rx * k, m.ry * k];
-        const p = path(m.ring ? rings : fills, 'ink', m.al);
+        const p = path(m.ring ? rings : fills, 'ink', al);
         p.moveTo(m.x + rx * Math.cos(m.a), m.y + rx * Math.sin(m.a));
         p.ellipse(m.x, m.y, rx, ry, m.a, 0, 6.2832);
       }
@@ -2247,11 +2248,11 @@ function paperSize() {
   paperAll();
 }
 
-/** 换了浅色 / 深色：重新取墨色和纸上记号的两种颜色。 */
+/** 换了浅色 / 深色：重新取墨色、纸上记号的两种颜色、扫过去那一道的深浅倍数。 */
 function paperInk() {
   const css = getComputedStyle(document.documentElement);
   const v = (k, d) => css.getPropertyValue(k).trim() || d;
-  Object.assign(PAPER, { ink: v('--ink', '#151515'), dot: v('--dot', 'rgba(21, 21, 21, 0.09)'), dot2: v('--dot-2', 'rgba(21, 21, 21, 0.2)') });
+  Object.assign(PAPER, { ink: v('--ink', '#151515'), dot: v('--dot', 'rgba(21, 21, 21, 0.09)'), dot2: v('--dot-2', 'rgba(21, 21, 21, 0.2)'), lift: Number(v('--sweep', '1')) || 1 });
   paperAll();
 }
 
