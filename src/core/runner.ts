@@ -4,6 +4,7 @@ import path from 'node:path';
 import { agentEnv } from './env';
 import type { Invocation, StreamFormat } from './harness';
 import { cause, looksOffline } from './cause';
+import { claudeLimits, type Limit } from './quota';
 import { stampLocal } from './time';
 
 /**
@@ -20,6 +21,8 @@ export interface StreamParser {
   final(): string;
   /** 解析时看到的模型名。 */
   model(): string | undefined;
+  /** 工具自己报的额度窗口（只有 Claude Code 在输出里报）。 */
+  limits?(): Limit[];
 }
 
 type J = Record<string, unknown>;
@@ -91,11 +94,17 @@ function claudeParser(): StreamParser {
   let initModel: string | undefined;
   /** 回复里记的实际模型（更准）；<synthetic> 是工具自己拼的话（比如额度提示），不算。 */
   let replyModel: string | undefined;
+  /** 额度窗口：rate_limit_event 在用量或恢复时间变了时发一条，同一个窗口留最新的。 */
+  const limits = new Map<string, Limit>();
   return {
     line(raw) {
       const j = tryJson(raw);
       if (!j) return raw.trim() ? [clip(raw)] : [];
       const type = s(j.type);
+      if (type === 'rate_limit_event') {
+        for (const l of claudeLimits(j.rate_limit_info)) limits.set(l.kind, l);
+        return [];
+      }
       if (type === 'system') {
         if (j.subtype === 'init') {
           initModel = modelName(s(j.model)) || initModel;
@@ -146,6 +155,7 @@ function claudeParser(): StreamParser {
     },
     final: () => final || last,
     model: () => replyModel ?? initModel,
+    limits: () => [...limits.values()],
   };
 }
 
@@ -465,6 +475,8 @@ export interface RunResult {
   error?: string;
   stderrTail: string;
   model?: string;
+  /** 工具自己报的额度窗口（没报就没有）。 */
+  limits?: Limit[];
   durationMs: number;
 }
 
@@ -610,7 +622,8 @@ export function startRun(req: RunRequest): RunHandle {
       }
       const durationMs = Date.now() - started;
       write(`退出（${error ? error : `代码 ${code}`}，用时 ${Math.round(durationMs / 1000)} 秒）`);
-      resolve({ code, finalText: finalText.trim(), timedOut, ...(idle ? { idle } : {}), stopped, ...(error ? { error } : {}), stderrTail: stderrTail.trim(), model: parser.model(), durationMs });
+      const limits = parser.limits?.() ?? [];
+      resolve({ code, finalText: finalText.trim(), timedOut, ...(idle ? { idle } : {}), stopped, ...(error ? { error } : {}), stderrTail: stderrTail.trim(), model: parser.model(), ...(limits.length ? { limits } : {}), durationMs });
     };
     child.on('error', (e) => finish(-1, `起不来：${e.message}`));
     child.on('close', (code, signal) => finish(code ?? (signal ? 128 : -1)));

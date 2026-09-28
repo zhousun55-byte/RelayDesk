@@ -3,7 +3,8 @@ import path from 'node:path';
 import { relayHome } from './paths';
 
 /**
- * 额度：认出各家「额度用完 / 次数用完 / 余额不足」的提示，记下什么时候恢复（~/.relay/quota.json）。
+ * 额度：认出各家「额度用完 / 次数用完 / 余额不足」的提示，记下什么时候恢复（~/.relay/quota.json）；
+ * 各家工具自己报的额度窗口（用了多少、什么时候恢复）也记在这里。
  * 全机通用：额度跟着账号走，不跟着项目走。
  */
 
@@ -180,23 +181,46 @@ export interface QuotaEntry {
   at: string;
 }
 
+/** 额度窗口：5 小时、一周、一周 Opus。键是固定的，怎么说由网页写。 */
+export type LimitKind = '5h' | '7d' | '7d-opus';
+
+export interface Limit {
+  kind: LimitKind;
+  /** 用了百分之多少（0～100）。 */
+  used: number;
+  /** 什么时候恢复（ISO）；过了恢复时间的窗口不带：下一轮从什么时候算，要等下次用到才知道。 */
+  resetsAt?: string;
+}
+
+export interface QuotaFile {
+  members: Record<string, QuotaEntry>;
+  /** 各家工具自己报的额度窗口：at 是什么时候读到的。 */
+  limits: Record<string, { at: string; windows: Limit[] }>;
+}
+
 export function quotaPath(): string {
   return path.join(relayHome(), 'quota.json');
 }
 
-export function loadQuota(): Record<string, QuotaEntry> {
+const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+
+export function loadQuotaFile(): QuotaFile {
   try {
-    const j = JSON.parse(fs.readFileSync(quotaPath(), 'utf8')) as { members?: Record<string, QuotaEntry> };
-    return j && typeof j.members === 'object' && j.members ? j.members : {};
+    const j = obj(JSON.parse(fs.readFileSync(quotaPath(), 'utf8')));
+    return { members: obj(j.members) as QuotaFile['members'], limits: obj(j.limits) as QuotaFile['limits'] };
   } catch {
-    return {};
+    return { members: {}, limits: {} };
   }
 }
 
-function saveQuota(m: Record<string, QuotaEntry>): void {
+export function loadQuota(): Record<string, QuotaEntry> {
+  return loadQuotaFile().members;
+}
+
+function saveQuota(f: QuotaFile): void {
   fs.mkdirSync(path.dirname(quotaPath()), { recursive: true });
   const p = quotaPath();
-  fs.writeFileSync(`${p}.tmp`, JSON.stringify({ members: m }, null, 2) + '\n');
+  fs.writeFileSync(`${p}.tmp`, JSON.stringify(f, null, 2) + '\n');
   fs.renameSync(`${p}.tmp`, p);
 }
 
@@ -206,17 +230,78 @@ export const DEFAULT_COOLDOWN_MS = 60 * 60_000;
 export function markQuota(member: string, hit: QuotaHit, now = new Date()): QuotaEntry {
   const until = hit.until ?? new Date(now.getTime() + Number(process.env.RELAY_COOLDOWN_MS ?? DEFAULT_COOLDOWN_MS)).toISOString();
   const e: QuotaEntry = { until, note: hit.line ?? '额度用完了', at: now.toISOString() };
-  const m = loadQuota();
-  m[member] = e;
-  saveQuota(m);
+  const f = loadQuotaFile();
+  f.members[member] = e;
+  saveQuota(f);
   return e;
 }
 
 export function clearQuota(member: string): void {
-  const m = loadQuota();
-  if (!(member in m)) return;
-  delete m[member];
-  saveQuota(m);
+  const f = loadQuotaFile();
+  if (!(member in f.members)) return;
+  delete f.members[member];
+  saveQuota(f);
+}
+
+// ---- 各家工具自己报的额度窗口 ----
+
+const KINDS: LimitKind[] = ['5h', '7d', '7d-opus'];
+
+function limit(kind: LimitKind | undefined, used: unknown, resetsSec: unknown): Limit | null {
+  if (!kind || typeof used !== 'number' || !Number.isFinite(used)) return null;
+  const at = typeof resetsSec === 'number' && resetsSec > 0 ? new Date(resetsSec * 1000).toISOString() : undefined;
+  return { kind, used: Math.min(100, Math.max(0, Math.round(used * 10) / 10)), ...(at ? { resetsAt: at } : {}) };
+}
+
+const CLAUDE_KINDS: Record<string, LimitKind> = { five_hour: '5h', seven_day: '7d', seven_day_opus: '7d-opus' };
+
+/**
+ * Claude Code stream-json 里 rate_limit_event 的 rate_limit_info（claude.ai 登录才有，接口密钥没有）：
+ * unifiedWindows 里是 5 小时、一周两个窗口，utilization 是 0～1 的比例（超过额度时会大于 1），resetsAt 是秒；
+ * 顶上的 rateLimitType / utilization 是眼下最紧的那个窗口（可能是一周 Opus），status 为 rejected 就是它用满了。
+ */
+export function claudeLimits(info: unknown): Limit[] {
+  const i = obj(info);
+  const out = new Map<LimitKind, Limit>();
+  for (const [k, w] of Object.entries(obj(i.unifiedWindows))) {
+    const u = obj(w).utilization;
+    const l = limit(CLAUDE_KINDS[k], typeof u === 'number' ? u * 100 : null, obj(w).resetsAt);
+    if (l) out.set(l.kind, l);
+  }
+  const top = CLAUDE_KINDS[String(i.rateLimitType)];
+  const u = i.status === 'rejected' ? 1 : i.utilization;
+  if (top && typeof u === 'number' && (i.status === 'rejected' || !out.has(top))) {
+    const l = limit(top, u * 100, i.resetsAt);
+    const prev = out.get(top)?.resetsAt;
+    if (l) out.set(top, { ...l, ...(!l.resetsAt && prev ? { resetsAt: prev } : {}) });
+  }
+  return KINDS.flatMap((k) => out.get(k) ?? []);
+}
+
+/** Codex 会话记录里的 rate_limits：primary、secondary 各一个窗口（300 分钟 = 5 小时，10080 分钟 = 一周），used_percent 是百分比，resets_at 是秒。 */
+export function codexLimits(rateLimits: unknown): Limit[] {
+  const r = obj(rateLimits);
+  return [r.primary, r.secondary].map(obj).flatMap((w) => limit(w.window_minutes === 300 ? '5h' : w.window_minutes === 10080 ? '7d' : undefined, w.used_percent, w.resets_at) ?? []);
+}
+
+/** 记下这一位的工具这次报的额度窗口；没报就留着上一次的。 */
+export function noteLimits(member: string, windows: Limit[] | null | undefined, now = new Date()): void {
+  if (!windows?.length) return;
+  const f = loadQuotaFile();
+  f.limits[member] = { at: now.toISOString(), windows: [...windows].sort((a, b) => KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind)) };
+  saveQuota(f);
+}
+
+/** 这一位现在的额度窗口：过了恢复时间的窗口重新算起（0%，下一次什么时候恢复不知道）。没记过返回 null。 */
+export function limitsOf(member: string, now = new Date(), all = loadQuotaFile().limits): { at: string; windows: Limit[] } | null {
+  const l = all[member];
+  if (!Array.isArray(l?.windows) || !l.windows.length) return null;
+  return { at: l.at, windows: l.windows.map((w) => (w.resetsAt && Date.parse(w.resetsAt) <= now.getTime() ? { kind: w.kind, used: 0 } : w)) };
+}
+
+/** 用满了的窗口什么时候恢复（几个都满了，等最晚的那个）；没有用满的返回 undefined。 */
+export function fullUntil(windows: Limit[] | null | undefined): string | undefined {
+  return windows?.flatMap((w) => (w.used >= 100 && w.resetsAt ? [w.resetsAt] : [])).sort().pop();
 }
 
 /** 这一位现在还在等额度恢复吗？返回恢复时间，没在等返回 null。 */

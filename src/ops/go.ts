@@ -11,11 +11,11 @@ import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteMod
 import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, taskMode, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { pidAlive } from '../core/proc';
-import { allMembers, orderMembers, readyMembers, type MemberInfo } from '../core/members';
+import { allMembers, orderMembers, readyMembers, spareFirst, type MemberInfo } from '../core/members';
 import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
 import { finalPrompt, planPrompt, reviewPrompt, stepPrompt, workPrompt } from '../core/prompts';
-import { clearQuota, detectQuota, markQuota, untilText } from '../core/quota';
+import { clearQuota, detectQuota, fullUntil, markQuota, noteLimits, untilText, type Limit } from '../core/quota';
 import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, usageTotal, type RunHandle, type RunResult } from '../core/runner';
 import { cause, plain } from '../core/cause';
 import { takeSnapshot } from '../core/snap';
@@ -558,6 +558,8 @@ class GoRunner {
     let quotaText = '';
     /** 工具自己报出来的实际模型（比如 --model opus 实际是 claude-opus-5-5）。 */
     let actualModel: string | undefined;
+    /** 工具自己报的额度窗口：Claude Code 在输出里报，Codex 记在它自己的会话里。 */
+    let limits: Limit[] | undefined;
     try {
       if (m.kind === 'harness') {
         const spec = findHarness(m.harness);
@@ -574,6 +576,7 @@ class GoRunner {
         finalText = r.finalText;
         stopped = r.stopped;
         actualModel = r.model;
+        limits = r.limits ?? spec.limits?.(root, Date.parse(stint.startedAt)) ?? undefined;
         // 认额度只看工具自己报的话（出错信息、标准错误、日志里的「出错」「提示」）和最后一句话，不看 AI 说的话、搜的词：
         // 任务本身讲限流、额度时，那些话里全是 rate limit、quota。
         const failed = !r.stopped && (!!r.error || r.timedOut || r.code !== 0);
@@ -630,11 +633,13 @@ class GoRunner {
     let status: Stint['status'] = 'handed';
     let note: string | undefined;
     let quotaUntil: string | undefined;
+    noteLimits(m.name, limits);
     if (stopped || this.stopRequested) {
       status = 'stopped';
     } else if (quota.hit) {
       status = 'quota';
-      const e = markQuota(m.name, quota);
+      // 恢复时间先看工具报的用满了的窗口（精确到秒），没有再看提示里的话
+      const e = markQuota(m.name, { ...quota, until: fullUntil(limits) ?? quota.until });
       quotaUntil = e.until;
       note = `${cause.quota(e.until)}${quota.line ? `，原话：${clip(plain(quota.line), 160)}` : ''}`;
       log(note);
@@ -675,7 +680,7 @@ class GoRunner {
   }
 
   private members(): MemberInfo[] {
-    return orderMembers(allMembers(this.settings.level), this.settings.order);
+    return spareFirst(orderMembers(allMembers(this.settings.level), this.settings.order));
   }
 
   /** 挑一位：能调度、没在等额度、这次没出过错。tier = 只要强的 / 只要弱的 / 都行。 */

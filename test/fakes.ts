@@ -16,6 +16,8 @@ import type { Sandbox } from './helpers';
  * 睡 30 秒再干活），FAKE_<名字>_WHO = 交接里写的身份；FAKE_REVIEW_SAY = 复核完说的那句话。
  * claude 带 --setting-sources（跳过用户设置）时扮演「官方账号」：FAKE_CLAUDE_OFFICIAL=pro 算登录了，
  * 身份和行为看 FAKE_CLAUDE_OFFICIAL_WHO / FAKE_CLAUDE_OFFICIAL_MODE；这时环境里还带着 ANTHROPIC_* 就报错（说明接力台没去掉）。
+ * 额度窗口：官方账号的 claude 发 rate_limit_event，codex 干活时在 CODEX_HOME（没设就是 ~/.codex）的 sessions 里写带 rate_limits 的 rollout；
+ * FAKE_<名字>_LIMITS / FAKE_CLAUDE_OFFICIAL_LIMITS = 「5 小时 一周」两个百分比（claude 默认 5 72，codex 默认 30 41）；额度用完时设了 FAKE_RESETS_IN（秒），就报 5 小时窗口用满、那么久以后恢复。
  */
 function fakeScript(name: 'claude' | 'codex'): string {
   const NAME = name.toUpperCase();
@@ -57,6 +59,8 @@ function fakeScript(name: 'claude' | 'codex'): string {
     `WHO="$FAKE_${NAME}_WHO"`,
     '[ -z "$MODE" ] && MODE=work',
     '[ -z "$WHO" ] && WHO="$NAME"',
+    `LIMITS="$FAKE_${NAME}_LIMITS"`,
+    '[ -z "$LIMITS" ] && { [ "$NAME" = claude ] && LIMITS="5 72" || LIMITS="30 41"; }',
     'MODEL="${FAKE_CLAUDE_MODEL:-deepseek-v4-flash}"',
     // 真的 Claude Code：开头 init 报「deepseek-v4-flash[1m]」「claude-opus-5」这种，回复里才是准确的模型名。
     'INIT_MODEL="$MODEL[1m]"',
@@ -65,6 +69,7 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '  MODE="${FAKE_CLAUDE_OFFICIAL_MODE:-work}"',
     '  WHO="${FAKE_CLAUDE_OFFICIAL_WHO:-Claude Code · claude-opus-5-5}"',
     '  MODEL="${FAKE_CLAUDE_OFFICIAL_MODEL:-claude-opus-5-5}"',
+    '  LIMITS="${FAKE_CLAUDE_OFFICIAL_LIMITS:-$LIMITS}"',
     '  INIT_MODEL=claude-opus-5',
     'fi',
     `[ "$NAME" = claude ] && printf '{"type":"system","subtype":"init","model":"%s"}\\n' "$INIT_MODEL"`,
@@ -78,7 +83,22 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '  fi',
     '  MODE=work',
     'fi',
+    // 工具自己报的额度：$1 = 5 小时窗口用了百分之几，$2 = 几秒后恢复；一周窗口用 LIMITS 的第二个数，2 天后恢复。
+    'limits() {',
+    '  NOW=$(date +%s); L7=${LIMITS##* }',
+    '  if [ "$NAME" = claude ]; then',
+    '    [ $OFFICIAL -eq 1 ] || return 0',
+    '    ST=allowed; [ "$1" -ge 100 ] && ST=rejected',
+    '    U5=$(awk "BEGIN{print $1/100}"); U7=$(awk "BEGIN{print $L7/100}")',
+    '    printf \'{"type":"rate_limit_event","rate_limit_info":{"status":"%s","rateLimitType":"five_hour","utilization":%s,"resetsAt":%s,"unifiedWindows":{"five_hour":{"utilization":%s,"resetsAt":%s},"seven_day":{"utilization":%s,"resetsAt":%s}}},"uuid":"fake","session_id":"fake"}\\n\' "$ST" "$U5" $((NOW+$2)) "$U5" $((NOW+$2)) "$U7" $((NOW+172800))',
+    '  elif [ $ro -eq 0 ]; then',
+    '    D="${CODEX_HOME:-$HOME/.codex}/sessions/$(date +%Y/%m/%d)"; mkdir -p "$D"; F="$D/rollout-$(date +%Y-%m-%dT%H-%M-%S)-fake-$$.jsonl"',
+    '    printf \'{"type":"session_meta","payload":{"id":"fake-%s","cwd":"%s","originator":"codex_exec"}}\\n\' $$ "$(pwd -P)" > "$F"',
+    '    printf \'{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":%s,"window_minutes":300,"resets_at":%s},"secondary":{"used_percent":%s,"window_minutes":10080,"resets_at":%s},"plan_type":"plus"}}}\\n\' "$1" $((NOW+$2)) "$L7" $((NOW+172800)) >> "$F"',
+    '  fi',
+    '}',
     'say() {',
+    '  limits "${LIMITS%% *}" 10800',
     '  if [ "$NAME" = claude ]; then',
     `    printf '{"type":"assistant","message":{"model":"%s","content":[{"type":"text","text":"%s"}]}}\\n' "$MODEL" "$1"`,
     `    printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":100,"output_tokens":20}}\\n' "$1"`,
@@ -104,6 +124,7 @@ function fakeScript(name: 'claude' | 'codex'): string {
     'fi',
     'case "$MODE" in',
     '  quota)',
+    '    [ -n "$FAKE_RESETS_IN" ] && limits 100 "$FAKE_RESETS_IN"',
     '    if [ "$NAME" = claude ]; then',
     '      echo "Claude AI usage limit reached. Your limit will reset at 3pm." >&2',
     `      printf '%s\\n' '{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached"}'`,
@@ -114,6 +135,7 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '  fail) echo "something broke" >&2; exit 2 ;;',
     // 新版 Claude Code 额度用完：一句工具自己拼的话（模型是 <synthetic>），结果标出错，退出码 1。
     '  session-limit)',
+    '    [ -n "$FAKE_RESETS_IN" ] && limits 100 "$FAKE_RESETS_IN"',
     '    T="You\'ve hit your session limit · resets 3:50am (Asia/Shanghai)"',
     `    printf '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"%s"}]}}\\n' "$T"`,
     `    printf '{"type":"result","subtype":"success","is_error":true,"result":"%s"}\\n' "$T"`,

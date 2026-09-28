@@ -6,6 +6,7 @@ import zlib from 'node:zlib';
 import { recentOfficialModel } from './claude-log';
 import { agentEnv, envValue, scanApps, which } from './env';
 import { relayHome } from './paths';
+import { codexLimits, type Limit } from './quota';
 
 /**
  * 认得的 AI 编程工具（harness）：怎么找到它、怎么看登录、默认用什么模型、怎么无人值守地调用。
@@ -95,6 +96,8 @@ export interface HarnessSpec {
   invoke(loc: Located, input: InvokeInput): Invocation;
   /** 输出里不带 token 用量的工具：从它自己记的会话里读（sinceMs 之后这个项目的会话加起来）；读不到就是 null。 */
   usage?(root: string, sinceMs: number): { input: number; output: number } | null;
+  /** 输出里不带额度的工具：从它自己记的会话里读（sinceMs 之后这个项目最新的一份）；读不到就是 null。 */
+  limits?(root: string, sinceMs: number): Limit[] | null;
 }
 
 // ---- 小工具 ----
@@ -516,7 +519,69 @@ const codex: HarnessSpec = {
     a.push('-');
     return { argv: a, stdin: i.prompt, format: 'codex', outFile: i.outFile };
   },
+  limits: (root, sinceMs) => codexSessionLimits(root, sinceMs),
 };
+
+/**
+ * Codex 每次运行在 ~/.codex/sessions/年/月/日/ 下留一份 rollout-时间-编号.jsonl（群聊用的 --ephemeral 不留）：
+ * 第一行 session_meta 写着在哪个文件夹跑的，之后每轮一条 token_count，带着 rate_limits。
+ * 取 sinceMs 之后在这个项目里跑的最新一份，读它最后一条 rate_limits。
+ */
+export function codexSessionLimits(root: string, sinceMs: number, now = Date.now()): Limit[] | null {
+  const base = path.join(envValue('CODEX_HOME') || path.join(home(), '.codex'), 'sessions');
+  const same = new Set([root]);
+  try {
+    same.add(fs.realpathSync(root));
+  } catch {
+    /* 文件夹没了 */
+  }
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  let best: { file: string; mtime: number } | null = null;
+  for (let d = new Date(sinceMs); d.getTime() <= now; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+    const dir = path.join(base, String(d.getFullYear()), p2(d.getMonth() + 1), p2(d.getDate()));
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(dir).filter((n) => n.startsWith('rollout-') && n.endsWith('.jsonl'));
+    } catch {
+      continue;
+    }
+    for (const n of names) {
+      const file = path.join(dir, n);
+      try {
+        const mtime = fs.statSync(file).mtimeMs;
+        if (mtime < sinceMs || (best && mtime <= best.mtime)) continue;
+        // 第一行很长（带着整段说明），cwd 在开头几百字节里
+        const cwd = readSlice(file, 0, 8192).match(/"cwd":("(?:[^"\\]|\\.)*")/)?.[1];
+        if (cwd && same.has(JSON.parse(cwd) as string)) best = { file, mtime };
+      } catch {
+        /* 读不了的跳过 */
+      }
+    }
+  }
+  if (!best) return null;
+  const size = fs.statSync(best.file).size;
+  const lines = readSlice(best.file, Math.max(0, size - 256 * 1024), 256 * 1024).split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"rate_limits"')) continue;
+    try {
+      const l = codexLimits(obj(obj(JSON.parse(lines[i])).payload).rate_limits);
+      if (l.length) return l;
+    } catch {
+      /* 切在半行上的跳过 */
+    }
+  }
+  return null;
+}
+
+function readSlice(file: string, start: number, len: number): string {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(len);
+    return buf.subarray(0, fs.readSync(fd, buf, 0, len, start)).toString('utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 /** Cursor Agent：正常安装时 cursor-agent / agent 就能用；快捷命令被 Cursor 编辑器的启动脚本顶替时，直接调程序本体。 */
 function locateCursor(): Located | null {

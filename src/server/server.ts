@@ -113,6 +113,8 @@ function memberViews() {
     why: m.why ?? null,
     cooling: m.cooling ?? null,
     coolingText: m.cooling ? untilText(m.cooling, now) : null,
+    /** 工具自己报的额度窗口（kind：5h / 7d / 7d-opus，used：百分比，resetsAt：恢复时间）；没报过就不带。 */
+    ...(m.limits ? { limits: m.limits, limitsAt: m.limitsAt } : {}),
     detected: !!m.agent.detected,
     /** 要升级才用得上最新模型（命令行太旧）：写明怎么升级。别的识别说明不用管，不给。 */
     update: (m.harness && report?.harnesses.find((h) => h.id === m.harness)?.model.note) || null,

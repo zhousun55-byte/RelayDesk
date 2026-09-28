@@ -210,11 +210,18 @@ test('网页接口：成员叫模型的名字、删掉的不再加回来；群�
   withFakes(s);
   s.relay(['detect', '--offline']);
   s.relay(['init', '做滤镜']);
+  // 工具报过的额度窗口：网页拿到的是现在的样子（过了恢复时间的从 0 算起）
+  const at = new Date(Date.now() - 3600_000).toISOString();
+  const later = new Date(Date.now() + 86_400_000).toISOString();
+  fs.writeFileSync(path.join(s.home, '.relay', 'quota.json'), JSON.stringify({ members: {}, limits: { codex: { at, windows: [{ kind: '5h', used: 97, resetsAt: at }, { kind: '7d', used: 41, resetsAt: later }] } } }));
   const ui = await startUi(s);
   try {
     const st = await ui.call(`/api/state${q(s)}`);
     const codex = st.json.members.find((m: { name: string }) => m.name === 'codex');
     assert.deepEqual([codex.llm, codex.tool, codex.app], ['GPT-6', 'Codex', null]);
+    assert.deepEqual([codex.limits, codex.limitsAt], [[{ kind: '5h', used: 0 }, { kind: '7d', used: 41, resetsAt: later }], at]);
+    const claude = st.json.members.find((m: { name: string }) => m.name === 'claude');
+    assert.ok(!('limits' in claude) && !('limitsAt' in claude), '没报过额度的不带这两个字段');
 
     assert.equal((await ui.call('/api/talk/say', { dir: s.repo, text: '第一段', ask: ['codex'] })).status, 200);
     await until(15_000, async () => (await ui.call(`/api/talk${q(s)}`)).json.rows.some((r: { kind: string }) => r.kind === 'ai'), '回话');

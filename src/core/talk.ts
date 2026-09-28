@@ -8,7 +8,7 @@ import { fillTemplate } from './launch';
 import { runLlmAgent } from './llm-agent';
 import { llmName, toolName } from './names';
 import { redactSecrets } from './redact';
-import { detectQuota } from './quota';
+import { detectQuota, noteLimits } from './quota';
 import { clip, lastError, logTail, startRun, toolLines, type RunResult } from './runner';
 import { cause, plain } from './cause';
 import { agentKind, agentLabel, canTalk, findAgent, loadRegistry, OUT_PLACEHOLDER } from './registry';
@@ -375,6 +375,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     const again = make();
     if (modelArg(again.argv) !== used) r = await startRun({ invocation: again, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
   }
+  noteLimits(agent.name, r.limits);
   const log = logTail(logPath, 6000);
   fs.rmSync(logPath, { force: true });
   const text = replyOf(r.finalText);
