@@ -1787,11 +1787,11 @@ function renderHero(mode) {
 
 // ----- 纸：中间这一栏的底，一张画布画完 -----
 //
-// 三页三种纸，同一套 10px 的细格子（格点在 x = 10i、y = 2 + 10j）：
-//   接力是点（20px 一个）；派活是竖（10px 一列，每 4 列长一点，像刻度）；群聊是横（10px 一行，一段段长短不一、几行一段，像一页对话记录）。
-// 纸上的记号在三种时候深一点、大一点：空白页输入框周围、指针划过的地方、切页时扫过去的那一道。
-// 三样都只是给每个格点一个 0～1 的深浅，取最大的，分 4 档，一档一条路径一起画：叠几样，开销都一样。
-// 平时不画；指针在纸上划、切页那一下才逐帧画，停了就不再排下一帧。
+// 三页三种纸，同一套 20px 的格子（格点在 x = 20i、y = 2 + 20j），每格一个小记号：接力是点，派活是一竖，群聊是一横。
+// 空白页上输入框周围的记号深一点、往外淡回去（接力四周匀开，派活往上下伸，群聊往左右伸）。
+// 指针划过时附近的记号变大变深，身后一截很快褪掉；切页时从切过去的那一边扫一道，扫到哪儿纸换到哪儿。
+// 都画在这一张画布上：每个记号是一个椭圆，按颜色和深浅分组，一组一条路径一起画，叠几样开销都一样。
+// 平时不画；只有指针在纸上划、切页那一下才逐帧画，停了就不再排下一帧。
 
 /**
  * 切页时扫过去的那一道的走向（在中间这一栏里的归一化坐标，三次贝塞尔，可以有几条）：
@@ -1824,59 +1824,36 @@ const FLOW_LINES = {
 };
 /** 扫过去的节奏：前沿匀速走完这一栏；每个点分三档变大、停一下、再分三档变小。点亮得短，看到的是一道往前走的点。 */
 const SWEEP = { front: 600, grow: 45, hold: 40, fade: 150 };
-/** 每一档的样子：接力的点多大、派活的竖多长（半长）、线多粗；透明度（0 档用纸本来的颜色）。 */
-const LEVELS = [
-  { a: 0, dot: 1.05, tick: 3, w: 1.1 },
-  { a: 0.14, dot: 1.5, tick: 4.2, w: 1.3 },
-  { a: 0.2, dot: 2, tick: 5.4, w: 1.5 },
-  { a: 0.27, dot: 2.6, tick: 6.6, w: 1.7 },
-  { a: 0.34, dot: 3.2, tick: 8, w: 1.9 },
-];
+/** 指针划过的四档：点多大、竖 / 横的半长、粗细、深浅。 */
+const LEVELS = [null, { a: 0.14, dot: 1.5, len: 4.2, w: 1.3 }, { a: 0.2, dot: 2, len: 5.4, w: 1.5 }, { a: 0.27, dot: 2.6, len: 6.6, w: 1.7 }, { a: 0.34, dot: 3.2, len: 8, w: 1.9 }];
 /** 输入框周围往外淡多远（横、竖）：接力四周匀开，派活往上下伸（一列列），群聊往左右伸（一行行）。 */
 const REACH = { relay: [96, 72], dispatch: [36, 150], chat: [220, 36] };
+/** 平时每种记号多大：接力点的半径，派活竖、群聊横的半长（和原来 CSS 画的点阵纸一样深）。 */
+const BASE = { relay: 1.09, dispatch: 2.5, chat: 2.75 };
 const TRAIL_R = 84;
 const TRAIL_T = 260;
-const PAPER = { kind: 'relay', from: '', curve: 'relay', w: 0, h: 0, dpr: 1, cols: 0, rows: 0, ink: '#151515', dot: 'rgba(21, 21, 21, 0.09)', words: null, aura: null, keep: null, trail: [], sweep: null, last: null, raf: 0 };
+const PAPER = { kind: 'relay', from: '', curve: 'relay', w: 0, h: 0, dpr: 1, cols: 0, rows: 0, ink: '#151515', dot: 'rgba(21, 21, 21, 0.09)', dot2: 'rgba(21, 21, 21, 0.2)', aura: null, keep: null, trail: [], sweep: null, last: null, raf: 0 };
 
 const smooth = (a, b, x) => {
   const t = clamp((x - a) / (b - a), 0, 1);
   return t * t * (3 - 2 * t);
 };
 
-/** 群聊的纸：每行一段段「字」（2～5 格一个，中间空一格），2～5 行一段、段的最后一行短，段和段之间空一行。 */
-function paperWords(cols, rows) {
-  const w = new Uint8Array(cols * rows);
-  let j = 0;
-  for (let p = 0; j < rows; p++) {
-    const n = 2 + (hash(p, 11) % 4);
-    for (let k = 0; k < n && j < rows; k++, j++) {
-      const end = k === n - 1 ? Math.round(cols * (0.25 + (hash(p, 5) % 50) / 100)) : cols;
-      for (let i = hash(j, 7) % 3; i < end; ) {
-        const len = 2 + (hash(i, j) % 4);
-        w.fill(1, j * cols + i, j * cols + Math.min(i + len, end));
-        i += len + 1;
-      }
-    }
-    j++;
-  }
-  return w;
+/** 往路径里加一个记号：接力是圆点（s 是半径），派活是竖的、群聊是横的（s 是半长，w 是粗细）。 */
+function mark(p, kind, x, y, s, w) {
+  const [rx, ry] = kind === 'dispatch' ? [w / 2, s] : kind === 'chat' ? [s, w / 2] : [s, s];
+  p.moveTo(x + rx, y);
+  p.ellipse(x, y, rx, ry, 0, 0, 6.2832);
 }
 
-/** 这一格平时有没有记号（派活每 4 列长一点，另算）。 */
-function isBase(kind, i, j) {
-  if (kind === 'dispatch') return j % 2 === 0;
-  if (kind === 'chat') return PAPER.words[j * PAPER.cols + i] === 1;
-  return i % 2 === 0 && j % 2 === 0;
-}
-
-/** 输入框周围深多少（0～0.5）。 */
+/** 输入框周围深多少（0～1）。 */
 function auraAt(kind, x, y) {
   const a = PAPER.aura;
   if (!a) return 0;
   const [ex, ey] = REACH[kind] || REACH.relay;
   const dx = x < a[0] ? a[0] - x : x > a[2] ? x - a[2] : 0;
   const dy = y < a[1] ? a[1] - y : y > a[3] ? y - a[3] : 0;
-  return dx >= ex || dy >= ey ? 0 : 0.5 * (1 - dx / ex) * (1 - dy / ey);
+  return dx >= ex || dy >= ey ? 0 : (1 - dx / ex) * (1 - dy / ey);
 }
 
 /** 指针划过的地方深多少（0～1）：离得越近、划过得越晚越深。 */
@@ -1898,7 +1875,7 @@ function sweepK(age, hold) {
   return f < 1 ? Math.ceil((1 - f) * 3) / 3 : -1;
 }
 
-/** 一条三次贝塞尔取 n 段折线：[x0, y0, x1, y1, t0, t1]。 */
+/** 一条三次贝塞尔取 n 段折线：[x0, y0, x1, y1, t0, t1, 方向角]。 */
 function bezierSegs(P, n) {
   const segs = [];
   let prev = null;
@@ -1907,16 +1884,16 @@ function bezierSegs(P, n) {
     const r = 1 - t;
     const x = r * r * r * P[0][0] + 3 * r * r * t * P[1][0] + 3 * r * t * t * P[2][0] + t * t * t * P[3][0];
     const y = r * r * r * P[0][1] + 3 * r * r * t * P[1][1] + 3 * r * t * t * P[2][1] + t * t * t * P[3][1];
-    if (prev) segs.push([prev[0], prev[1], x, y, prev[2], t]);
+    if (prev) segs.push([prev[0], prev[1], x, y, prev[2], t, Math.atan2(y - prev[1], x - prev[0])]);
     prev = [x, y, t];
   }
   return segs;
 }
 
-/** 点到折线第 a～b 段的最近处：[距离², t, 在线的哪一边（+1 / -1）, 第几段]。 */
+/** 点到折线第 a～b 段的最近处：[距离², t, 方向角, 在线的哪一边（+1 / -1）, 第几段]。 */
 function nearSeg(segs, a, b, x, y, out) {
   for (let k = Math.max(0, a); k <= Math.min(segs.length - 1, b); k++) {
-    const [x0, y0, x1, y1, t0, t1] = segs[k];
+    const [x0, y0, x1, y1, t0, t1, ang] = segs[k];
     const dx = x1 - x0;
     const dy = y1 - y0;
     const u = clamp(((x - x0) * dx + (y - y0) * dy) / (dx * dx + dy * dy || 1), 0, 1);
@@ -1926,17 +1903,18 @@ function nearSeg(segs, a, b, x, y, out) {
     if (d2 < out[0]) {
       out[0] = d2;
       out[1] = t0 + (t1 - t0) * u;
-      out[2] = dx * py - dy * px < 0 ? -1 : 1;
-      out[3] = k;
+      out[2] = ang;
+      out[3] = dx * py - dy * px < 0 ? -1 : 1;
+      out[4] = k;
     }
   }
 }
 
 /**
- * 扫过去的那一道在每个格点上有多深（0～1）：离弯线近就深；拐弯处最紧最密，往后越散越宽、分成几股；起笔零零散散。
- * 空白页的字和输入框那一块（keep）留白，离它越近越淡。
+ * 扫过去的那一道有哪些点、各多大：纸上的点（20px 一个）离弯线近就变大变深，线的正中间再加密成 10px 一个。
+ * 拐弯处最密；往后越散越宽、分成几股；起笔零零散散。空白页的字和输入框那一块（keep）留白，离它越近越淡。
  */
-function sweepField(curve) {
+function sweepMarks(curve, dir) {
   const { w: W, h: H, cols, rows, keep } = PAPER;
   const spec = FLOW_LINES[curve] || FLOW_LINES.relay;
   const lines = spec.lines.map((pts) => {
@@ -1946,39 +1924,59 @@ function sweepField(curve) {
   const [w0, w1, w2] = spec.w;
   const knee = spec.knee;
   const far = (3.4 * w2) ** 2;
-  const best = [0, 0, 0, 0];
-  const F = new Float32Array(cols * rows);
+  const best = [0, 0, 0, 0, 0];
+  const marks = [];
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
       const x = i * 10;
       const y = 2 + j * 10;
       const r = hash(i, j);
       let I = 0;
+      let ang = 0;
+      let at = 0;
       for (const L of lines) {
         best[0] = Infinity;
         nearSeg(L.coarse, 0, L.coarse.length - 1, x, y, best);
         if (best[0] > far) continue;
-        const k = best[3] * 4;
+        const k = best[4] * 4;
         best[0] = Infinity;
         nearSeg(L.fine, k - 5, k + 8, x, y, best);
-        const [d2, t, side] = best;
+        const [d2, t, a, side] = best;
         const sg = t < knee ? w0 + (w1 - w0) * smooth(0, knee, t) : w1 + (w2 - w1) * smooth(knee, 1, t);
         const lam = 18 + 24 * smooth(knee, 1, t);
         const split = spec.ribbons ? 0.9 * smooth(knee, knee + 0.25, t) : 0;
         const scatter = t < knee && r < 500 ? 1 - 0.7 * (1 - smooth(0, knee, t)) : 1;
         const n = Math.sqrt(d2) * side;
-        I = Math.max(I, smooth(0, knee * 0.8, t) * (1 - 0.45 * smooth(knee, 1, t)) * scatter * Math.exp(-d2 / (2 * sg * sg)) * (1 - split + split * (0.5 + 0.5 * Math.cos((2 * Math.PI * n) / lam))));
+        const v = smooth(0, knee * 0.8, t) * (1 - 0.45 * smooth(knee, 1, t)) * scatter * Math.exp(-d2 / (2 * sg * sg)) * (1 - split + split * (0.5 + 0.5 * Math.cos((2 * Math.PI * n) / lam)));
+        if (v > I) {
+          I = v;
+          ang = a;
+          at = t;
+        }
       }
       if (keep) I *= smooth(0, 56, Math.hypot(Math.max(keep[0] - x, 0, x - keep[2]), Math.max(keep[1] - y, 0, y - keep[3])));
-      F[j * cols + i] = I;
+      const paper = i % 2 === 0 && j % 2 === 0;
+      if (paper ? I < 0.04 : I < 0.24) continue;
+      const q = paper ? I : (I - 0.24) / 0.76;
+      marks.push({
+        x,
+        y,
+        a: ang,
+        rx: paper ? 1.05 + 2.4 * q : 0.8 + 2.2 * q,
+        ry: paper ? 1.05 + 0.75 * q : 0.8 + 0.6 * q,
+        al: paper ? 0.09 + 0.26 * q : 0.07 + 0.26 * q,
+        ring: I > 0.55 && r < 240 && at > knee,
+        on: SWEEP.front * (dir > 0 ? x / W : 1 - x / W) + r * 0.07,
+        hold: SWEEP.hold * (0.5 + r / 1000),
+      });
     }
   }
-  return F;
+  return marks;
 }
 
 /**
- * 画一块（null：整张）。每个格点：先看它现在是哪种纸（切页时前沿还没到的地方还是旧的），
- * 再取输入框周围、指针划过、扫过去三样里最深的，分档放进同一条路径，最后一档画一次。
+ * 画一块（null：整张）。每个记号按「颜色 + 深浅」分组放进同一条路径，最后一组画一次。
+ * 切页时前沿后面是新的纸，前沿前面还是旧的，中间 60px 两种叠着渐变；输入框周围深一圈只在新纸上。
  */
 function paperDraw(box, now) {
   const { cols, rows, sweep: sw, trail } = PAPER;
@@ -1990,15 +1988,16 @@ function paperDraw(box, now) {
   ctx.rect(x0, y0, x1 - x0, y1 - y0);
   ctx.clip();
   ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
-  // 指针划过的那一块（外面不用逐个算）
+  const fills = new Map();
+  const rings = new Map();
+  const path = (m, style, a) => {
+    const key = `${style}|${Math.round(a * 20) / 20}`;
+    return m.get(key) || m.set(key, new Path2D()).get(key);
+  };
   let tb = null;
-  if (trail.length) {
-    tb = [Infinity, Infinity, -Infinity, -Infinity];
-    for (const [x, y] of trail) tb = [Math.min(tb[0], x), Math.min(tb[1], y), Math.max(tb[2], x), Math.max(tb[3], y)];
-  }
+  for (const [x, y] of trail) tb = tb ? [Math.min(tb[0], x), Math.min(tb[1], y), Math.max(tb[2], x), Math.max(tb[3], y)] : [x, y, x, y];
   const t = sw ? now - sw.t0 : 0;
-  const paths = new Map();
-  const path = (key) => paths.get(key) || paths.set(key, new Path2D()).get(key);
+  const wipe = sw ? -60 + ((PAPER.w + 60) * t) / SWEEP.front : 0;
   const i0 = Math.max(0, Math.floor((x0 - 12) / 10));
   const i1 = Math.min(cols - 1, Math.ceil((x1 + 12) / 10));
   const j0 = Math.max(0, Math.floor((y0 - 14) / 10));
@@ -2007,49 +2006,57 @@ function paperDraw(box, now) {
     const y = 2 + j * 10;
     for (let i = i0; i <= i1; i++) {
       const x = i * 10;
-      const r = hash(i, j);
-      let kind = PAPER.kind;
-      let e = 0;
-      if (sw) {
-        const on = SWEEP.front * (sw.dir > 0 ? x / PAPER.w : 1 - x / PAPER.w) + r * 0.07;
-        if (t < on) kind = sw.from;
-        else e = sw.field[j * cols + i] * Math.max(0, sweepK(t - on, SWEEP.hold * (0.5 + r / 1000)));
+      const base = i % 2 === 0 && j % 2 === 0;
+      // 新纸的份量：切页时前沿后面 1、前面 0，中间 60px 渐变
+      const f = sw ? clamp(1 - ((sw.dir > 0 ? x : PAPER.w - x) - wipe) / 60, 0, 1) : 1;
+      const kind = f >= 0.5 ? PAPER.kind : sw.from;
+      if (base) {
+        if (f > 0) {
+          mark(path(fills, 'dot', f), PAPER.kind, x, y, BASE[PAPER.kind], 1.1);
+          const au = auraAt(PAPER.kind, x, y) * f;
+          if (au > 0.02) mark(path(fills, 'dot2', au), PAPER.kind, x, y, PAPER.kind === 'relay' ? 1.2 : 3, 1.3);
+        }
+        if (f < 1) mark(path(fills, 'dot', 1 - f), sw.from, x, y, BASE[sw.from], 1.1);
       }
-      e = Math.max(e, auraAt(kind, x, y));
-      if (tb && x > tb[0] - TRAIL_R && x < tb[2] + TRAIL_R && y > tb[1] - TRAIL_R && y < tb[3] + TRAIL_R) e = Math.max(e, trailAt(x, y, now));
+      if (!tb || x < tb[0] - TRAIL_R || x > tb[2] + TRAIL_R || y < tb[1] - TRAIL_R || y > tb[3] + TRAIL_R) continue;
+      // 指针划过：分四档变大变深，最深两档把格子中间也补上；接力最深处冒出空心圈
+      const e = trailAt(x, y, now);
       const L = e < 0.12 ? 0 : Math.min(4, Math.ceil(e * 4));
-      if (L < 3 && !isBase(kind, i, j)) continue;
+      if (!L || (!base && L < 3)) continue;
       const v = LEVELS[L];
-      if (kind === 'dispatch') {
-        const half = v.tick + (L === 0 && i % 4 === 0 ? 1.5 : 0);
-        const p = path(`d${L}`);
-        p.moveTo(x, y - half);
-        p.lineTo(x, y + half);
-      } else if (kind === 'chat') {
-        const p = path(`c${L}`);
-        p.moveTo(x - 5, y);
-        p.lineTo(x + 5, y);
-      } else if (L === 4 && r < 250) {
-        const p = path('ring');
+      if (kind === 'relay' && L === 4 && hash(i, j) < 250) {
+        const p = path(rings, 'ink', v.a);
         p.moveTo(x + 3.4, y);
         p.arc(x, y, 3.4, 0, 6.2832);
-      } else {
-        const p = path(`r${L}`);
-        p.moveTo(x + v.dot, y);
-        p.arc(x, y, v.dot, 0, 6.2832);
+      } else mark(path(fills, 'ink', v.a), kind, x, y, kind === 'relay' ? v.dot : v.len, v.w);
+    }
+  }
+  // 扫过去的那一道：接力是顺着线的椭圆点（有几颗空心），派活一竖竖，群聊一横横
+  if (sw) {
+    for (const m of sw.marks) {
+      if (t < m.on) continue;
+      const k = sweepK(t - m.on, m.hold);
+      if (k <= 0 || m.x < x0 - 12 || m.x > x1 + 12 || m.y < y0 - 12 || m.y > y1 + 12) continue;
+      if (PAPER.kind !== 'relay') mark(path(fills, 'ink', m.al), PAPER.kind, m.x, m.y, 1.2 * m.rx * k, 0.6 + 0.6 * m.ry * k);
+      else {
+        const [rx, ry] = m.ring ? [m.rx * 1.3 * k, m.ry * 1.3 * k] : [m.rx * k, m.ry * k];
+        const p = path(m.ring ? rings : fills, 'ink', m.al);
+        p.moveTo(m.x + rx * Math.cos(m.a), m.y + rx * Math.sin(m.a));
+        p.ellipse(m.x, m.y, rx, ry, m.a, 0, 6.2832);
       }
     }
   }
-  for (const [key, p] of paths) {
-    const L = key === 'ring' ? 4 : Number(key.slice(1));
-    ctx.globalAlpha = L ? LEVELS[L].a : 1;
-    ctx.fillStyle = ctx.strokeStyle = L ? PAPER.ink : PAPER.dot;
-    if (key[0] === 'r' && key !== 'ring') ctx.fill(p);
-    else {
-      ctx.lineWidth = key === 'ring' ? 0.9 : LEVELS[L].w;
-      ctx.lineCap = key[0] === 'c' ? 'butt' : 'round';
-      ctx.stroke(p);
-    }
+  for (const [key, p] of fills) {
+    const [style, a] = key.split('|');
+    ctx.globalAlpha = Number(a);
+    ctx.fillStyle = PAPER[style];
+    ctx.fill(p);
+  }
+  ctx.lineWidth = 0.9;
+  for (const [key, p] of rings) {
+    ctx.globalAlpha = Number(key.split('|')[1]);
+    ctx.strokeStyle = PAPER.ink;
+    ctx.stroke(p);
   }
   ctx.restore();
 }
@@ -2081,7 +2088,7 @@ function paperAll() {
   else paperDraw(null, performance.now());
 }
 
-/** 量一下这一栏：大小变了换画布，按新大小排群聊的「字」，再整张画。 */
+/** 量一下这一栏：大小变了就换画布，整张重画。 */
 function paperSize() {
   const box = CE.paper.parentNode.getBoundingClientRect();
   const W = Math.round(box.width);
@@ -2089,7 +2096,6 @@ function paperSize() {
   if (!W || !H || (W === PAPER.w && H === PAPER.h)) return;
   const dpr = Math.min(2, devicePixelRatio || 1);
   Object.assign(PAPER, { w: W, h: H, dpr, cols: Math.floor(W / 10) + 1, rows: Math.floor((H - 2) / 10) + 1 });
-  PAPER.words = paperWords(PAPER.cols, PAPER.rows);
   CE.paper.width = W * dpr;
   CE.paper.height = H * dpr;
   CE.paper.style.width = `${W}px`;
@@ -2098,11 +2104,11 @@ function paperSize() {
   paperAll();
 }
 
-/** 换了浅色 / 深色：重新取墨色和纸上记号的颜色。 */
+/** 换了浅色 / 深色：重新取墨色和纸上记号的两种颜色。 */
 function paperInk() {
   const css = getComputedStyle(document.documentElement);
-  PAPER.ink = css.getPropertyValue('--ink').trim() || '#151515';
-  PAPER.dot = css.getPropertyValue('--dot').trim() || 'rgba(21, 21, 21, 0.09)';
+  const v = (k, d) => css.getPropertyValue(k).trim() || d;
+  Object.assign(PAPER, { ink: v('--ink', '#151515'), dot: v('--dot', 'rgba(21, 21, 21, 0.09)'), dot2: v('--dot-2', 'rgba(21, 21, 21, 0.2)') });
   paperAll();
 }
 
@@ -2144,7 +2150,7 @@ function paperSweep(dir) {
   const from = PAPER.from || PAPER.kind;
   PAPER.from = '';
   if (still() || !PAPER.cols) return paperAll();
-  PAPER.sweep = { t0: performance.now(), dir, from, field: sweepField(PAPER.curve), end: SWEEP.front + 70 + SWEEP.grow + SWEEP.hold * 1.5 + SWEEP.fade };
+  PAPER.sweep = { t0: performance.now(), dir, from, marks: sweepMarks(PAPER.curve, dir), end: SWEEP.front + 70 + SWEEP.grow + SWEEP.hold * 1.5 + SWEEP.fade };
   if (!PAPER.raf) PAPER.raf = requestAnimationFrame(paperTick);
 }
 
