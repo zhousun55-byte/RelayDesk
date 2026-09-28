@@ -1657,8 +1657,9 @@ function buildCenter() {
   CE.chat = h('section', { class: 'pane', 'aria-label': '对话' }, CE.scroll, CE.toBottom);
   CE.doc = h('section', { class: 'pane', hidden: true });
   CE.hero = h('section', { class: 'hero', hidden: true });
+  CE.aura = h('div', { class: 'aura', 'aria-hidden': 'true', hidden: true });
   CE.flow = h('canvas', { class: 'flow', 'aria-hidden': 'true', hidden: true });
-  $('#center').append(CE.flow, CE.offline, CE.cfgBad, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
+  $('#center').append(CE.aura, CE.flow, CE.offline, CE.cfgBad, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
 }
 
 function onScroll() {
@@ -1721,42 +1722,24 @@ function renderCenter() {
     FLOW.was = center.dataset.paper || '';
     center.dataset.paper = S.view;
   }
+  aura();
 }
 
 // ----- 空闲：小标题、要人看的一行、输入框 -----
 
-/**
- * 标题上面的一小段线路图（像地铁图）：三页各一种走法，一眼分得清，走向和切页时扫过去的点一样。
- * 接力：一条线，经过两个换乘站换人接着走（实线是强的、点线是弱的）；
- * 派活：一条线拆成三股，每股一个方格（清单里的一步），做完合回一条去终审；
- * 群聊：三条线（每位一条，不分强弱）汇进一个换乘站，出来是一条。
- */
-const ROUTES = {
-  relay:
-    '<path class="ln" d="M6 20H60M172 20H222"/><path class="dt" d="M86 20H146"/>' +
-    '<rect class="cap" x="60" y="14" width="26" height="12" rx="6"/><rect class="cap" x="146" y="14" width="26" height="12" rx="6"/>' +
-    '<circle class="sm" cx="67" cy="20" r="2"/><circle class="sm" cx="79" cy="20" r="2"/><circle class="sm" cx="153" cy="20" r="2"/><circle class="sm" cx="165" cy="20" r="2"/>' +
-    '<circle class="fs" cx="6" cy="20" r="3.5"/><circle class="st" cx="226" cy="20" r="4"/>',
-  dispatch:
-    '<path class="ln" d="M6 20H40M170 20H222"/><path class="dt" d="M40 20L56 4H154L170 20M40 20H170M40 20L56 36H154L170 20"/>' +
-    '<rect class="sq" x="101.5" y="0.5" width="7" height="7"/><rect class="sq" x="101.5" y="16.5" width="7" height="7"/><rect class="sq" x="101.5" y="32.5" width="7" height="7"/>' +
-    '<circle class="fs" cx="6" cy="20" r="3.5"/><circle class="st" cx="226" cy="20" r="4"/><circle class="fs" cx="226" cy="20" r="1.5"/>',
-  chat:
-    '<path class="ln" d="M10 8H100M10 32H100M114 20H222"/><path class="dt" d="M10 20H100"/>' +
-    '<rect class="cap" x="100" y="2" width="14" height="36" rx="7"/>' +
-    '<circle class="sm" cx="107" cy="8" r="2"/><circle class="sm" cx="107" cy="20" r="2"/><circle class="sm" cx="107" cy="32" r="2"/>' +
-    '<circle class="st" cx="6" cy="8" r="3.5"/><circle class="st" cx="6" cy="20" r="3.5"/><circle class="st" cx="6" cy="32" r="3.5"/><circle class="st" cx="226" cy="20" r="4"/>',
-};
-
-/** 这一页的线路图；刚切过来（dir 是切的方向）就顺着方向一格一格画出来。 */
-function routeMap(view, dir) {
-  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  s.setAttribute('viewBox', '-2 -2 236 44');
-  s.setAttribute('class', dir ? 'route in' : 'route');
-  s.setAttribute('aria-hidden', 'true');
-  if (dir) s.dataset.dir = String(dir);
-  s.innerHTML = ROUTES[view] || '';
-  return s;
+/** 空白页：纸上本来的记号在输入框周围深一点，往外淡回去（淡开的方向跟着这一页的笔画，见 .aura）。输入框的位置不算动画里的位移。 */
+function aura() {
+  const b = C.box;
+  const on = !CE.hero.hidden && CE.hero.contains(b) && b.offsetWidth > 0;
+  CE.aura.hidden = !on;
+  if (!on) return;
+  const x = b.offsetLeft + CE.hero.offsetLeft;
+  const y = b.offsetTop + CE.hero.offsetTop - CE.hero.scrollTop;
+  const st = CE.aura.style;
+  st.setProperty('--l', `${x}px`);
+  st.setProperty('--r', `${x + b.offsetWidth}px`);
+  st.setProperty('--t', `${y}px`);
+  st.setProperty('--b', `${y + b.offsetHeight}px`);
 }
 
 function renderHero(mode) {
@@ -1815,7 +1798,7 @@ function renderHero(mode) {
           )
         )
       : h('div', { class: 'under', hidden: true });
-    CE.hero.replaceChildren(h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null), h('div', { class: 'hero-in' }, routeMap(S.view, S.swap), head, notice, C.wrap, under));
+    CE.hero.replaceChildren(h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null), h('div', { class: 'hero-in' }, head, notice, C.wrap, under));
   } else if (C.wrap.parentNode !== CE.hero.querySelector('.hero-in')) {
     const inner = CE.hero.querySelector('.hero-in');
     inner.insertBefore(C.wrap, inner.querySelector('.under'));
@@ -3690,6 +3673,8 @@ function buildComposer() {
     C.tools
   );
   C.wrap = h('div', { class: 'composer-wrap' }, C.box);
+  // 打字打高了：空白页上输入框周围那一圈深一点的纸跟着挪
+  new ResizeObserver(() => aura()).observe(C.box);
   C.kind = '';
   // 输入框浮在对话上面：对话底下留出它的高度，「新消息」按钮也跟着它走
   new ResizeObserver(() => {
@@ -5370,6 +5355,7 @@ addEventListener('resize', () => {
   if (SUG.menu) updateSuggest();
   if (WIRE.card) drawWires();
   syncSegs();
+  aura();
 });
 
 // ---------- 开始 ----------
