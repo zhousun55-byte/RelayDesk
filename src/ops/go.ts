@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { acceptance } from '../core/acceptance';
-import { loadAutoSettings, normalizeAutoSettings, type AutoSettings } from '../core/auto-settings';
+import { loadAutoSettings, normalizeAutoSettings, type AutoSettings, langNote } from '../core/auto-settings';
 import { errorMessage, RelayError } from '../core/errors';
 import { refreshHarnessModel } from '../core/detect';
 import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from '../core/harness';
@@ -508,6 +508,7 @@ class GoRunner {
     } else {
       prompt = workPrompt({ id, label: who.label, handoff, gateCommand: gate });
     }
+    prompt += langNote(this.settings.lang);
     const timeoutMs = (kind === 'work' ? this.settings.stintTimeoutMin : this.settings.reviewTimeoutMin) * 60_000;
 
     let finalText = '';

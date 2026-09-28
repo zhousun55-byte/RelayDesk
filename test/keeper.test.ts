@@ -7,6 +7,10 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { CLI, sandbox, until, type Sandbox } from './helpers';
 
+/** 网页的函数在沙箱里跑：先放进 i18n.js（界面上的字 T`…`、后台的字 tr(…)，默认中文）。 */
+const I18N = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'i18n.js'), 'utf8').replace("'use strict';", '');
+const runWeb = (code: string, ctx: vm.Context) => vm.runInNewContext(`${I18N}\n${code}`, ctx);
+
 /**
  * 「接力台」小程序在后台看着接力台（2026-09-25 用户说：不想在终端里跑、不想自己开关、不想桌面上挂个图标）：
  * 编译出新版就自己重启、网页上点「关闭」留记号、启动脚本告诉小程序该不该重新拉起。
@@ -247,7 +251,7 @@ ${code}
 })();`;
   await new Promise<void>((resolve, reject) => {
     try {
-      vm.runInNewContext(script, { setTimeout, URL, URLSearchParams, encodeURIComponent, TypeError, out: (x: string) => out.push(x), done: resolve });
+      runWeb(script, { setTimeout, URL, URLSearchParams, encodeURIComponent, TypeError, out: (x: string) => out.push(x), done: resolve });
     } catch (e) {
       reject(e);
     }

@@ -20,10 +20,12 @@ export interface AutoSettings {
   waitForQuota: boolean;
   /** 任务清单全部打勾后，请强模型把整件事过一遍再算完成。 */
   finalReview: boolean;
+  /** 网页用的语言（网页上换语言时顺手存进来）：en 时请 AI 用英文写交接、复核和回答。 */
+  lang: 'zh' | 'en';
 }
 
 export function defaultAutoSettings(): AutoSettings {
-  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true };
+  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, lang: 'zh' };
 }
 
 export function autoSettingsPath(): string {
@@ -63,7 +65,25 @@ export function normalizeAutoSettings(raw: unknown): AutoSettings {
     maxStints: int(o.maxStints, '最多几棒', 1, 100, d.maxStints),
     waitForQuota: bool(o.waitForQuota, d.waitForQuota),
     finalReview: bool(o.finalReview, d.finalReview),
+    lang: o.lang === 'en' ? 'en' : 'zh',
   };
+}
+
+/**
+ * 网页是英文时加在给 AI 的话后面：交接、复核、回答都用英文写。接力台要认的几样（小节标题、状态、结论的选项、
+ * 文件名）照原样写中文，不然读不出来。中文时什么都不加。
+ */
+export function langNote(lang: AutoSettings['lang'] = safeLang()): string {
+  if (lang !== 'en') return '';
+  return '\n\nLanguage: the person running this relay reads English. Write everything meant for people (handoff contents, review findings, replies, checklist steps you add) in English. Keep the words the relay parses exactly as given above, in Chinese: section headings, status words, verdict choices and file names.';
+}
+
+function safeLang(): AutoSettings['lang'] {
+  try {
+    return loadAutoSettings().lang;
+  } catch {
+    return 'zh';
+  }
 }
 
 export function loadAutoSettings(): AutoSettings {

@@ -5,6 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 
+/** 网页的函数在沙箱里跑：先放进 i18n.js（界面上的字 T`…`、后台的字 tr(…)，默认中文）。 */
+const I18N = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'i18n.js'), 'utf8').replace("'use strict';", '');
+const runWeb = (code: string, ctx: vm.Context) => vm.runInNewContext(`${I18N}\n${code}`, ctx);
+
 /**
  * 成员一律叫它用的模型、名单去重、删掉的不再加回来、Cursor 跟着桌面版选的模型、群聊分成几段。
  * 这个文件里的测试不碰你真实的家目录。
@@ -71,7 +75,7 @@ test('成员叫它用的模型：gpt-6-sol → GPT-6 Sol、opus → Claude Opus�
     return src.slice(i, j + 1).join('\n');
   };
   const ctx: Record<string, unknown> = {};
-  vm.runInNewContext(`${['splitLabel', 'LLM_WORD', 'LLM_VARIANT', 'llmName', 'nameOf'].map(pick).join('\n')}\nresult = { llmName, nameOf };`, ctx);
+  runWeb(`${['splitLabel', 'LLM_WORD', 'LLM_VARIANT', 'llmName', 'nameOf'].map(pick).join('\n')}\nresult = { llmName, nameOf };`, ctx);
   const web = ctx.result as { llmName: (m: string) => string; nameOf: (label: string, model?: string) => string };
   for (const [id] of NAMES) assert.equal(web.llmName(id), names.llmName(id), `网页和后台对「${id}」叫法不一样`);
   // 记录里的「工具 · 模型」按模型叫；新的群聊记录里写的就是名字（两位同一个模型时后面带着工具，不能丢）

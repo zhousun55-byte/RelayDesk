@@ -4,6 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 
+/** 网页的函数在沙箱里跑：先放进 i18n.js（界面上的字 T`…`、后台的字 tr(…)，默认中文）。 */
+const I18N = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'i18n.js'), 'utf8').replace("'use strict';", '');
+const runWeb = (code: string, ctx: vm.Context) => vm.runInNewContext(`${I18N}\n${code}`, ctx);
+
 /**
  * 网页（纯内存，不开浏览器）：每家 AI 的图标。
  * 从 app.js 里把用到的函数和表原样取出来，在沙箱里跑。
@@ -24,7 +28,7 @@ function pick(name: string): string {
 function icons() {
   const code = ['splitLabel', 'hashStr', 'line', 'solid', 'knot', 'GLYPHS', 'SHAPES', 'TOOL_OWN', 'MODEL_MAKER', 'TOOL_MAKER', 'brandOf', 'toolText'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
-  vm.runInNewContext(`${code}\nresult = { GLYPHS, SHAPES, TOOL_OWN, MODEL_MAKER, TOOL_MAKER, brandOf, toolText };`, ctx);
+  runWeb(`${code}\nresult = { GLYPHS, SHAPES, TOOL_OWN, MODEL_MAKER, TOOL_MAKER, brandOf, toolText };`, ctx);
   return ctx.result as {
     GLYPHS: Record<string, string>;
     SHAPES: string[];
@@ -91,7 +95,7 @@ test('网页的图标：规则里用到的每家都画了，几何图形也都�
 test('网页：全自动的结果只出现在它开始时的那段对话里（换了任务，上一个任务的「验收通过」不跑到新任务里）', () => {
   const code = ['msOf', 'rangeOf', 'inRange', 'pageThreads', 'accepted', 'streamItems'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
-  vm.runInNewContext(
+  runWeb(
     `
 const t0 = { id: 't0', title: '给 wc.py 加 --json', from: '2026-09-25T13:30:00Z', to: '2026-09-25T14:07:00Z', stints: [] };
 const t1 = { id: 't1', title: '让 wc.py 读标准输入', from: '2026-09-25T14:07:00Z', to: null, stints: [], current: true };
@@ -118,7 +122,7 @@ test('网页设置：各页返回的空位不进页面（以前「项目」页�
   const code = ['settingsPane', 'settingsBody', 'setRow', 'setField', 'setSec', 'gateResult', 'LEVEL_DESC'].map(pick).join('\n\n');
   const run = (protocol: string) => {
     const ctx: Record<string, unknown> = {};
-    vm.runInNewContext(
+    runWeb(
       `
 const node = (tag) => ({ tag, kids: [], replaceChildren(...k) { this.kids = k; }, append(...k) { this.kids.push(...k); }, addEventListener() {} });
 const h = (tag, props, ...kids) => { const n = node(tag); n.kids = kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false); return n; };
@@ -141,7 +145,7 @@ result = { tags: kids.map((k) => (k === null ? 'null' : typeof k === 'string' ? 
 test('网页 ▾ 菜单：「只做一棒」列能派活的（叫模型的名字）；「打开」列有桌面程序的，命令行工具不弹终端窗口', () => {
   const code = ['splitLabel', 'LLM_WORD', 'LLM_VARIANT', 'llmName', 'nameOf', 'memberName', 'whoMenu', 'SUB'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
-  vm.runInNewContext(
+  runWeb(
     `
 const list = [
   { name: 'codex', label: 'Codex', llm: 'GPT-6 Sol', tool: 'Codex', app: 'ChatGPT', kind: 'harness', agent: { cmd: 'codex' }, canWork: true, tier: 'strong', model: 'gpt-6-sol' },
@@ -168,7 +172,7 @@ test('网页定时刷新：和上次拿到的一字不差就不解析、不重�
   const ctx: Record<string, unknown> = {};
   const out: unknown[] = [];
   await new Promise<void>((resolve) => {
-    vm.runInNewContext(
+    runWeb(
       `
 let body = '{"ok":true,"n":1}';
 let fetches = 0;
@@ -196,7 +200,7 @@ test('网页线路的终点：最新的任务看验收（做着的时候没有�
   const code = ['msOf', 'rangeOf', 'inRange', 'pageThreads', 'accepted', 'streamItems'].map(pick).join('\n\n');
   const run = (acceptance: unknown, go: unknown) => {
     const ctx: Record<string, unknown> = {};
-    vm.runInNewContext(
+    runWeb(
       `
 const t0 = { id: 't0', title: '旧任务', from: '2026-09-25T13:30:00Z', to: '2026-09-25T14:07:00Z', stints: [] };
 const t1 = { id: 't1', title: '新任务', from: '2026-09-25T14:07:00Z', to: null, stints: [], current: true };
@@ -227,7 +231,7 @@ test('网页交接单：交接的每一节是一行（做了、没做完、拿�
   const code = ['SECTION', 'handoffForm'].map(pick).join('\n\n');
   const run = (text: string) => {
     const ctx: Record<string, unknown> = {};
-    vm.runInNewContext(
+    runWeb(
       `
 const h = (tag, props, ...kids) => ({ tag, props, kids: kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false) });
 const md = (t) => t;
@@ -248,7 +252,7 @@ result = { status: f.kids[0].kids[1] ? f.kids[0].kids[1].kids[0] : '', rows: dl.
 test('网页：人带上的文件——最后一段全是反引号括起来的路径才算附件；传上来的图片画缩略图，名字去掉前面加的时间', () => {
   const code = ['basename', 'UPLOADS', 'isShot', 'fileLabel', 'splitFiles'].map(pick).join('\n');
   const ctx: Record<string, unknown> = {};
-  vm.runInNewContext(`${code}\nresult = { isShot, fileLabel, splitFiles };`, ctx);
+  runWeb(`${code}\nresult = { isShot, fileLabel, splitFiles };`, ctx);
   const { isShot, fileLabel, splitFiles } = ctx.result as { isShot: (p: string) => boolean; fileLabel: (p: string) => string; splitFiles: (t: string) => { body: string; files: string[] } };
   const up = '.relay/uploads/0926-2310-截屏 2026-09-26 22.39.31.png';
   assert.deepEqual(JSON.parse(JSON.stringify(splitFiles(`图里是什么？\n\n\`${up}\` \`src/a.py\``))), { body: '图里是什么？', files: [up, 'src/a.py'] });
@@ -264,7 +268,7 @@ test('网页：人带上的文件——最后一段全是反引号括起来的�
 
 test('网页的一棒：没成的（出错、额度用完、中途停了）卡片上那一句写原因，不写「交接里没写做了什么」', () => {
   const ctx: Record<string, unknown> = {};
-  vm.runInNewContext(`${['FAILED', 'summaryOf'].map(pick).join('\n\n')}\nresult = summaryOf;`, ctx);
+  runWeb(`${['FAILED', 'summaryOf'].map(pick).join('\n\n')}\nresult = summaryOf;`, ctx);
   const summaryOf = ctx.result as (s: Record<string, unknown>) => { text: string; faint?: boolean };
   assert.equal(summaryOf({ status: 'failed', note: '退出码 1，原话：Cannot use this model', handoff: 'a.md' }).text, '退出码 1，原话：Cannot use this model');
   assert.equal(summaryOf({ status: 'quota', note: '额度用完，15:00 恢复', handoff: 'a.md' }).text, '额度用完，15:00 恢复');
@@ -273,7 +277,7 @@ test('网页的一棒：没成的（出错、额度用完、中途停了）卡�
 
 test('网页的三页：派活页只列在派活页写的任务，接力页列别的；收尾写强、弱模型各用了多少 token', () => {
   const ctx: Record<string, unknown> = {};
-  vm.runInNewContext(
+  runWeb(
     `${['threads', 'pageThreads', 'pageOf', 'tokenText', 'tokenSplit'].map(pick).join('\n\n')}
 const S = { view: 'dispatch', st: { project: { threads: [{ id: 't0' }, { id: 't1', mode: 'dispatch' }, { id: 't2' }] } } };
 const stints = { 1: { who: { tier: 'strong' }, tokens: { input: 30000, output: 2000 } }, 2: { who: { tier: 'weak' }, tokens: { input: 150000, output: 9000 } }, 3: { who: { tier: 'strong' } } };
@@ -289,7 +293,7 @@ result = { dispatch, relay: pageThreads().map((t) => t.id), page: pageOf({ mode:
 test('成员名单的额度：第二行写「5 小时 5% · 一周 72%」，悬停写几点恢复；没报过额度就什么都不写', () => {
   const code = ['pad', 'clock', 'aheadClock', 'LIMIT_WORD', 'limitsText', 'limitsTip'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
-  vm.runInNewContext(`${code}\nresult = { limitsText, limitsTip };`, ctx);
+  runWeb(`${code}\nresult = { limitsText, limitsTip };`, ctx);
   const { limitsText, limitsTip } = ctx.result as { limitsText: (m: object) => string; limitsTip: (m: object) => string | null };
   const soon = new Date();
   soon.setMinutes(soon.getMinutes() + 30, 0, 0);

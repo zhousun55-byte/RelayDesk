@@ -19,7 +19,8 @@ export function settingsCommand(): Command {
     .option('--no-wait', '都没额度时停下')
     .option('--final', '清单全部打勾后请强模型终审')
     .option('--no-final', '不终审')
-    .action((o: { level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean }) => {
+    .option('--lang <语言>', 'zh | en：en 时请 AI 用英文写交接、复核和回答（网页上换语言会自动改）')
+    .action((o: { level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean; lang?: string }) => {
       const patch: Partial<Record<keyof AutoSettings, unknown>> = {};
       if (o.level !== undefined) patch.level = o.level;
       if (o.order !== undefined) patch.order = o.order;
@@ -28,6 +29,7 @@ export function settingsCommand(): Command {
       if (o.reviewMin !== undefined) patch.reviewTimeoutMin = o.reviewMin;
       if (o.wait !== undefined) patch.waitForQuota = o.wait;
       if (o.final !== undefined) patch.finalReview = o.final;
+      if (o.lang !== undefined) patch.lang = o.lang;
       const changed = Object.keys(patch).length > 0;
       const s = changed ? saveAutoSettings({ ...loadAutoSettings(), ...patch }) : loadAutoSettings();
       if (changed) ok('已保存');
@@ -35,6 +37,7 @@ export function settingsCommand(): Command {
       info(`派活顺序：${s.order.length ? s.order.join('、') : '强的在前、编程工具在前'}`);
       info(`每一棒最长：${s.stintTimeoutMin} 分钟；复核、终审最长：${s.reviewTimeoutMin} 分钟；全自动最多接力：${s.maxStints} 棒`);
       info(`额度用完时等恢复：${s.waitForQuota ? '等' : '不等'}；做完后终审：${s.finalReview ? '终审' : '不终审'}`);
+      info(`AI 写字用的语言：${s.lang === 'en' ? '英文' : '中文'}`);
     });
 }
 

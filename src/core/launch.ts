@@ -1,5 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 /** 给 sh 用的单引号转义。 */
 export function shq(s: string): string {
@@ -132,26 +134,62 @@ export function runOpener(cmd: string, cwd: string, timeoutMs = 15_000): Promise
   });
 }
 
-/** 复制到剪贴板（macOS）。RELAY_CLIPBOARD=off 时不动剪贴板（测试用）。 */
+/** 能跑起来的第一个命令（Linux 上剪贴板、选文件夹的工具各家桌面不一样）。 */
+function firstBin(cands: string[][]): string[] | null {
+  for (const c of cands) if (spawnSync(c[0], ['--version'], { timeout: 3000, stdio: 'ignore' }).error === undefined) return c;
+  return null;
+}
+
+/** 复制到剪贴板：macOS pbcopy，Windows 用 PowerShell，Linux 用 wl-copy / xclip / xsel。RELAY_CLIPBOARD=off 时不动剪贴板（测试用）。 */
 export function copyToClipboard(text: string): boolean {
-  if (process.env.RELAY_CLIPBOARD === 'off' || process.platform !== 'darwin') return false;
-  const r = spawnSync('pbcopy', [], { input: text, timeout: 5000 });
+  if (process.env.RELAY_CLIPBOARD === 'off') return false;
+  const cmd =
+    process.platform === 'darwin'
+      ? ['pbcopy']
+      : process.platform === 'win32'
+        ? ['powershell.exe', '-NoProfile', '-Command', '$input | Set-Clipboard']
+        : firstBin([['wl-copy'], ['xclip', '-selection', 'clipboard'], ['xsel', '--clipboard', '--input']]);
+  if (!cmd) return false;
+  const r = spawnSync(cmd[0], cmd.slice(1), { input: text, timeout: 5000 });
   return r.status === 0;
 }
 
-/** 在访达里打开一个文件夹 / 选中一个文件（macOS）。 */
+/** 在系统的文件管理器里打开一个文件夹 / 选中一个文件：访达、资源管理器，Linux 打开它所在的文件夹。 */
 export function reveal(target: string): boolean {
-  if (process.env.RELAY_TERMINAL === 'off' || process.platform !== 'darwin') return false;
+  if (process.env.RELAY_TERMINAL === 'off') return false;
   const isFile = fs.existsSync(target) && fs.statSync(target).isFile();
-  const r = spawnSync('open', isFile ? ['-R', target] : [target], { timeout: 10_000 });
-  return r.status === 0;
+  if (process.platform === 'darwin') return spawnSync('open', isFile ? ['-R', target] : [target], { timeout: 10_000 }).status === 0;
+  // explorer 打开了也常常返回 1：没报错就算打开了
+  if (process.platform === 'win32') return !spawnSync('explorer.exe', isFile ? [`/select,${target}`] : [target], { timeout: 10_000 }).error;
+  const r = spawnSync('xdg-open', [isFile ? path.dirname(target) : target], { timeout: 10_000, stdio: 'ignore' });
+  return !r.error && r.status === 0;
 }
 
-/** 让用户选一个文件夹（macOS 原生对话框）。异步：对话框开着的时候，接力台照样响应别的请求。 */
-export function chooseFolder(): Promise<string | null> {
-  if (process.platform !== 'darwin') return Promise.resolve(null);
+/** 这台电脑上弹选文件夹对话框的命令；没有就是 null（网页上改成自己贴路径）。 */
+function pickerCommand(prompt: string): string[] | null {
+  if (process.platform === 'darwin') return ['osascript', '-e', `POSIX path of (choose folder with prompt "${prompt.replace(/["\\]/g, '')}")`];
+  if (process.platform === 'win32')
+    return [
+      'powershell.exe',
+      '-NoProfile',
+      '-STA',
+      '-Command',
+      `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.ShowNewFolderButton = $true; $d.Description = '${prompt.replace(/'/g, '')}'; if ($d.ShowDialog() -eq 'OK') { [Console]::OutputEncoding = [Text.Encoding]::UTF8; $d.SelectedPath }`,
+    ];
+  const bin = firstBin([['zenity'], ['kdialog'], ['qarma']]);
+  if (!bin) return null;
+  return bin[0] === 'kdialog' ? ['kdialog', '--getexistingdirectory', os.homedir(), '--title', prompt] : [bin[0], '--file-selection', '--directory', `--title=${prompt}`];
+}
+
+/**
+ * 让用户选一个文件夹（系统自己的对话框）。异步：对话框开着的时候，接力台照样响应别的请求。
+ * 返回 null 是没选；这台电脑弹不出对话框时抛 no-picker。
+ */
+export function chooseFolder(prompt = '选一个项目文件夹'): Promise<string | null> {
+  const cmd = pickerCommand(prompt);
+  if (!cmd) return Promise.reject(Object.assign(new Error('这台电脑弹不出选文件夹的对话框'), { code: 'no-picker' }));
   return new Promise((resolve) => {
-    const child = spawn('osascript', ['-e', 'POSIX path of (choose folder with prompt "选一个项目文件夹")'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(cmd[0], cmd.slice(1), { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     let out = '';
     child.stdout?.setEncoding('utf8');
     child.stdout?.on('data', (c: string) => (out += c));
@@ -162,7 +200,7 @@ export function chooseFolder(): Promise<string | null> {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      const p = out.trim().replace(/\/$/, '');
+      const p = out.trim().replace(/[\\/]$/, '');
       resolve(code === 0 && p ? p : null);
     });
   });

@@ -71,7 +71,7 @@ def main():
                 time.sleep(0.2)
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(viewport={'width': 1280, 'height': 800})
+            page = browser.new_page(viewport={'width': 1280, 'height': 800}, locale='zh-CN')
             errors = []
             page.on('pageerror', lambda e: errors.append(str(e)))
             page.on('console', lambda m: m.type == 'error' and errors.append(m.text))
@@ -123,6 +123,24 @@ def main():
             page.keyboard.press('Escape')
             page.wait_for_timeout(500)
             check(page.locator('.settings').count() == 0, '设置：按 Esc 关掉')
+
+            # 窗口窄于 1180px：右栏自己收起；宽回来自己打开（没改你记下的）
+            no_right = '() => document.querySelector(".app").classList.contains("no-right")'
+            page.set_viewport_size({'width': 1100, 'height': 800})
+            page.wait_for_timeout(700)
+            narrow_hidden = js(no_right)
+            page.set_viewport_size({'width': 1280, 'height': 800})
+            page.wait_for_timeout(700)
+            check(narrow_hidden and not js(no_right) and js('() => localStorage.getItem("relay.noRight")') is None, '窗口变窄右栏自己收起，宽回来自己打开')
+
+            # 换语言：点左下角「EN」，整页淡出、重新载入成英文，接力台也记下（请 AI 用英文写）；再点「中」换回来
+            page.locator('.lang-btn').click()
+            page.wait_for_function('() => typeof LANG !== "undefined" && LANG.now === "en" && S.st && !document.documentElement.classList.contains("lang-in")', timeout=8000)
+            lang = json.load(urllib.request.urlopen(url + 'api/state', timeout=3))['settings'].get('lang')
+            check(page.get_by_role('button', name='New task').count() == 1 and js('() => T.missing.size') == 0 and lang == 'en', '换成英文：界面是英文、没有漏翻的，接力台记下了')
+            page.locator('.lang-btn').click()
+            page.wait_for_function('() => typeof LANG !== "undefined" && LANG.now === "zh" && S.st && !document.documentElement.classList.contains("lang-in")', timeout=8000)
+            check(page.get_by_role('button', name='新任务').count() == 1, '再点「中」：换回中文')
             check(len(errors) == 0, '整个过程控制台没有报错' + (f'：{errors[:3]}' if errors else ''))
             browser.close()
     finally:

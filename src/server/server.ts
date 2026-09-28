@@ -523,8 +523,10 @@ export function createServer(opts: ServerOptions): http.Server {
       if (loadLedger(root).init) refreshBrief(root);
       return { vote: v };
     },
-    '/api/choose-folder': async () => {
-      const picked = await chooseFolder();
+    '/api/choose-folder': async (_q, b) => {
+      const picked = await chooseFolder(b.lang === 'en' ? 'Choose a project folder' : '选一个项目文件夹').catch((e: { code?: string; message?: string }) => {
+        throw new RelayError(e.message ?? '弹不出选文件夹的对话框', e.code === 'no-picker' ? 'no-picker' : 'error');
+      });
       if (!picked) throw new RelayError('没有选文件夹。', 'cancelled');
       return { dir: picked };
     },

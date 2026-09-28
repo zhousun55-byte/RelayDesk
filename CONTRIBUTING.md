@@ -48,7 +48,7 @@ node dist/src/cli.js ui --port 7500        # 用刚编译的版本打开网页
 - 测试**不调用真的 AI**（花钱、结果不稳定）。要测调度，就在 `test/fakes.ts` 里让假工具多一种行为（比如「额度用完」「不写交接」）。
 - 测试名用中文写清楚在测什么，比如「额度用完：认得各家的提示，算出恢复时间」。
 - 提交前 `npm test` 要全部通过。
-- 改了网页：再跑 `python3 scripts/e2e.py`（要装 playwright），用浏览器真的点一遍切页、划过纸面、收起侧栏、设置。没装 playwright 会跳过；它不在 `npm test` 里，CI 上没有浏览器。
+- 改了网页：界面上新写的中文套一层 `T\`…\``，在 `src/web/i18n.js` 的 `EN` 表里补上英文（漏了 `test/i18n.test.ts` 会报出来）；后台送来的新说法要在网页上显示成英文，在同一个文件的 `SRV_WORD` / `SRV` 里加。新加的 AI 工具不画图标也行：认不出来的模型图标是它名字的头一个字母；要画就在 `app.js` 的 `GLYPHS`、`brandOf` 里加。再跑 `python3 scripts/e2e.py`（要装 playwright），用浏览器真的点一遍切页、划过纸面、收起侧栏、设置、换语言。没装 playwright 会跳过；它不在 `npm test` 里，CI 上没有浏览器。
 
 ## 几条约定
 

@@ -5,6 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 
+/** 网页的函数在沙箱里跑：先放进 i18n.js（界面上的字 T`…`、后台的字 tr(…)，默认中文）。 */
+const I18N = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'i18n.js'), 'utf8').replace("'use strict';", '');
+const runWeb = (code: string, ctx: vm.Context) => vm.runInNewContext(`${I18N}\n${code}`, ctx);
+
 /**
  * 「是不是真做完了」这一类判断的回归测试（2026-09-25 审查找出的问题，每一条都是当时的反例）：
  * 复核结论怎么读、复核过没过、验收、快照读不出来、配置文件坏了、退回时的任务清单、内置小代理的路径、网页切换项目。
@@ -492,7 +496,7 @@ ${code}
 })();`;
   await new Promise<void>((resolve, reject) => {
     try {
-      vm.runInNewContext(script, { setTimeout, URL, URLSearchParams, encodeURIComponent, TypeError, out: (x: string) => out.push(x), done: resolve });
+      runWeb(script, { setTimeout, URL, URLSearchParams, encodeURIComponent, TypeError, out: (x: string) => out.push(x), done: resolve });
     } catch (e) {
       reject(e);
     }

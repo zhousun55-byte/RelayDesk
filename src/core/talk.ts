@@ -1,3 +1,4 @@
+import { langNote } from './auto-settings';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -324,6 +325,7 @@ function replyOf(raw: string): string {
 
 /** 让一个 AI 回答。接口型用内置小代理，只给读文件的工具；编程工具、自定义命令见下面。 */
 export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, timeoutMs = TALK_MAX_MS, idleMs = TALK_IDLE_MS): Promise<string> {
+  prompt += langNote();
   if (agentKind(agent) === 'api') {
     if (!agent.api) throw new RelayError('没有配置接口', 'no-api');
     // 和编程工具一样能看项目里的文件：不给工具的话，它会把「调用工具」的原文当成回答说出来。

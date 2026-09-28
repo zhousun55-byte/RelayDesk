@@ -140,7 +140,21 @@ body {
   margin: 0;
   height: 100%;
 }
+/* 换语言要重新载入一次：整页先淡出，载入、摆好之后再淡进来（纸色垫在 html 上，中间不闪白） */
+html {
+  background: var(--paper);
+  /* 窄屏时收在屏幕外的抽屉不撑出横向滚动 */
+  overflow: clip;
+}
+html.lang-out body,
+html.lang-in body {
+  opacity: 0;
+}
+html.lang-out body {
+  transition: opacity 0.2s var(--exit);
+}
 body {
+  transition: opacity 0.32s var(--ease);
   background: var(--paper);
   color: var(--ink);
   font: 14px/1.65 var(--ui);
@@ -749,6 +763,14 @@ svg.i {
 
 /* ---------- 每家 AI 的图形：强模型是墨色，弱模型是浅灰，身份不明是虚线圈 ---------- */
 
+/* 认不出来的模型：名字的头一个字母，和别家的记号一样粗细、一样大 */
+.tile .mono-g {
+  font: 700 15px/1 var(--ui);
+  letter-spacing: -0.02em;
+}
+.tile .mono-g.two {
+  font-size: 12px;
+}
 .tile {
   width: 18px;
   height: 18px;
@@ -832,11 +854,28 @@ svg.i {
   background: var(--fog);
   color: var(--ink);
 }
+/* 左下角换语言：和图标按钮一样大，写的是另一种语言的名字 */
+.lang-btn {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 5px;
+  border-radius: 7px;
+  flex: none;
+  font: 600 11px/1 var(--ui);
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  transition: background 0.14s, color 0.14s, transform 0.49s var(--spring);
+}
+.lang-btn:hover {
+  background: var(--fog-2);
+  color: var(--ink);
+}
 .left .icon-btn:hover,
 .right .icon-btn:hover {
   background: var(--fog-2);
 }
 .icon-btn:active,
+.lang-btn:active,
 .btn:active,
 .find:active,
 .send:active {
@@ -1750,6 +1789,11 @@ button.busy::after {
   text-overflow: ellipsis;
 }
 .who .tm {
+  /* 地方不够时先缩时间、用量，名字最后缩 */
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   margin-left: auto;
   padding-left: 8px;
   font-size: 12px;
@@ -3813,6 +3857,33 @@ button.busy::after {
   .who .mdl,
   .who .tm {
     display: none;
+  }
+}
+
+/* 大屏：对话、输入框、空白页跟着放宽一点，不在正中间缩成一条 */
+@media (min-width: 1800px) {
+  .stream {
+    max-width: 960px;
+  }
+  .stream.talk {
+    max-width: 920px;
+  }
+  .composer {
+    max-width: 880px;
+  }
+  .hero-in {
+    max-width: 780px;
+  }
+}
+@media (min-width: 2300px) {
+  .stream {
+    max-width: 1060px;
+  }
+  .stream.talk {
+    max-width: 1020px;
+  }
+  .composer {
+    max-width: 980px;
   }
 }
 

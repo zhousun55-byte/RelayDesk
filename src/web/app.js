@@ -81,6 +81,11 @@ function iconBtn(label, name, onclick, kbd, cls = '') {
   return h('button', { class: `icon-btn ${cls}`.trim(), 'aria-label': label, 'data-tip': label, 'data-kbd': kbd || null, onclick }, icon(name));
 }
 
+/** 苹果电脑上写 ⌘ ⌥、叫「访达」；Windows、Linux 上写 Ctrl、Alt，叫「文件夹」（快捷键两边都认 ⌘ 和 Ctrl）。 */
+const MAC = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || '');
+const keys = (k) => (MAC || !k ? k : k.replace('⌥⌘', 'Ctrl+Alt+').replace('⌘', 'Ctrl+'));
+const REVEAL = MAC ? T`在访达中显示` : T`在文件夹中显示`;
+
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 /** 格点的伪随机数（0～999）：同一个格子每次都一样，边缘毛毛的但不闪。 */
 const hash = (i, j) => (((i * 73856093) ^ (j * 19349663)) >>> 0) % 1000;
@@ -423,9 +428,9 @@ function when(ts) {
   if (sameDay(d, now)) return clock(ts);
   const y = new Date(now);
   y.setDate(now.getDate() - 1);
-  if (sameDay(d, y)) return '昨天';
-  if (now - d < 6 * 86400000) return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()];
-  return `${d.getMonth() + 1}月${d.getDate()}日`;
+  if (sameDay(d, y)) return T`昨天`;
+  if (now - d < 6 * 86400000) return [T`周日`, T`周一`, T`周二`, T`周三`, T`周四`, T`周五`, T`周六`][d.getDay()];
+  return T`${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 function elapsed(ts) {
@@ -439,9 +444,9 @@ function elapsed(ts) {
 function lasted(a, b) {
   const s = Math.max(0, Math.round((msOf(b) - msOf(a)) / 1000));
   if (!Number.isFinite(s)) return '';
-  if (s < 60) return `${s} 秒`;
-  if (s < 3600) return `${Math.round(s / 60)} 分钟`;
-  return `${Math.floor(s / 3600)} 小时 ${Math.round((s % 3600) / 60)} 分`;
+  if (s < 60) return T`${s} 秒`;
+  if (s < 3600) return T`${Math.round(s / 60)} 分钟`;
+  return T`${Math.floor(s / 3600)} 小时 ${Math.round((s % 3600) / 60)} 分`;
 }
 
 function size(n) {
@@ -481,7 +486,7 @@ function tildify(p) {
   return home && p && p.startsWith(home) ? `~${p.slice(home.length)}` : p || '';
 }
 
-const basename = (p) => String(p).split('/').pop();
+const basename = (p) => String(p).split(/[\\/]/).pop();
 
 /** 太长的路径只留后面几层。 */
 function shortPath(p) {
@@ -530,9 +535,9 @@ function llmName(model) {
 /** 记录里的「工具 · 模型」（一棒是谁做的、旧的群聊）按模型叫；新的群聊记录里写的就是名字。 */
 function nameOf(label, model) {
   const text = String(label || '');
-  if (!text.includes(' · ')) return text || llmName(model);
+  if (!text.includes(' · ')) return tr(text) || llmName(model);
   const [tool, m] = splitLabel(text);
-  return llmName(m || model) || tool;
+  return llmName(m || model) || tr(tool);
 }
 
 function memberName(m) {
@@ -612,13 +617,25 @@ const UI = {
   left: clamp(Number(store.get('left')) || 264, 200, 420),
   right: clamp(Number(store.get('right')) || 296, 220, 560),
   noLeft: store.get('noLeft') === '1',
+  /** 右栏现在收着没有（下面 fitRight 算）；userNoRight 是你自己收的（记在本机），peek 是窗口窄时你临时打开的。 */
   noRight: store.get('noRight') === '1',
+  userNoRight: store.get('noRight') === '1',
+  peek: false,
 };
 
 const app = $('#app');
 const layer = $('#layer');
 const mqNarrow = matchMedia('(max-width: 860px)');
 const narrow = () => mqNarrow.matches;
+/** 放不下三栏（窄于 1180px）：右栏自己收起来，宽回来再自己打开；这时候点开右栏只是临时的，不改你记下的。 */
+const mqMid = matchMedia('(max-width: 1180px)');
+function fitRight() {
+  const v = UI.userNoRight || (mqMid.matches && !UI.peek);
+  if (v === UI.noRight) return false;
+  UI.noRight = v;
+  return true;
+}
+fitRight();
 
 /** same：定时刷新用。和上次拿到的一字不差就返回 null，省掉解析和重画。 */
 async function api(path, body, same) {
@@ -633,9 +650,9 @@ async function api(path, body, same) {
   try {
     j = JSON.parse(text);
   } catch {
-    throw new Error(`接力台返回了看不懂的内容（${res.status}）`);
+    throw new Error(T`接力台返回了看不懂的内容（${res.status}）`);
   }
-  if (!j.ok) throw Object.assign(new Error(j.error || '出错'), { code: j.code });
+  if (!j.ok) throw Object.assign(new Error(j.error || T`出错`), { code: j.code });
   return j;
 }
 
@@ -657,8 +674,8 @@ function q(path) {
 
 /** 失败的提示：「没能 X：原因」（原因去掉句末的句号）。说法见 docs/设计说明.md「结果怎么说」。 */
 function fail(what, e) {
-  const why = String((e && e.message) || e || '').trim().replace(/[。.]+$/, '');
-  toast(what ? `没能${what}：${why || '出错'}` : why || '出错', { bad: true });
+  const why = tr(String((e && e.message) || e || '').trim().replace(/[。.]+$/, ''));
+  toast(what ? T`没能${what}：${why || T`出错`}` : why || T`出错`, { bad: true });
 }
 
 /** 按钮点下去：请求期间转圈，出错弹提示，做完刷新。 */
@@ -677,7 +694,8 @@ async function act(btn, fn, okText) {
     schedule();
     return r;
   } catch (e) {
-    if (e.code !== 'cancelled') fail(typeof okText === 'string' && okText.startsWith('已') ? okText.slice(1) : '', e);
+    // 「已保存」失败了说「没能保存」；英文里只说原因
+    if (e.code !== 'cancelled') fail(LANG.zh && typeof okText === 'string' && okText.startsWith('已') ? okText.slice(1) : '', e);
     return null;
   } finally {
     if (btn && btn.isConnected) {
@@ -795,7 +813,20 @@ function toolText(name, label, agent) {
 
 let looks = { key: '', shape: new Map() };
 
-/** 名单变了才重算：认不出来的成员各给一个几何图形，不重样、不跳来跳去。 */
+/**
+ * 认不出来的模型（别人加了这里没画过的）：写它名字的头一个字母（Mistral 写 M，豆包写「豆」）；
+ * 两位头一个字母撞了，后来的那位写两个字母（Mi、Mn）。名字里一个字母、一个字都没有，才用几何图形。
+ */
+function monoOf(text, taken = new Set()) {
+  const letters = [...String(text || '').replace(/^(the|my|我的)\s*/i, '')].filter((c) => /[\p{L}\p{N}]/u.test(c));
+  if (!letters.length) return null;
+  const one = letters[0].toUpperCase();
+  if (!taken.has(one)) return one;
+  const two = letters.slice(1).find((c) => !taken.has(one + c.toLowerCase()));
+  return two ? one + two.toLowerCase() : one;
+}
+
+/** 名单变了才重算：认不出来的成员各给一个头一个字母（或几何图形），不重样、不跳来跳去。 */
 function refreshLooks() {
   const ms = members();
   const key = ms.map((m) => `${m.name}=${m.label}=${m.model || ''}=${m.tier}`).join('|');
@@ -804,6 +835,12 @@ function refreshLooks() {
   const used = new Set();
   for (const m of [...ms].sort((a, b) => a.name.localeCompare(b.name))) {
     if (brandOf(toolText(m.name, m.label, m.agent), m.model)) continue;
+    const mono = monoOf(m.llm || llmName(m.model) || splitLabel(m.label)[0] || m.name, used);
+    if (mono) {
+      used.add(mono);
+      shape.set(m.name, `mono:${mono}`);
+      continue;
+    }
     let k = hashStr(m.name) % SHAPES.length;
     for (let i = 0; i < SHAPES.length && used.has(SHAPES[k]); i++) k = (k + 1) % SHAPES.length;
     used.add(SHAPES[k]);
@@ -821,7 +858,9 @@ function lookOf(who) {
   if (!name && (!label || label === '不知道是谁')) return { brand: 'unknown', tier: 'unknown' };
   const model = who.model || splitLabel(label)[1] || (m && m.model) || '';
   const brand = brandOf([who.tool, toolText(name, label, m && m.agent)].filter(Boolean).join(' '), model);
-  return { brand: brand || (name && looks.shape.get(name)) || SHAPES[hashStr(name || label) % SHAPES.length], tier };
+  // 不在名单里的（旧记录、群聊里别处来的）：按记下的模型名现取一个字母
+  const mono = !brand && !(name && looks.shape.get(name)) ? monoOf(llmName(model) || splitLabel(label)[0] || name) : null;
+  return { brand: brand || (name && looks.shape.get(name)) || (mono ? `mono:${mono}` : SHAPES[hashStr(name || label) % SHAPES.length]), tier };
 }
 
 function glyph(key) {
@@ -829,7 +868,10 @@ function glyph(key) {
   s.setAttribute('viewBox', '0 0 24 24');
   s.setAttribute('class', 'g');
   s.setAttribute('aria-hidden', 'true');
-  s.innerHTML = GLYPHS[key] || GLYPHS.unknown;
+  if (key.startsWith('mono:')) {
+    const t = key.slice(5);
+    s.innerHTML = `<text x="12" y="12.6" class="mono-g${t.length > 1 ? ' two' : ''}" text-anchor="middle" dominant-baseline="central" fill="currentColor">${esc(t)}</text>`;
+  } else s.innerHTML = GLYPHS[key] || GLYPHS.unknown;
   return s;
 }
 
@@ -852,17 +894,17 @@ function stack(list, extra = () => '', max = 7) {
   );
 }
 
-const TIER_WORD = { strong: '强模型', weak: '弱模型' };
+const TIER_WORD = { strong: T`强模型`, weak: T`弱模型` };
 
 function memberTip(m) {
-  return [memberName(m), [m.tool, TIER_WORD[m.tier]].filter(Boolean).join(' · '), m.cooling ? `额度用完 · ${m.coolingText}` : ''].filter(Boolean).join('\n');
+  return [memberName(m), [tr(m.tool), TIER_WORD[m.tier]].filter(Boolean).join(' · '), m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : ''].filter(Boolean).join('\n');
 }
 
 /** 一棒是谁做的：模型的名字，下面一行在哪个工具里、强弱。 */
 function whoTip(who) {
-  if (!who.label || who.label === '不知道是谁') return '身份不明';
+  if (!who.label || who.label === '不知道是谁') return T`身份不明`;
   const name = nameOf(who.label, who.model);
-  const tool = splitLabel(who.label)[0];
+  const tool = tr(splitLabel(who.label)[0]);
   return [name, [tool !== name ? tool : '', TIER_WORD[who.tier]].filter(Boolean).join(' · ')].filter(Boolean).join('\n');
 }
 
@@ -898,7 +940,7 @@ function hideTip() {
 
 function showTip(t) {
   if (!t.isConnected || !t.dataset.tip) return;
-  tipEl = h('div', { class: 'tip', role: 'tooltip' }, t.dataset.tip, t.dataset.kbd ? h('kbd', null, t.dataset.kbd) : null);
+  tipEl = h('div', { class: 'tip', role: 'tooltip' }, t.dataset.tip, t.dataset.kbd ? h('kbd', null, keys(t.dataset.kbd)) : null);
   layer.append(tipEl);
   const r = t.getBoundingClientRect();
   const w = tipEl.offsetWidth;
@@ -1060,7 +1102,7 @@ function sheet({ title, body, foot, wide, bare, onClose }) {
     onClose && onClose();
   };
   if (!bare) {
-    box.append(h('div', { class: 'sheet-head' }, h('h3', null, title), h('button', { class: 'icon-btn', 'aria-label': '关闭', onclick: close }, icon('x'))));
+    box.append(h('div', { class: 'sheet-head' }, h('h3', null, title), h('button', { class: 'icon-btn', 'aria-label': T`关闭`, onclick: close }, icon('x'))));
     if (body) box.append(h('div', { class: 'sheet-body' }, body));
     if (foot) box.append(h('div', { class: 'sheet-foot' }, foot));
   } else box.append(body);
@@ -1089,7 +1131,7 @@ function confirmSheet(title, text, okLabel) {
       title,
       body: text ? h('p', null, text) : null,
       foot: [
-        h('button', { class: 'btn ghost', onclick: () => close() }, '取消'),
+        h('button', { class: 'btn ghost', onclick: () => close() }, T`取消`),
         h(
           'button',
           {
@@ -1138,7 +1180,7 @@ function toast(text, opts = {}) {
 
 /** 复制，然后说一声。 */
 function copyToast(text) {
-  return copyText(text).then((ok) => toast(ok ? '已复制' : '没能复制', { bad: !ok }));
+  return copyText(text).then((ok) => toast(ok ? T`已复制` : T`没能复制`, { bad: !ok }));
 }
 
 // ---------- 布局：三栏、拖动改宽度、收起 ----------
@@ -1168,8 +1210,14 @@ function toggleSide(side) {
   if (narrow()) return drawer(side);
   hideTip();
   const k = side === 'left' ? 'noLeft' : 'noRight';
-  UI[k] = !UI[k];
-  store.set(k, UI[k] ? '1' : '');
+  if (side === 'right' && mqMid.matches) UI.peek = UI.noRight;
+  else if (side === 'right') {
+    UI.userNoRight = !UI.userNoRight;
+    UI.peek = false;
+    store.set(k, UI.userNoRight ? '1' : '');
+  } else store.set(k, !UI[k] ? '1' : '');
+  if (side === 'right') fitRight();
+  else UI.noLeft = !UI.noLeft;
   applyLayout();
   sideSweep(side, !UI[k]);
   if (side === 'right') wireTo(null);
@@ -1212,7 +1260,7 @@ for (const g of document.querySelectorAll('.grip')) {
 }
 
 function sideBtn(side) {
-  const b = side === 'left' ? iconBtn('项目和对话', 'sideL', toggleLeft, '⌘B') : iconBtn('文件', 'sideR', toggleRight, '⌥⌘B');
+  const b = side === 'left' ? iconBtn(T`项目和对话`, 'sideL', toggleLeft, '⌘B') : iconBtn(T`文件`, 'sideR', toggleRight, '⌥⌘B');
   b.dataset.k = `side-${side}`;
   return b;
 }
@@ -1228,7 +1276,7 @@ function setOffline(v) {
   S.shownClosed = closed;
   if (!CE.offline) return;
   show(CE.offline, v);
-  CE.offlineText.textContent = closed ? '已关闭接力台' : '连不上接力台';
+  CE.offlineText.textContent = closed ? T`已关闭接力台` : T`连不上接力台`;
   CE.offlineDot.hidden = CE.offlineRetry.hidden = closed;
 }
 
@@ -1253,7 +1301,7 @@ async function refresh(force) {
   } catch (e) {
     if (stale(t)) return;
     if (e instanceof TypeError) setOffline(true);
-    else fail('刷新', e);
+    else fail(T`刷新`, e);
   }
 }
 
@@ -1268,7 +1316,7 @@ async function loadTalk() {
     renderLeft();
     renderCenter();
   } catch (e) {
-    if (!stale(t) && !(e instanceof TypeError)) fail('读取群聊', e);
+    if (!stale(t) && !(e instanceof TypeError)) fail(T`读取群聊`, e);
   }
 }
 
@@ -1343,7 +1391,7 @@ function pageOf(t) {
 
 /** 「3.2 万」「860」：token 数。 */
 function tokenText(n) {
-  return n >= 10000 ? `${(n / 10000).toFixed(1)} 万` : String(n);
+  return n >= 10000 ? T`${(n / 10000).toFixed(1)} 万` : String(n);
 }
 
 /** 这几棒强模型、弱模型各用了多少 token（工具自己报的）；有没报用量的写出几棒。 */
@@ -1354,8 +1402,8 @@ function tokenSplit(ids) {
     if (!s.tokens) missing++;
     else sum[s.who.tier === 'weak' ? 'weak' : 'strong'] += s.tokens.input + s.tokens.output;
   }
-  const bits = [sum.strong ? `强模型 ${tokenText(sum.strong)}` : '', sum.weak ? `弱模型 ${tokenText(sum.weak)}` : ''].filter(Boolean);
-  return bits.length ? `${bits.join('，')} token${missing ? `（${missing} 棒没报用量）` : ''}` : '';
+  const bits = [sum.strong ? T`强模型 ${tokenText(sum.strong)}` : '', sum.weak ? T`弱模型 ${tokenText(sum.weak)}` : ''].filter(Boolean);
+  return bits.length ? `${bits.join(T`，`)} ${L('token')}${missing ? T`（${missing} 棒没报用量）` : ''}` : '';
 }
 
 function voteBorn(v) {
@@ -1551,14 +1599,14 @@ function drawLeft() {
     LE.news = h('span', { class: 'news', hidden: true });
     LE.seg = h(
       'div',
-      { class: 'seg view', role: 'tablist', 'aria-label': '页面' },
+      { class: 'seg view', role: 'tablist', 'aria-label': T`页面` },
       [
-        ['relay', '接力'],
-        ['dispatch', '派活'],
-        ['chat', '群聊'],
+        ['relay', T`接力`],
+        ['dispatch', T`派活`],
+        ['chat', T`群聊`],
       ].map(([k, label]) => h('button', { role: 'tab', 'data-view': k, onclick: () => setView(k) }, label, k === 'chat' ? LE.news : null))
     );
-    LE.brand = h('div', { class: 'brand' }, LE.seg, iconBtn('收起', 'sideL', toggleLeft, '⌘B'));
+    LE.brand = h('div', { class: 'brand' }, LE.seg, iconBtn(T`收起`, 'sideL', toggleLeft, '⌘B'));
     LE.body = h('div', { class: 'left-body' });
     box.replaceChildren(LE.brand, LE.body);
   }
@@ -1572,10 +1620,10 @@ function drawLeft() {
     const cur = pr.current;
     const list = [];
     if (cur && chat && p.init) {
-      list.push(sessionEl({ id: '', title: talkTitle(S.talk) || '新群聊', at: talkAt(S.talk) }));
+      list.push(sessionEl({ id: '', title: talkTitle(S.talk) || T`新群聊`, at: talkAt(S.talk) }));
       for (const x of S.talk.sessions || []) list.push(sessionEl(x));
     } else if (cur && p.init) {
-      if (S.draft || !ts.length || blank(ts[ts.length - 1])) list.push(h('button', { class: 'thread draft', 'data-id': 'draft', onclick: newThread }, h('span', { class: 't' }, '新任务'), h('span', { class: 'when' }, '现在')));
+      if (S.draft || !ts.length || blank(ts[ts.length - 1])) list.push(h('button', { class: 'thread draft', 'data-id': 'draft', onclick: newThread }, h('span', { class: 't' }, T`新任务`), h('span', { class: 'when' }, T`现在`)));
       for (const t of [...ts].reverse()) if (!blank(t)) list.push(threadEl(t));
     }
     if (swap) list.forEach((el, i) => enterAnim(el, i));
@@ -1596,13 +1644,13 @@ function drawLeft() {
         },
         icon('chev', 'caret'),
         h('span', { class: 'name' }, pr.name),
-        pr.live ? h('span', { class: 'dot live' }) : pr.pending ? h('span', { class: 'rd', 'data-tip': `${pr.pending} 棒待复核` }) : null
+        pr.live ? h('span', { class: 'dot live' }) : pr.pending ? h('span', { class: 'rd', 'data-tip': T`${pr.pending} 棒待复核` }) : null
       ),
-      iconBtn(`${pr.name} 更多`, 'more', (e) => openMenu(e.currentTarget, projMenuItems(pr)), '', 'more')
+      iconBtn(T`${pr.name} 更多`, 'more', (e) => openMenu(e.currentTarget, projMenuItems(pr)), '', 'more')
     );
     projects.push(h('div', { class: `proj${cur ? ' current' : ''}${cur && !S.fold ? ' open' : ''}` }, row, cur ? h('div', { class: 'threads' }, h('div', null, list)) : null));
   }
-  if (!st.projects.length) projects.push(h('div', { class: 'proj' }, h('div', { class: 'proj-row' }, h('button', { class: 'pmain', onclick: chooseFolder }, icon('folder'), h('span', { class: 'name' }, '打开文件夹')))));
+  if (!st.projects.length) projects.push(h('div', { class: 'proj' }, h('div', { class: 'proj-row' }, h('button', { class: 'pmain', onclick: chooseFolder }, icon('folder'), h('span', { class: 'name' }, T`打开文件夹`)))));
   // 成员收成一小叠（在干活的那位放最上面），点开是名单
   const busy = busyMember();
   const team = [...members()].sort((a, b) => Number(b.name === busy) - Number(a.name === busy));
@@ -1612,11 +1660,11 @@ function drawLeft() {
       'div',
       { class: 'acts' },
       chat
-        ? h('button', { class: 'btn line', onclick: newChat, disabled: !!p.pick }, icon('plus'), '新群聊')
-        : h('button', { class: 'btn line', onclick: newThread, disabled: !!p.pick || (!p.init && !st.projects.length) }, icon('plus'), '新任务'),
-      h('button', { class: 'find', onclick: () => openPalette() }, icon('search'), '搜索', h('kbd', null, '⌘K'))
+        ? h('button', { class: 'btn line', onclick: newChat, disabled: !!p.pick }, icon('plus'), T`新群聊`)
+        : h('button', { class: 'btn line', onclick: newThread, disabled: !!p.pick || (!p.init && !st.projects.length) }, icon('plus'), T`新任务`),
+      h('button', { class: 'find', onclick: () => openPalette() }, icon('search'), T`搜索`, h('kbd', null, keys('⌘K')))
     ),
-    h('nav', { class: 'nav', 'aria-label': '项目' }, h('div', { class: 'nav-label' }, h('span', { class: 'cap' }, '项目'), iconBtn('打开文件夹', 'plus', chooseFolder)), projects),
+    h('nav', { class: 'nav', 'aria-label': T`项目` }, h('div', { class: 'nav-label' }, h('span', { class: 'cap' }, T`项目`), iconBtn(T`打开文件夹`, 'plus', chooseFolder)), projects),
     h(
       'div',
       { class: 'dock' },
@@ -1624,7 +1672,7 @@ function drawLeft() {
         'button',
         {
           class: 'team',
-          'aria-label': '成员',
+          'aria-label': T`成员`,
           'aria-haspopup': 'menu',
           onclick: (e) =>
             openMenu(
@@ -1632,18 +1680,19 @@ function drawLeft() {
               [
                 ...team.map((m) => ({
                   label: memberName(m),
-                  sub: [m.tool, m.name === busy ? '干活中' : m.cooling ? `额度用完 · ${m.coolingText}` : !m.canWork && m.kind !== 'app' ? '不可调度' : limitsText(m)].filter(Boolean).join(' · '),
+                  sub: [tr(m.tool), m.name === busy ? T`干活中` : m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : !m.canWork && m.kind !== 'app' ? T`不可调度` : limitsText(m)].filter(Boolean).join(' · '),
                   tile: tile(m, 's20', look(m)),
-                  right: m.tier === 'strong' ? '强' : '弱',
+                  right: m.tier === 'strong' ? T`强` : T`弱`,
                   run: () => openSettings('members'),
                 })),
               ],
               { side: 'top' }
             ),
         },
-        team.length ? stack(team, look, 3) : h('span', { class: 'more-n' }, '成员')
+        team.length ? stack(team, look, 3) : h('span', { class: 'more-n' }, T`成员`)
       ),
-      iconBtn('设置', 'sliders', () => openSettings())
+      langBtn(),
+      iconBtn(T`设置`, 'sliders', () => openSettings())
     )
   );
   LE.body.querySelector('.nav').scrollTop = keep;
@@ -1667,17 +1716,17 @@ function threadEl(t) {
   return h(
     'button',
     { class: 'thread', 'data-id': String(t.id), onclick: () => selectThread(t) },
-    h('span', { class: 't' }, t.title || '未命名'),
-    h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : t.pending ? [h('span', { class: 'rd' }), `待复核 ${t.pending}`] : when(lastActive(t)))
+    h('span', { class: 't' }, t.title || T`未命名`),
+    h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : t.pending ? [h('span', { class: 'rd' }), T`待复核 ${t.pending}`] : when(lastActive(t)))
   );
 }
 
 function projMenuItems(pr) {
   return [
-    { label: '在访达中显示', icon: 'folder', run: () => reveal('', pr.root) },
-    { label: '复制路径', icon: 'copy', run: () => copyToast(pr.root) },
+    { label: REVEAL, icon: 'folder', run: () => reveal('', pr.root) },
+    { label: T`复制路径`, icon: 'copy', run: () => copyToast(pr.root) },
     '-',
-    { label: '移出列表', icon: 'x', run: () => forget(pr) },
+    { label: T`移出列表`, icon: 'x', run: () => forget(pr) },
   ];
 }
 
@@ -1688,10 +1737,10 @@ async function forget(pr) {
       const next = S.st.projects.find((x) => !x.current);
       if (next) return switchProject(next.root);
     }
-    toast('已移出');
+    toast(T`已移出`);
     await refresh();
   } catch (e) {
-    fail('移出', e);
+    fail(T`移出`, e);
   }
 }
 
@@ -1738,19 +1787,39 @@ function switchProject(root) {
 async function chooseFolder() {
   closeMenus();
   try {
-    const r = await api('/api/choose-folder', {});
+    const r = await api('/api/choose-folder', { lang: LANG.now });
     switchProject(r.dir);
   } catch (e) {
-    if (e.code !== 'cancelled') fail('打开文件夹', e);
+    if (e.code === 'no-picker') typeFolder();
+    else if (e.code !== 'cancelled') fail(L('打开文件夹', '设置'), e);
   }
+}
+
+/** 这台电脑弹不出选文件夹的对话框（比如没装 zenity 的 Linux）：把文件夹的完整路径贴进来。 */
+function typeFolder() {
+  const win = /Windows/i.test(navigator.userAgent);
+  const input = h('input', { class: 'input mono', placeholder: MAC ? '/Users/me/project' : win ? 'C:\\Users\\me\\project' : '/home/me/project', 'aria-label': T`文件夹路径` });
+  const go = () => {
+    const v = input.value.trim().replace(/^["']|["']$/g, '');
+    if (!v) return input.focus();
+    close();
+    switchProject(v);
+  };
+  input.addEventListener('keydown', (e) => e.key === 'Enter' && !e.isComposing && go());
+  const close = sheet({
+    title: T`打开文件夹`,
+    body: h('div', null, field(T`文件夹路径`, input)),
+    foot: [h('button', { class: 'btn ghost', onclick: () => close() }, T`取消`), h('button', { class: 'btn primary', onclick: go }, T`打开`)],
+  });
+  setTimeout(() => input.focus(), 50);
 }
 
 async function reveal(path, root) {
   try {
     const r = await api('/api/reveal', { path: path || undefined, ...(root ? { dir: root } : {}) });
-    if (!r.revealed) toast('没能打开访达', { bad: true });
+    if (!r.revealed) toast(MAC ? T`没能打开访达` : T`没能打开文件夹`, { bad: true });
   } catch (e) {
-    fail('打开访达', e);
+    fail(MAC ? T`打开访达` : L('打开文件夹', '设置'), e);
   }
 }
 
@@ -1766,16 +1835,16 @@ let stick = true;
 
 function buildCenter() {
   CE.offlineDot = h('span', { class: 'rd' });
-  CE.offlineText = h('span', null, '连不上接力台');
-  CE.offlineRetry = h('button', { class: 'btn small', onclick: () => refresh(true) }, '重试');
+  CE.offlineText = h('span', null, T`连不上接力台`);
+  CE.offlineRetry = h('button', { class: 'btn small', onclick: () => refresh(true) }, T`重试`);
   CE.offline = h('div', { class: 'offline', hidden: true }, CE.offlineDot, CE.offlineText, CE.offlineRetry);
   CE.cfgBad = h('div', { class: 'offline cfg-bad', hidden: true });
   CE.bar = h('header', { class: 'bar' });
   CE.tabs = h('div', { class: 'tabs', role: 'tablist', hidden: true });
   CE.stream = h('div', { class: 'stream' });
   CE.scroll = h('div', { class: 'scroll', onscroll: onScroll }, CE.stream);
-  CE.toBottom = h('button', { class: 'to-bottom', hidden: true, onclick: () => scrollBottom(true) }, icon('down'), '新消息');
-  CE.chat = h('section', { class: 'pane', 'aria-label': '对话' }, CE.scroll, CE.toBottom);
+  CE.toBottom = h('button', { class: 'to-bottom', hidden: true, onclick: () => scrollBottom(true) }, icon('down'), T`新消息`);
+  CE.chat = h('section', { class: 'pane', 'aria-label': T`对话` }, CE.scroll, CE.toBottom);
   CE.doc = h('section', { class: 'pane', hidden: true });
   CE.hero = h('section', { class: 'hero', hidden: true });
   CE.paper = h('canvas', { class: 'paper', 'aria-hidden': 'true' });
@@ -1804,7 +1873,7 @@ function renderCenter() {
   show(CE.cfgBad, !!cfgErr);
   if (cfgErr && CE.cfgBad.dataset.err !== cfgErr) {
     CE.cfgBad.dataset.err = cfgErr;
-    CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': cfgErr }, '配置文件坏了'), h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, '打开'));
+    CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': cfgErr }, T`配置文件坏了`), h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, T`打开`));
   }
   const chat = S.view === 'chat';
   const mode = chat ? chatMode() : centerMode();
@@ -1836,7 +1905,7 @@ function renderCenter() {
     C.wrap.remove();
     CE.chat.style.setProperty('--compose-h', '0px');
   }
-  document.title = S.st.project.name && !S.st.project.pick ? `${S.st.project.name} · 接力台` : '接力台';
+  document.title = S.st.project.name && !S.st.project.pick ? T`${S.st.project.name} · 接力台` : T`接力台`;
   // 这一页的纸（切页时扫过去才换）、空白页输入框周围深一圈
   paperSet(S.view, mode === 'pick' ? 'pick' : S.view);
   paperAura();
@@ -1861,8 +1930,8 @@ function renderHero(mode) {
           h(
             'div',
             { class: 'hero-head' },
-            h('div', null, h('h1', null, '接力台'), h('span', { class: 'cap' }, S.st.detecting && !members().length ? '识别中' : `${members().length} 位 AI`)),
-            h('button', { class: 'btn primary', onclick: chooseFolder }, icon('folder'), '打开文件夹')
+            h('div', null, h('h1', null, T`接力台`), h('span', { class: 'cap' }, S.st.detecting && !members().length ? T`识别中` : T`${members().length} 位 AI`)),
+            h('button', { class: 'btn primary', onclick: chooseFolder }, icon('folder'), T`打开文件夹`)
           )
         )
       );
@@ -1880,10 +1949,10 @@ function renderHero(mode) {
     const head = h(
       'div',
       { class: 'hero-head' },
-      h('div', null, h('h1', null, setup ? p.name : chat ? '新群聊' : '新任务'), h('span', { class: 'cap', 'data-tip': setup ? p.root : null }, setup ? `未接入 · ${shortPath(p.root)}` : !chat && S.view === 'dispatch' ? `${p.name} · 派活` : p.name)),
-      setup ? h('button', { class: 'btn line', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已接入').then(() => loadTree()) }, '接入') : null
+      h('div', null, h('h1', null, setup ? p.name : chat ? T`新群聊` : T`新任务`), h('span', { class: 'cap', 'data-tip': setup ? p.root : null }, setup ? T`未接入 · ${shortPath(p.root)}` : !chat && S.view === 'dispatch' ? T`${p.name} · 派活` : p.name)),
+      setup ? h('button', { class: 'btn line', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), T`已接入`).then(() => loadTree()) }, T`接入`) : null
     );
-    const notice = s ? h('button', { class: 'notice', onclick: () => jumpTo(s.id) }, h('span', { class: 'rd' }), h('b', null, `第 ${s.id} 棒待复核${pend.length > 1 ? `（共 ${pend.length} 棒）` : ''}`), h('span', { class: 'ell' }, s.summary || '')) : null;
+    const notice = s ? h('button', { class: 'notice', onclick: () => jumpTo(s.id) }, h('span', { class: 'rd' }), h('b', null, T`第 ${s.id} 棒待复核${pend.length > 1 ? T`（共 ${pend.length} 棒）` : ''}`), h('span', { class: 'ell' }, s.summary || '')) : null;
     const under = canCancel
       ? h(
           'div',
@@ -1897,7 +1966,7 @@ function renderHero(mode) {
                 renderAll();
               },
             },
-            '取消'
+            T`取消`
           )
         )
       : h('div', { class: 'under', hidden: true });
@@ -2337,7 +2406,7 @@ function paperPointer(e) {
 
 // ----- 顶栏：项目 / 任务几，现在谁在做，待复核，清单，控制 -----
 
-const KIND_WORD = { work: '干活中', review: '复核中', final: '终审中', plan: '拆解中' };
+const KIND_WORD = { work: T`干活中`, review: T`复核中`, final: T`终审中`, plan: T`拆解中` };
 let barNums = null;
 
 function renderBar(t) {
@@ -2381,35 +2450,35 @@ function renderBar(t) {
           'button',
           { class: 'meta-btn', 'data-k': 'pending', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget), onmouseenter: () => lightStints(p.pending.map((s) => s.id)), onmouseleave: unlightCards },
           h('span', { class: 'rd' }),
-          h('span', null, '待复核 ', num('pend', p.pending.length))
+          h('span', null, T`待复核 `, num('pend', p.pending.length))
         )
       );
-    if (p.task.total) meta.push(h('button', { class: 'meta-btn', 'data-k': 'checks', 'data-tip': '清单', onclick: () => CE.stream.querySelector('.head')?.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'start' }) }, h('span', null, '清单 ', num('done', p.task.done), `/${p.task.total}`)));
+    if (p.task.total) meta.push(h('button', { class: 'meta-btn', 'data-k': 'checks', 'data-tip': T`清单`, onclick: () => CE.stream.querySelector('.head')?.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'start' }) }, h('span', null, T`清单 `, num('done', p.task.done), `/${p.task.total}`)));
     if (run.running || run.waiting) {
-      ctl.push(h('button', { class: 'btn primary', 'data-k': 'go', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), h('span', { class: 'lbl' }, '停止')));
+      ctl.push(h('button', { class: 'btn primary', 'data-k': 'go', 'data-tip': T`停止`, 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), T`已停止`) }, icon('stop'), h('span', { class: 'lbl' }, T`停止`)));
     } else {
-      const why = p.task.empty ? '还没有任务' : accepted() ? '验收通过' : !ready().length ? '没有可用的成员' : '';
-      const word = pageOf(t) === 'dispatch' ? '派活' : '全自动';
+      const why = p.task.empty ? T`还没有任务` : accepted() ? T`验收通过` : !ready().length ? T`没有可用的成员` : '';
+      const word = pageOf(t) === 'dispatch' ? T`派活` : T`全自动`;
       ctl.push(
         h(
           'span',
           { class: 'split', 'data-k': 'go' },
           h(
             'button',
-            { class: 'btn primary', disabled: !!why, 'data-tip': why || null, onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), `已开始${word}`) },
+            { class: 'btn primary', disabled: !!why, 'data-tip': why || null, onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), T`已开始${word}`) },
             icon('play'),
             h('span', { class: 'lbl' }, word)
           ),
-          h('button', { class: 'btn primary', 'aria-label': '只做一棒', 'data-tip': '只做一棒', 'aria-haspopup': 'menu', onclick: (e) => whoMenu(e.currentTarget) }, icon('down'))
+          h('button', { class: 'btn primary', 'aria-label': T`只做一棒`, 'data-tip': T`只做一棒`, 'aria-haspopup': 'menu', onclick: (e) => whoMenu(e.currentTarget) }, icon('down'))
         )
       );
     }
-    ctl.push(iconBtn('更多', 'more', (e) => barMenu(e.currentTarget)));
+    ctl.push(iconBtn(T`更多`, 'more', (e) => barMenu(e.currentTarget)));
   }
   if (UI.noRight || narrow()) ctl.push(sideBtn('right'));
   morph(CE.bar, () =>
     CE.bar.replaceChildren(
-      h('div', { class: 'bar-l' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'crumb cap', 'data-k': 'crumb' }, p.name, h('i', null, '/'), `任务 ${n}`)),
+      h('div', { class: 'bar-l' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'crumb cap', 'data-k': 'crumb' }, p.name, h('i', null, '/'), T`任务 ${n}`)),
       h('div', { class: 'bar-m' }, meta),
       h('div', { class: 'bar-ctl' }, ctl)
     )
@@ -2420,25 +2489,25 @@ function renderBar(t) {
 function statusEl(run) {
   if (run.running) {
     const c = run.cur;
-    const auto = run.g && run.g.mode === 'auto' ? (run.g.dispatch ? '派活' : '全自动') : '';
+    const auto = run.g && run.g.mode === 'auto' ? (run.g.dispatch ? T`派活` : T`全自动`) : '';
     return h(
       'span',
       { class: 'status live', 'data-k': 'status', 'data-tip': c ? `${auto ? `${auto} · ` : ''}${nameOf(c.label)}` : null },
       h('span', { class: 'dot' }),
       auto ? h('span', { class: 'w' }, auto) : null,
       c ? tile({ name: c.member, label: c.label }, 's16') : null,
-      h('span', { class: 'w' }, c ? KIND_WORD[c.kind] || '干活中' : '进行中'),
+      h('span', { class: 'w' }, c ? KIND_WORD[c.kind] || T`干活中` : T`进行中`),
       c ? h('span', { class: 'num', 'data-since': c.since }, elapsed(c.since)) : null
     );
   }
   if (run.waiting) {
     const g = run.g;
-    return h('span', { class: 'status wait', 'data-k': 'status', 'data-tip': g && g.phase }, h('span', { class: 'dot' }), h('span', { class: 'w' }, `等额度${g && g.waitingUntil ? ` · ${clock(g.waitingUntil)}` : ''}`));
+    return h('span', { class: 'status wait', 'data-k': 'status', 'data-tip': g && tr(g.phase) }, h('span', { class: 'dot' }), h('span', { class: 'w' }, T`等额度${g && g.waitingUntil ? ` · ${clock(g.waitingUntil)}` : ''}`));
   }
   if (run.native) {
     const s = S.st.project.stints.find((x) => x.status === 'working');
     const known = s && s.who.label !== '不知道是谁';
-    return h('span', { class: 'status live', 'data-k': 'status', 'data-tip': known ? nameOf(s.who.label, s.who.model) : null }, h('span', { class: 'dot' }), known ? tile(s.who, 's16') : null, h('span', { class: 'w' }, '进行中'));
+    return h('span', { class: 'status live', 'data-k': 'status', 'data-tip': known ? nameOf(s.who.label, s.who.model) : null }, h('span', { class: 'dot' }), known ? tile(s.who, 's16') : null, h('span', { class: 'w' }, T`进行中`));
   }
   return null;
 }
@@ -2465,9 +2534,9 @@ function acceptPanel() {
                     jumpTo(i.stint);
                   },
                 },
-                i.text
+                tr(i.text)
               )
-            : i.text
+            : tr(i.text)
         )
       )
     );
@@ -2477,18 +2546,18 @@ function acceptPanel() {
   const p = S.st.project;
   const cmd = p.init && p.config && p.config.gate;
   close = sheet({
-    title: { accepted: '验收通过', blocked: '验收没过', unknown: '没法验收' }[a.state] || '验收',
+    title: { accepted: T`验收通过`, blocked: T`验收没过`, unknown: T`没法验收` }[a.state] || T`验收`,
     body: h(
       'div',
       { class: 'accept-list' },
-      a.state === 'accepted' ? h('p', null, a.headline) : null,
-      unread.length ? h('p', null, '读不到：') : null,
+      a.state === 'accepted' ? h('p', null, tr(a.headline)) : null,
+      unread.length ? h('p', null, T`读不到：`) : null,
       unread.length ? list(unread) : null,
-      missing.length ? h('p', null, '还差：') : null,
+      missing.length ? h('p', null, T`还差：`) : null,
       missing.length ? list(missing) : null,
-      cmd ? h('div', { class: 'gate-line' }, h('span', { class: 'cap' }, '检查命令'), h('code', null, cmd), gateResult(p)) : null
+      cmd ? h('div', { class: 'gate-line' }, h('span', { class: 'cap' }, T`检查命令`), h('code', null, cmd), gateResult(p)) : null
     ),
-    foot: [h('button', { class: 'btn primary', autofocus: true, onclick: () => close() }, '知道了')],
+    foot: [h('button', { class: 'btn primary', autofocus: true, onclick: () => close() }, T`知道了`)],
   });
 }
 
@@ -2510,7 +2579,7 @@ function editTitle() {
   const input = h('input', {
     class: 'title-input',
     value: p.task.title,
-    'aria-label': '任务',
+    'aria-label': T`任务`,
     onkeydown: (e) => {
       if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Enter') {
@@ -2527,7 +2596,7 @@ function editTitle() {
     if (done) return;
     const v = input.value.trim();
     if (!v || v === p.task.title) return finish();
-    await act(null, () => api('/api/task/edit', { op: 'title', text: v }), '已保存');
+    await act(null, () => api('/api/task/edit', { op: 'title', text: v }), T`已保存`);
     finish();
   }
   ttl.replaceWith(input);
@@ -2549,7 +2618,7 @@ async function editStep(body, local) {
   try {
     await api('/api/task/edit', body);
   } catch (e) {
-    fail('改清单', e);
+    fail(T`改清单`, e);
   }
   await refresh(true);
   again();
@@ -2582,33 +2651,33 @@ function whoMenu(anchor) {
   const self = members().filter((m) => m.app);
   const items = [];
   if (drive.length) {
-    items.push({ head: '只做一棒' });
+    items.push({ head: T`只做一棒` });
     for (const m of drive) {
-      items.push({ label: memberName(m), sub: m.cooling ? `额度用完 · ${m.coolingText}` : m.tool || '', tile: tile(m, 's20'), right: m.tier === 'strong' ? '强' : m.tier === 'weak' ? '弱' : '', disabled: !!m.cooling, run: () => goWith(null, m) });
+      items.push({ label: memberName(m), sub: m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : tr(m.tool) || '', tile: tile(m, 's20'), right: m.tier === 'strong' ? T`强` : m.tier === 'weak' ? T`弱` : '', disabled: !!m.cooling, run: () => goWith(null, m) });
     }
   }
   if (self.length) {
-    items.push('-', { head: '打开' });
+    items.push('-', { head: T`打开` });
     for (const m of self) items.push({ label: memberName(m), sub: m.app, tile: tile(m, 's20'), run: () => openIn(m) });
   }
-  if (!items.length) items.push({ label: '没有成员', disabled: true });
-  items.push('-', { label: '复制开场白', sub: SUB.hint, icon: 'copy', run: copyHint });
+  if (!items.length) items.push({ label: T`没有成员`, disabled: true });
+  items.push('-', { label: T`复制开场白`, sub: SUB.hint, icon: 'copy', run: copyHint });
   openMenu(anchor, items, { align: 'end' });
 }
 
 /** 菜单里名字看不出是做什么的几项：底下一行灰字写它是什么（只写事实）。 */
 const SUB = {
-  brief: '每位 AI 开工先读的：进度、规矩、上一棒的交接',
-  snap: '把在接力台之外改的文件记进账本',
-  hint: '在别的 AI 工具里接着做时，对它说的第一句',
-  protocol: 'AGENTS.md、CLAUDE.md 里写给各家 AI 的那一段',
+  brief: T`每位 AI 开工先读的：进度、规矩、上一棒的交接`,
+  snap: T`把在接力台之外改的文件记进账本`,
+  hint: T`在别的 AI 工具里接着做时，对它说的第一句`,
+  protocol: T`AGENTS.md、CLAUDE.md 里写给各家 AI 的那一段`,
 };
 
 function pendingMenu(anchor) {
   const p = S.st.project;
   const rv = reviewer();
-  const items = p.pending.map((s) => ({ label: `第 ${s.id} 棒 · ${nameOf(s.who.label, s.who.model)}`, sub: s.summary || '', tile: tile(s.who, 's20'), run: () => jumpTo(s.id) }));
-  items.push('-', { label: '复核', sub: rv ? memberName(rv) : '没有可用的强模型', icon: 'review', disabled: !rv || runState().running, run: () => goWith(null, rv, 'review') });
+  const items = p.pending.map((s) => ({ label: T`第 ${s.id} 棒 · ${nameOf(s.who.label, s.who.model)}`, sub: s.summary || '', tile: tile(s.who, 's20'), run: () => jumpTo(s.id) }));
+  items.push('-', { label: T`复核`, sub: rv ? memberName(rv) : T`没有可用的强模型`, icon: 'review', disabled: !rv || runState().running, run: () => goWith(null, rv, 'review') });
   openMenu(anchor, items, { align: 'end' });
 }
 
@@ -2617,12 +2686,12 @@ function barMenu(anchor) {
   openMenu(
     anchor,
     [
-      { label: '编辑任务', icon: 'pencil', run: editTaskRaw },
-      { label: '接力本', sub: SUB.brief, icon: 'book', run: openBrief },
-      { label: '对账', sub: SUB.snap, icon: 'sync', run: snapNow },
-      { label: '复制开场白', sub: SUB.hint, icon: 'copy', run: copyHint },
-      { label: '在访达中显示', icon: 'folder', run: () => reveal('') },
-      p.protocol !== 'ok' ? { label: '更新接力规矩', sub: SUB.protocol, icon: 'warn', run: updateProtocol } : null,
+      { label: T`编辑任务`, icon: 'pencil', run: editTaskRaw },
+      { label: T`接力本`, sub: SUB.brief, icon: 'book', run: openBrief },
+      { label: T`对账`, sub: SUB.snap, icon: 'sync', run: snapNow },
+      { label: T`复制开场白`, sub: SUB.hint, icon: 'copy', run: copyHint },
+      { label: REVEAL, icon: 'folder', run: () => reveal('') },
+      p.protocol !== 'ok' ? { label: T`更新接力规矩`, sub: SUB.protocol, icon: 'warn', run: updateProtocol } : null,
     ],
     { align: 'end' }
   );
@@ -2637,52 +2706,52 @@ async function startWork(path, body) {
     return await api(path, body);
   } catch (e) {
     if (e.code !== 'native-active') throw e;
-    if (!(await confirmSheet('文件夹刚才还在改', e.message, '换人'))) throw Object.assign(new Error('没有换人。'), { code: 'cancelled' });
+    if (!(await confirmSheet(T`文件夹刚才还在改`, tr(e.message), T`换人`))) throw Object.assign(new Error(T`没有换人。`), { code: 'cancelled' });
     return api(path, { ...body, force: true });
   }
 }
 
 function goWith(btn, m, kind) {
   if (!m) return;
-  return act(btn, () => startWork('/api/go', { who: m.name, ...(kind ? { kind } : {}) }), `${memberName(m)} 已开始${kind === 'review' ? '复核' : ''}`);
+  return act(btn, () => startWork('/api/go', { who: m.name, ...(kind ? { kind } : {}) }), T`${memberName(m)} 已开始${kind === 'review' ? T`复核` : ''}`);
 }
 
 function goDefault() {
   const w = defaultWorker();
-  if (!w) return toast('没有可用的成员', { bad: true });
+  if (!w) return toast(T`没有可用的成员`, { bad: true });
   goWith(null, w);
 }
 
 function reviewNow() {
   const rv = reviewer();
-  if (!rv) return toast('没有可用的强模型', { bad: true });
+  if (!rv) return toast(T`没有可用的强模型`, { bad: true });
   goWith(null, rv, 'review');
 }
 
 function stopNow() {
   const run = runState();
-  if (run.running || run.waiting) act(null, () => api('/api/stop', {}), '已停止');
+  if (run.running || run.waiting) act(null, () => api('/api/stop', {}), T`已停止`);
 }
 
 function snapNow() {
-  act(null, () => api('/api/snap', {}), (r) => (r.changed ? '已对账' : '没有新改动')).then(() => loadTree());
+  act(null, () => api('/api/snap', {}), (r) => (r.changed ? T`已对账` : T`没有新改动`)).then(() => loadTree());
 }
 
 function updateProtocol() {
-  act(null, () => api('/api/init', {}), '已更新');
+  act(null, () => api('/api/init', {}), T`已更新`);
 }
 
 async function copyHint() {
   const ok = await copyText(S.st.hint);
   if (!ok) await api('/api/copy-hint', {}).catch(() => null);
-  toast('已复制开场白');
+  toast(T`已复制开场白`);
 }
 
 async function openIn(m) {
   const r = await act(null, () => api('/api/open', { who: m.name }));
   if (!r) return;
   if (!r.copied) await copyText(r.hint);
-  toast(r.opened ? `已打开 ${m.app} · 开场白已复制` : '开场白已复制');
+  toast(r.opened ? T`已打开 ${m.app} · 开场白已复制` : T`开场白已复制`);
 }
 
 async function editTaskRaw() {
@@ -2691,26 +2760,26 @@ async function editTaskRaw() {
   try {
     raw = (await api(q('/api/task'))).raw;
   } catch (e) {
-    return stale(t) ? undefined : fail('读取任务', e);
+    return stale(t) ? undefined : fail(T`读取任务`, e);
   }
   if (stale(t)) return;
-  const ta = h('textarea', { class: 'raw', spellcheck: 'false', value: raw, 'aria-label': '任务' });
+  const ta = h('textarea', { class: 'raw', spellcheck: 'false', value: raw, 'aria-label': T`任务` });
   const close = sheet({
-    title: '编辑任务',
+    title: T`编辑任务`,
     wide: true,
     body: ta,
     foot: [
-      h('button', { class: 'btn ghost', onclick: () => close() }, '取消'),
+      h('button', { class: 'btn ghost', onclick: () => close() }, T`取消`),
       h(
         'button',
         {
           class: 'btn primary',
           onclick: (e) =>
-            act(e.currentTarget, () => api('/api/task/save', { raw: ta.value }), '已保存').then((r) => {
+            act(e.currentTarget, () => api('/api/task/save', { raw: ta.value }), T`已保存`).then((r) => {
               if (r) close();
             }),
         },
-        '保存'
+        T`保存`
       ),
     ],
   });
@@ -2894,11 +2963,11 @@ function headEl(t, latest) {
     'header',
     { class: 'head' },
     h('div', { class: 'cap' }, dayClock(t.from)),
-    latest ? h('h2', { class: 'ttl', role: 'button', tabindex: '0', 'data-tip': '改标题', html: inline(esc(title)), onclick: editTitle, onkeydown: (e) => e.key === 'Enter' && editTitle() }) : h('h2', { class: 'ttl', html: inline(esc(title)) }),
+    latest ? h('h2', { class: 'ttl', role: 'button', tabindex: '0', 'data-tip': T`改标题`, html: inline(esc(title)), onclick: editTitle, onkeydown: (e) => e.key === 'Enter' && editTitle() }) : h('h2', { class: 'ttl', html: inline(esc(title)) }),
     sub ? h('p', { class: 'sub' }, sub.length > 400 ? `${sub.slice(0, 400)}…` : sub) : null,
     latest ? checklist(task) : null,
-    latest && task.rules ? h('details', { class: 'rules' }, h('summary', { class: 'link' }, '约定'), h('div', { class: 'doc-md', html: md(task.rules) })) : null,
-    latest ? iconBtn('编辑任务', 'pencil', editTaskRaw, '', 'edit') : null
+    latest && task.rules ? h('details', { class: 'rules' }, h('summary', { class: 'link' }, T`约定`), h('div', { class: 'doc-md', html: md(task.rules) })) : null,
+    latest ? iconBtn(T`编辑任务`, 'pencil', editTaskRaw, '', 'edit') : null
   );
 }
 
@@ -2929,7 +2998,7 @@ function checklist(task) {
           icon('check')
         ),
         h('span', { class: 'step' }, h('span', { html: inline(esc(it.text)) }), !it.done && it.note ? h('small', { html: inline(esc(it.note)) }) : null),
-        h('button', { class: 'x', 'aria-label': '删除这一步', 'data-tip': '删除', onclick: () => editStep({ op: 'remove', index: i }, () => S.st.project.task.items.splice(i, 1)) }, icon('x'))
+        h('button', { class: 'x', 'aria-label': T`删除这一步`, 'data-tip': T`删除`, onclick: () => editStep({ op: 'remove', index: i }, () => S.st.project.task.items.splice(i, 1)) }, icon('x'))
       );
     }),
     h(
@@ -2938,8 +3007,8 @@ function checklist(task) {
       icon('plus'),
       h('input', {
         type: 'text',
-        placeholder: '加一步',
-        'aria-label': '加一步',
+        placeholder: T`加一步`,
+        'aria-label': T`加一步`,
         onkeydown: (e) => {
           if (e.isComposing || e.keyCode === 229 || e.key !== 'Enter' || !e.target.value.trim()) return;
           const text = e.target.value.trim();
@@ -2957,7 +3026,7 @@ function talkRow(r) {
     return h(
       'div',
       { class: 'me' },
-      h('span', { class: 'cap' }, [r.mode === 'solo' ? '对比' : '', clock(r.ts)].filter(Boolean).join(' · ')),
+      h('span', { class: 'cap' }, [r.mode === 'solo' ? T`对比` : '', clock(r.ts)].filter(Boolean).join(' · ')),
       body ? h('div', { class: 'note', html: inline(esc(body)) }) : null,
       files.length ? h('div', { class: 'att' }, files.map(fileEl)) : null
     );
@@ -2982,7 +3051,7 @@ function foldable(box, text) {
         if (!still()) box.animate([{ height: `${from}px`, overflow: 'hidden' }, { height: `${box.offsetHeight}px`, overflow: 'hidden' }], { duration: 280, easing: EASE.snap });
       },
     },
-    '展开'
+    T`展开`
   );
   return [box, btn];
 }
@@ -2994,12 +3063,12 @@ function aiRow(r, compact) {
     { class: 'ai' },
     h('span', { class: 'who-tile', 'data-tip': memberByName(r.agent) ? memberTip(memberByName(r.agent)) : name }, tile({ agent: r.agent, label: r.who, model: r.model })),
     h('div', null, h('div', { class: 'who' }, h('b', null, name), compact ? null : h('span', { class: 'time' }, clock(r.ts))), ...foldable(h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) }), r.text)),
-    compact ? null : h('div', { class: 'hover-acts' }, iconBtn('复制', 'copy', () => copyToast(r.text)))
+    compact ? null : h('div', { class: 'hover-acts' }, iconBtn(T`复制`, 'copy', () => copyToast(r.text)))
   );
 }
 
 function roundBox(rows) {
-  return h('div', { class: 'round' }, h('span', { class: 'cap' }, `对比 · ${rows.length}`), h('div', { class: 'round-cols' }, rows.map((r) => aiRow(r, true))));
+  return h('div', { class: 'round' }, h('span', { class: 'cap' }, T`对比 · ${rows.length}`), h('div', { class: 'round-cols' }, rows.map((r) => aiRow(r, true))));
 }
 
 function typingLine(st) {
@@ -3009,13 +3078,13 @@ function typingLine(st) {
     { class: 'typing' },
     h('span', { class: 'tiles' }, st.speaking.map((x) => tile({ agent: x.agent, label: x.label })), st.queue.map((x) => tile({ agent: x.agent, label: x.label }, '', 'cooling'))),
     h('span', { class: 'dots' }, h('i'), h('i'), h('i')),
-    names.length ? `${names.join('、')} 正在输入` : '排队中'
+    names.length ? T`${names.join(T`、`)} 正在输入` : T`排队中`
   );
 }
 
 function rollbackLine(rb) {
-  const note = rb.interrupted ? ' · 中途停了，文件可能只退回了一部分' : rb.left && rb.left.length ? ` · ${rb.left.length} 个文件没退回` : '';
-  return h('div', { class: 'sys', 'data-tip': rb.left && rb.left.length ? rb.left.slice(0, 8).join('\n') : null }, icon('undo'), `${clock(rb.ts)} 退回到${rb.label} · 第 ${rb.dropped.join('、')} 棒作废${note}`, rb.undone ? '· 已撤销' : h('button', { class: 'link', onclick: (e) => undoRollback(e.currentTarget) }, '撤销'));
+  const note = rb.interrupted ? T` · 中途停了，文件可能只退回了一部分` : rb.left && rb.left.length ? T` · ${rb.left.length} 个文件没退回` : '';
+  return h('div', { class: 'sys', 'data-tip': rb.left && rb.left.length ? rb.left.slice(0, 8).join('\n') : null }, icon('undo'), T`${clock(rb.ts)} 退回到${rb.label} · 第 ${rb.dropped.join(T`、`)} 棒作废${note}`, rb.undone ? T`· 已撤销` : h('button', { class: 'link', onclick: (e) => undoRollback(e.currentTarget) }, T`撤销`));
 }
 
 /**
@@ -3024,8 +3093,8 @@ function rollbackLine(rb) {
  */
 function verdictEl(g, a) {
   const state = a ? a.state : { done: 'accepted', 'needs-human': 'blocked', failed: 'failed', stopped: 'stopped' }[g.status];
-  const [ic, title] = { accepted: ['check', '验收通过'], blocked: ['warn', a ? '验收没过' : '全自动停止'], unknown: ['unknown', '没法验收'], failed: ['warn', '全自动出错'], stopped: ['stop', '全自动已停止'] }[state];
-  const why = (a ? (a.state === 'accepted' ? a.headline : a.items.map((i) => i.text).join('；')) : g.result).replace(/^(验收通过|验收没过|没法验收|全自动停止|全自动已停止)：/, '');
+  const [ic, title] = { accepted: ['check', T`验收通过`], blocked: ['warn', a ? T`验收没过` : T`全自动停止`], unknown: ['unknown', T`没法验收`], failed: ['warn', T`全自动出错`], stopped: ['stop', T`全自动已停止`] }[state];
+  const why = a ? (a.state === 'accepted' ? tr(a.headline.replace(/^验收通过：/, '')) : a.items.map((i) => tr(i.text)).join(T`；`)) : tr(g.result.replace(/^(验收通过|验收没过|没法验收|全自动停止|全自动已停止)：/, ''));
   const body = [state === 'blocked' || state === 'failed' ? h('span', { class: 'rd' }) : null, title];
   return h(
     'div',
@@ -3033,10 +3102,10 @@ function verdictEl(g, a) {
     h('span', { class: 'no', 'aria-hidden': 'true' }, ic === 'unknown' ? '?' : icon(ic)),
     a ? h('button', { class: 'vt', 'aria-haspopup': 'dialog', onclick: acceptPanel }, body) : h('div', { class: 'vt' }, body),
     why ? h('p', { class: 'why' }, why) : null,
-    g ? h('span', { class: 'cap' }, [clock(g.updatedAt), g.mode === 'auto' ? (g.dispatch ? '派活' : '全自动') : '', g.stints && g.stints.length ? `${g.stints.length} 棒` : '', lasted(g.startedAt, g.updatedAt), tokenSplit(g.stints || [])].filter(Boolean).join(' · ')) : null,
+    g ? h('span', { class: 'cap' }, [clock(g.updatedAt), g.mode === 'auto' ? (g.dispatch ? T`派活` : T`全自动`) : '', g.stints && g.stints.length ? T`${g.stints.length} 棒` : '', lasted(g.startedAt, g.updatedAt), tokenSplit(g.stints || [])].filter(Boolean).join(' · ')) : null,
     g
       ? iconBtn(
-          '收起',
+          T`收起`,
           'x',
           () => {
             S.dismissed = g.id;
@@ -3052,7 +3121,7 @@ function verdictEl(g, a) {
 
 function protocolLine() {
   const p = S.st.project;
-  return h('div', { class: 'sys' }, icon('warn'), p.protocol === 'old' ? '接力规矩有新版本' : '接力规矩不见了', h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已更新') }, '更新'));
+  return h('div', { class: 'sys' }, icon('warn'), p.protocol === 'old' ? T`接力规矩有新版本` : T`接力规矩不见了`, h('button', { class: 'link', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), T`已更新`) }, T`更新`));
 }
 
 // ----- 一棒：卡片 -----
@@ -3065,21 +3134,22 @@ function countedReview(s) {
 const FAILED = new Set(['quota', 'failed', 'stopped']);
 
 function summaryOf(s) {
-  if (s.summary) return { text: s.summary };
-  if (s.status === 'working') return { text: s.via === 'relay' ? '开始了' : '正在改文件', faint: true };
-  if (s.note && FAILED.has(s.status)) return { text: s.note };
-  if (s.kind === 'review' || s.kind === 'plan') return { text: s.kind === 'plan' ? '拆解' : '复核', faint: true };
-  return { text: s.ghost || !s.handoff ? '没有交接' : '交接里没写做了什么', faint: true };
+  // 派活的一棒是「第 3 步：……」（接力台写的前缀）；后面是人写的步骤，不翻
+  if (s.summary) return { text: LANG.zh ? s.summary : s.summary.replace(/^第 (\d+) 步：/, 'Step $1: ') };
+  if (s.status === 'working') return { text: s.via === 'relay' ? T`开始了` : T`正在改文件`, faint: true };
+  if (s.note && FAILED.has(s.status)) return { text: tr(s.note) };
+  if (s.kind === 'review' || s.kind === 'plan') return { text: s.kind === 'plan' ? T`拆解` : T`复核`, faint: true };
+  return { text: s.ghost || !s.handoff ? T`没有交接` : T`交接里没写做了什么`, faint: true };
 }
 
 /** 一棒是谁做的、现在什么状态：机器的标签，细边框加一个小图标。 */
 function pillOf(s) {
-  if (s.status === 'working') return h('span', { class: 'pill live' }, h('span', { class: 'dot' }), s.via === 'relay' ? KIND_WORD[s.kind] : '进行中');
-  if (s.rolledBack) return h('span', { class: 'pill soft' }, '作废');
-  if (s.kind === 'final' && s.verdictWord) return h('span', { class: 'pill' }, icon('search'), `终审 · ${s.verdictWord}`);
-  if (s.kind === 'review') return h('span', { class: 'pill' }, icon('review'), '复核');
-  if (s.kind === 'plan') return h('span', { class: 'pill' }, icon('list'), '拆解');
-  const [ic, word] = { handed: ['arrow', '已交接'], unfinished: ['', '没交接'], quota: ['', `额度用完${s.quotaUntil ? ` · ${clock(s.quotaUntil)} 恢复` : ''}`], failed: ['', '出错'], stopped: ['stop', '已停止'] }[s.status] || [];
+  if (s.status === 'working') return h('span', { class: 'pill live' }, h('span', { class: 'dot' }), s.via === 'relay' ? KIND_WORD[s.kind] : T`进行中`);
+  if (s.rolledBack) return h('span', { class: 'pill soft' }, T`作废`);
+  if (s.kind === 'final' && s.verdictWord) return h('span', { class: 'pill' }, icon('search'), T`终审 · ${tr(s.verdictWord)}`);
+  if (s.kind === 'review') return h('span', { class: 'pill' }, icon('review'), T`复核`);
+  if (s.kind === 'plan') return h('span', { class: 'pill' }, icon('list'), T`拆解`);
+  const [ic, word] = { handed: ['arrow', T`已交接`], unfinished: ['', T`没交接`], quota: ['', T`额度用完${s.quotaUntil ? T` · ${clock(s.quotaUntil)} 恢复` : ''}`], failed: ['', T`出错`], stopped: ['stop', T`已停止`] }[s.status] || [];
   if (!word) return null;
   return h('span', { class: `pill${s.status === 'handed' ? '' : ' soft'}` }, s.status === 'failed' ? h('span', { class: 'rd' }) : ic ? icon(ic) : null, word);
 }
@@ -3089,7 +3159,7 @@ function spanOf(s) {
   if (s.status === 'working') return h('span', { class: 'tm', 'data-since': s.startedAt }, elapsed(s.startedAt));
   const from = dayClock(s.startedAt);
   const to = s.endedAt ? clock(s.endedAt) : '';
-  return h('span', { class: 'tm' }, `${from}${to && to !== clock(s.startedAt) ? `–${to}` : ''}${s.endedAt ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}${s.tokens ? ` · ${tokenText(s.tokens.input + s.tokens.output)} token` : ''}`);
+  return h('span', { class: 'tm' }, `${from}${to && to !== clock(s.startedAt) ? `–${to}` : ''}${s.endedAt ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}${s.tokens ? ` · ${tokenText(s.tokens.input + s.tokens.output)} ${L('token')}` : ''}`);
 }
 
 /** 一棒：钉在线路上的一张小条。没交接、身份不明的是虚线；什么都没干的只留一行。 */
@@ -3136,9 +3206,9 @@ function stintCard(s) {
         'div',
         { class: 'who' },
         h('span', { class: 'who-tile', 'data-tip': whoTip(s.who) }, tile(s.who)),
-        h('b', null, name === '不知道是谁' ? '身份不明' : name),
+        h('b', null, name === '不知道是谁' ? T`身份不明` : name),
         // 只写「弱」：弱模型的棒要复核，强的不用标
-        s.who.tier === 'weak' ? h('span', { class: 'mdl' }, '弱') : null,
+        s.who.tier === 'weak' ? h('span', { class: 'mdl' }, T`弱`) : null,
         pillOf(s),
         compact ? h('span', { class: 'say' }, sum.text) : null,
         spanOf(s)
@@ -3148,7 +3218,7 @@ function stintCard(s) {
       live && s.via === 'relay' ? h('pre', { class: 'tail', 'data-stint': String(s.id), hidden: true }) : null,
       h('div', { class: 'more-body' }, h('div', null))
     ),
-    h('div', { class: 'hover-acts' }, files ? iconBtn('改动', 'diff', () => openDiff(s.id)) : null, iconBtn('更多', 'more', (e) => openMenu(e.currentTarget, stintMenuItems(s), { align: 'end' })))
+    h('div', { class: 'hover-acts' }, files ? iconBtn(T`改动`, 'diff', () => openDiff(s.id)) : null, iconBtn(T`更多`, 'more', (e) => openMenu(e.currentTarget, stintMenuItems(s), { align: 'end' })))
   );
 }
 
@@ -3158,8 +3228,8 @@ function cardFoot(s) {
   const st = (cls, ...kids) => h('span', { class: `st ${cls}`.trim() }, ...kids);
   if (!s.rolledBack && s.review === 'needed' && s.status !== 'working') {
     // 为什么还待复核：复核写了「有问题」「证据不足」、只有弱模型复核过、读不到改动……
-    const why = s.reviewText.replace(/^待复核( · )?/, '');
-    const el = st('pend', h('span', { class: 'rd' }), h('span', { class: 'ell' }, s.reviewWarn && why ? why.replace(/（[^）]*）$/, '') : '待复核'));
+    const why = tr(s.reviewText.replace(/^待复核( · )?/, ''));
+    const el = st('pend', h('span', { class: 'rd' }), h('span', { class: 'ell' }, s.reviewWarn && why ? why.replace(/（[^）]*）$/, '') : T`待复核`));
     if (why) el.dataset.tip = why;
     bits.push(el);
   } else if (!s.rolledBack && s.review === 'done') {
@@ -3167,23 +3237,23 @@ function cardFoot(s) {
     const c = countedReview(s);
     const by = c && stintById(c.by);
     const who = by ? by.who : c && { label: c.byLabel, tier: 'strong' };
-    if (c) bits.push(h('button', { class: 'st ok link-st', 'data-tip': whoTip(who), onclick: () => by && jumpTo(by.id) }, tile(who, 's16'), `复核 · ${c.verdictWord}`));
+    if (c) bits.push(h('button', { class: 'st ok link-st', 'data-tip': whoTip(who), onclick: () => by && jumpTo(by.id) }, tile(who, 's16'), T`复核 · ${tr(c.verdictWord)}`));
   }
   const warn = (text, tip) => {
     const el = st('bad', h('span', { class: 'rd' }), text);
     if (tip) el.dataset.tip = tip;
     bits.push(el);
   };
-  if (s.factsError) warn('读不到改动', s.factsError);
-  if (s.gate && s.gate.status === 'fail') warn('检查没过');
-  if (s.gate && s.gate.status === 'error') warn('检查没跑成', s.gate.detail);
-  if (s.protectedHits) warn('改了不许改的文件', s.protectedHits.join('\n'));
+  if (s.factsError) warn(T`读不到改动`, s.factsError);
+  if (s.gate && s.gate.status === 'fail') warn(T`检查没过`);
+  if (s.gate && s.gate.status === 'error') warn(T`检查没跑成`, s.gate.detail);
+  if (s.protectedHits) warn(T`改了不许改的文件`, s.protectedHits.join('\n'));
   // 复核、并进了复核的终审：列出复核了哪几棒、结论是什么
   if (s.kind !== 'work' && s.targets) {
     for (const id of s.targets) {
       const tg = stintById(id);
       const r = tg && (tg.reviews || []).find((x) => x.by === s.id);
-      bits.push(h('button', { class: 'st link-st', onclick: () => jumpTo(id) }, `第 ${id} 棒${r ? ` · ${r.verdictWord}` : ''}${r && r.weak ? ' · 不算数' : ''}`));
+      bits.push(h('button', { class: 'st link-st', onclick: () => jumpTo(id) }, T`第 ${id} 棒${r ? ` · ${tr(r.verdictWord)}` : ''}${r && r.weak ? T` · 不算数` : ''}`));
     }
   }
   const f = s.facts;
@@ -3194,10 +3264,10 @@ function cardFoot(s) {
         'button',
         {
           class: 'st link-st',
-          'data-tip': shown.join('\n') + (f.files > shown.length ? `\n… 一共 ${f.files} 个` : ''),
+          'data-tip': shown.join('\n') + (f.files > shown.length ? T`\n… 一共 ${f.files} 个` : ''),
           onclick: () => openDiff(s.id, f.files === 1 ? f.paths[0] : undefined),
         },
-        h('span', { class: 'ell' }, f.files === 1 ? basename(f.paths[0]) : `${f.files} 个文件`),
+        h('span', { class: 'ell' }, f.files === 1 ? basename(f.paths[0]) : T`${f.files} 个文件`),
         h('span', { class: 'num' }, `+${f.added} −${f.removed}`)
       )
     );
@@ -3209,13 +3279,13 @@ function stintMenuItems(s) {
   const pending = s.review === 'needed' && s.status !== 'working' && !s.rolledBack;
   const rv = reviewer();
   return [
-    s.facts && s.facts.files ? { label: '改动', icon: 'diff', run: () => openDiff(s.id) } : null,
-    s.log ? { label: '日志', icon: 'log', run: () => openLog(s) } : null,
-    s.handoff ? { label: '复制交接', icon: 'copy', run: () => copyHandoff(s) } : null,
+    s.facts && s.facts.files ? { label: T`改动`, icon: 'diff', run: () => openDiff(s.id) } : null,
+    s.log ? { label: T`日志`, icon: 'log', run: () => openLog(s) } : null,
+    s.handoff ? { label: T`复制交接`, icon: 'copy', run: () => copyHandoff(s) } : null,
     '-',
-    pending ? { label: '复核', sub: rv ? rv.label : '没有可用的强模型', icon: 'review', disabled: !rv || runState().running, run: () => goWith(null, rv, 'review') } : null,
-    pending ? { label: '跳过复核', icon: 'check', run: () => skipReview(null, s) } : null,
-    !s.rolledBack && s.status !== 'working' ? { label: '退回到这之前', icon: 'undo', disabled: S.st.project.now.kind === 'relay', run: () => rollbackTo(null, s) } : null,
+    pending ? { label: T`复核`, sub: rv ? rv.label : T`没有可用的强模型`, icon: 'review', disabled: !rv || runState().running, run: () => goWith(null, rv, 'review') } : null,
+    pending ? { label: T`跳过复核`, icon: 'check', run: () => skipReview(null, s) } : null,
+    !s.rolledBack && s.status !== 'working' ? { label: T`退回到这之前`, icon: 'undo', disabled: S.st.project.now.kind === 'relay', run: () => rollbackTo(null, s) } : null,
   ];
 }
 
@@ -3252,7 +3322,7 @@ async function loadDetail(id) {
     const s = stintById(id);
     if (el && s) fillDetail(el, s);
   } catch (e) {
-    if (!stale(t)) fail('读取这一棒', e);
+    if (!stale(t)) fail(T`读取这一棒`, e);
   } finally {
     detailLoading.delete(id);
   }
@@ -3264,10 +3334,10 @@ function fillDetail(el, s) {
 }
 
 const SECTION = [
-  [/做了/, '做了'],
-  [/没做完|下一步/, '没做完'],
-  [/不确定|拿不准|可能有错/, '拿不准'],
-  [/验证/, '验证'],
+  [/做了/, T`做了`],
+  [/没做完|下一步/, T`没做完`],
+  [/不确定|拿不准|可能有错/, T`拿不准`],
+  [/验证/, T`验证`],
 ];
 
 /** 交接单：像一张实验记录表。交接里的每一节是一行（做了、没做完、拿不准、验证），最后一行是改了哪些文件。 */
@@ -3286,21 +3356,21 @@ function handoffForm(s, text) {
     const body = x.body.join('\n').trim();
     if (body) rows.push(h('dt', null, (SECTION.find(([re]) => re.test(x.head)) || [])[1] || x.head.slice(0, 5)), h('dd', { class: 'doc-md', html: md(body) }));
   }
-  if (!secs.length && text.trim()) rows.push(h('dt', null, '交接'), h('dd', { class: 'doc-md', html: md(text.replace(/^#\s+.*\n+/, '')) }));
+  if (!secs.length && text.trim()) rows.push(h('dt', null, T`交接`), h('dd', { class: 'doc-md', html: md(text.replace(/^#\s+.*\n+/, '')) }));
   const f = s.facts;
   if (f && f.files) {
     rows.push(
-      h('dt', null, '改了'),
+      h('dt', null, T`改了`),
       h(
         'dd',
         { class: 'files' },
         f.paths.slice(0, 12).map((p) => h('button', { onclick: () => openDiff(s.id, p), onmouseenter: () => lightPaths([p]), onmouseleave: () => lightStint(s) }, p)),
-        f.files > 12 ? h('em', null, `… 一共 ${f.files} 个`) : null,
+        f.files > 12 ? h('em', null, T`… 一共 ${f.files} 个`) : null,
         h('em', null, `+${f.added} −${f.removed}`)
       )
     );
   }
-  return h('div', { class: 'form' }, h('div', { class: 'fh' }, h('span', { class: 'cap' }, `交接单 · 第 ${s.id} 棒${s.ghost ? ' · 接力台代写' : ''}`), status ? h('span', { class: 'cap' }, status) : null), h('dl', null, rows));
+  return h('div', { class: 'form' }, h('div', { class: 'fh' }, h('span', { class: 'cap' }, T`交接单 · 第 ${s.id} 棒${s.ghost ? T` · 接力台代写` : ''}`), status ? h('span', { class: 'cap' }, status) : null), h('dl', null, rows));
 }
 
 function detailBox(s) {
@@ -3311,7 +3381,7 @@ function detailBox(s) {
     return box;
   }
   if (d.handoff || (s.facts && s.facts.files)) box.append(handoffForm(s, d.handoff || ''));
-  if (s.who.claimed && s.who.claimed !== s.who.label) box.append(h('p', { class: 'aside' }, `交接里写的是「${s.who.claimed}」`));
+  if (s.who.claimed && s.who.claimed !== s.who.label) box.append(h('p', { class: 'aside' }, T`交接里写的是「${s.who.claimed}」`));
   for (const r of d.reviews) {
     // 复核人：按复核文件找到那一棒，用它记下的身份（名字、模型、强弱）；终审自己写的就是这一棒
     const mark = (s.reviews || []).find((x) => x.file === r.file);
@@ -3322,23 +3392,23 @@ function detailBox(s) {
       h(
         'div',
         { class: `review-box${r.weak ? ' weak' : ''}` },
-        h('div', { class: 'rb-head' }, tile(who, 's16'), h('b', null, byName === '不知道是谁' ? '身份不明' : byName), r.weak ? h('span', null, '不算数') : null),
+        h('div', { class: 'rb-head' }, tile(who, 's16'), h('b', null, byName === '不知道是谁' ? T`身份不明` : byName), r.weak ? h('span', null, T`不算数`) : null),
         h('div', { class: 'doc-md', html: md(r.text.replace(/^#\s+.*\n+/, '')) })
       )
     );
   }
-  if (s.gate) box.append(h('section', null, h('h5', null, '检查'), h('div', { class: 'pre' }, `${{ pass: '通过', fail: '没通过', error: '没跑成' }[s.gate.status] || s.gate.status}${s.gate.command ? ` · ${s.gate.command}` : ''}${s.gate.detail ? `\n\n${s.gate.detail}` : ''}`)));
-  if (s.note && summaryOf(s).text !== s.note) box.append(h('section', null, h('h5', null, '说明'), h('p', { class: 'aside' }, s.note)));
+  if (s.gate) box.append(h('section', null, h('h5', null, T`检查`), h('div', { class: 'pre' }, `${{ pass: T`通过`, fail: T`没通过`, error: T`没跑成` }[s.gate.status] || s.gate.status}${s.gate.command ? ` · ${s.gate.command}` : ''}${s.gate.detail ? `\n\n${s.gate.detail}` : ''}`)));
+  if (s.note && summaryOf(s).text !== tr(s.note)) box.append(h('section', null, h('h5', null, T`说明`), h('p', { class: 'aside' }, tr(s.note))));
   const acts = [];
   const pending = s.review === 'needed' && s.status !== 'working' && !s.rolledBack;
-  if (s.facts && s.facts.files) acts.push(h('button', { class: 'btn small', onclick: () => openDiff(s.id) }, icon('diff'), '改动'));
-  if (s.log) acts.push(h('button', { class: 'btn small', onclick: () => openLog(s) }, icon('log'), '日志'));
+  if (s.facts && s.facts.files) acts.push(h('button', { class: 'btn small', onclick: () => openDiff(s.id) }, icon('diff'), T`改动`));
+  if (s.log) acts.push(h('button', { class: 'btn small', onclick: () => openLog(s) }, icon('log'), T`日志`));
   if (pending) {
     const rv = reviewer();
-    if (rv) acts.push(h('button', { class: 'btn small primary', disabled: runState().running, onclick: (e) => goWith(e.currentTarget, rv, 'review') }, icon('review'), '复核'));
-    acts.push(h('button', { class: 'btn small', onclick: (e) => skipReview(e.currentTarget, s) }, '跳过复核'));
+    if (rv) acts.push(h('button', { class: 'btn small primary', disabled: runState().running, onclick: (e) => goWith(e.currentTarget, rv, 'review') }, icon('review'), T`复核`));
+    acts.push(h('button', { class: 'btn small', onclick: (e) => skipReview(e.currentTarget, s) }, T`跳过复核`));
   }
-  if (!s.rolledBack && s.status !== 'working') acts.push(h('button', { class: 'btn small ghost', disabled: S.st.project.now.kind === 'relay', onclick: (e) => rollbackTo(e.currentTarget, s) }, icon('undo'), '退回到这之前'));
+  if (!s.rolledBack && s.status !== 'working') acts.push(h('button', { class: 'btn small ghost', disabled: S.st.project.now.kind === 'relay', onclick: (e) => rollbackTo(e.currentTarget, s) }, icon('undo'), T`退回到这之前`));
   if (acts.length) box.append(h('div', { class: 'acts' }, acts));
   return box;
 }
@@ -3352,7 +3422,7 @@ async function copyHandoff(s) {
       if (stale(t)) return;
       S.detail.set(s.id, d);
     } catch (e) {
-      return stale(t) ? undefined : fail('复制交接', e);
+      return stale(t) ? undefined : fail(T`复制交接`, e);
     }
   }
   copyToast(d.handoff || '');
@@ -3361,29 +3431,29 @@ async function copyHandoff(s) {
 async function skipReview(btn, s) {
   if (!S.st) return;
   const { root, name } = S.st.project;
-  const who = s.who.tier === 'unknown' ? '身份不明' : s.who.tier === 'weak' ? '弱模型' : '还没复核';
-  if (!(await confirmSheet(`跳过第 ${s.id} 棒的复核？`, `「${name}」第 ${s.id} 棒（${who}）跳过后不再等复核。可以撤销。`, '跳过复核'))) return;
-  if (!S.st || S.st.project.root !== root) return fail('跳过复核', '项目已经换了');
+  const who = s.who.tier === 'unknown' ? T`身份不明` : s.who.tier === 'weak' ? T`弱模型` : T`还没复核`;
+  if (!(await confirmSheet(T`跳过第 ${s.id} 棒的复核？`, T`「${name}」第 ${s.id} 棒（${who}）跳过后不再等复核。可以撤销。`, T`跳过复核`))) return;
+  if (!S.st || S.st.project.root !== root) return fail(T`跳过复核`, T`项目已经换了`);
   const r = await act(btn, () => api('/api/mark', { dir: root, stint: s.id }));
-  if (r) toast(`第 ${s.id} 棒已跳过复核`, { action: { label: '撤销', run: () => act(null, () => api('/api/mark', { dir: root, stint: s.id, review: 'needed' }), '已改回待复核') } });
+  if (r) toast(T`第 ${s.id} 棒已跳过复核`, { action: { label: T`撤销`, run: () => act(null, () => api('/api/mark', { dir: root, stint: s.id, review: 'needed' }), T`已改回待复核`) } });
 }
 
 async function rollbackTo(btn, s) {
   if (!S.st) return;
   const { root, name } = S.st.project;
-  if (!(await confirmSheet(`退回到第 ${s.id} 棒之前？`, `「${name}」第 ${s.id} 棒和之后的改动作废，清单里对应的勾去掉。可以撤销。`, '退回'))) return;
-  if (!S.st || S.st.project.root !== root) return fail('退回', '项目已经换了');
+  if (!(await confirmSheet(T`退回到第 ${s.id} 棒之前？`, T`「${name}」第 ${s.id} 棒和之后的改动作废，清单里对应的勾去掉。可以撤销。`, T`退回`))) return;
+  if (!S.st || S.st.project.root !== root) return fail(T`退回`, T`项目已经换了`);
   const r = await act(btn, () => api('/api/rollback', { dir: root, stint: s.id }));
   if (r) {
-    const tk = r.task && r.task.missing ? ' · 清单没跟着退回（旧账本）' : r.task && r.task.unchecked.length ? ` · 清单去掉 ${r.task.unchecked.length} 个勾` : '';
-    const left = r.left && r.left.length ? ` · ${r.left.length} 个文件没退回` : '';
-    toast(`已退回 · ${r.files} 个文件${left}${tk}`, { action: { label: '撤销', run: () => undoRollback(null) } });
+    const tk = r.task && r.task.missing ? T` · 清单没跟着退回（旧账本）` : r.task && r.task.unchecked.length ? T` · 清单去掉 ${r.task.unchecked.length} 个勾` : '';
+    const left = r.left && r.left.length ? T` · ${r.left.length} 个文件没退回` : '';
+    toast(T`已退回 · ${r.files} 个文件${left}${tk}`, { action: { label: T`撤销`, run: () => undoRollback(null) } });
     loadTree();
   }
 }
 
 function undoRollback(btn) {
-  act(btn, () => api('/api/rollback/undo', {}), '已撤销').then(() => loadTree());
+  act(btn, () => api('/api/rollback/undo', {}), T`已撤销`).then(() => loadTree());
 }
 
 /** 跳到某一棒：不在当前这段对话里就先切过去，然后闪一下。 */
@@ -3440,7 +3510,7 @@ function talkNews() {
 
 function sessionEl(x) {
   const live = x.id ? !!x.busy : talkLive();
-  return h('button', { class: 'thread', 'data-id': `chat:${x.id}`, onclick: () => selectChat(x.id || null) }, h('span', { class: 't' }, x.title), h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : x.at ? when(x.at) : '现在'));
+  return h('button', { class: 'thread', 'data-id': `chat:${x.id}`, onclick: () => selectChat(x.id || null) }, h('span', { class: 't' }, x.title), h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : x.at ? when(x.at) : T`现在`));
 }
 
 function selectChat(id) {
@@ -3463,7 +3533,7 @@ async function loadArchive(id) {
     S.archive = d;
     renderCenter();
   } catch (e) {
-    if (!stale(t)) fail('读取群聊记录', e);
+    if (!stale(t)) fail(T`读取群聊记录`, e);
   }
 }
 
@@ -3473,7 +3543,7 @@ async function newChat() {
     try {
       await api('/api/talk/clear', {});
     } catch (e) {
-      return fail('新建群聊', e);
+      return fail(T`新建群聊`, e);
     }
     streamThread = null;
     await loadTalk();
@@ -3550,7 +3620,7 @@ function renderTalk() {
 function renderChatBar() {
   const p = S.st.project;
   const old = S.chat && (S.talk.sessions || []).find((x) => x.id === S.chat);
-  const title = old ? old.title : talkTitle(S.talk) || '群聊';
+  const title = old ? old.title : talkTitle(S.talk) || T`群聊`;
   const sig = JSON.stringify(['chat', p.name, S.chat, title, old && old.at, UI.noLeft, UI.noRight, narrow()]);
   if (sig === barSig) return;
   barSig = sig;
@@ -3582,10 +3652,10 @@ function voteCard(v, live = true) {
       'span',
       { class: 'cap' },
       v.status === 'proposing'
-        ? ['投票 · 出方案 ', dots]
+        ? [T`投票 · 出方案 `, dots]
         : v.status === 'voting'
-          ? [`投票中 ${aiBallots.length}/${v.voters.length}`, h('span', { class: 'tally', 'aria-hidden': 'true' }, v.voters.map((_, i) => h('i', { class: i < aiBallots.length ? 'on' : i === aiBallots.length ? 'next' : null })))]
-          : `投票 · ${total} 票`
+          ? [T`投票中 ${aiBallots.length}/${v.voters.length}`, h('span', { class: 'tally', 'aria-hidden': 'true' }, v.voters.map((_, i) => h('i', { class: i < aiBallots.length ? 'on' : i === aiBallots.length ? 'next' : null })))]
+          : T`投票 · ${total} 票`
     ),
     h('p', { class: 'q' }, v.question)
   );
@@ -3593,8 +3663,8 @@ function voteCard(v, live = true) {
     box.append(h('div', { class: 'opts' }, v.voters.map((_, i) => h('div', { class: 'skel', style: `width:${80 - i * 12}%;margin:10px 0` }))));
     return box;
   }
-  if (v.error) box.append(h('div', { class: 'sys' }, h('span', { class: 'rd' }), v.error));
-  const me = () => h('span', { class: 'tile human', 'data-tip': '我' }, '我');
+  if (v.error) box.append(h('div', { class: 'sys' }, h('span', { class: 'rd' }), tr(v.error)));
+  const me = () => h('span', { class: 'tile human', 'data-tip': T`我` }, T`我`);
   const opts = h('div', { class: 'opts' });
   for (const o of v.options) {
     const n = counts[o.key] || 0;
@@ -3608,7 +3678,7 @@ function voteCard(v, live = true) {
           class: `opt${lead ? ' lead' : ''}${adopted ? ' adopted' : ''}${v.adopted && !adopted ? ' dim' : ''}`,
           role: cast ? 'button' : null,
           tabindex: cast ? '0' : null,
-          'aria-label': cast ? `投方案 ${o.key}` : null,
+          'aria-label': cast ? T`投方案 ${o.key}` : null,
           onclick: cast ? (e) => !e.target.closest('.adopt') && castVote(v, o) : null,
           onkeydown: cast ? (e) => (e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget && (e.preventDefault(), castVote(v, o)) : null,
         },
@@ -3619,11 +3689,11 @@ function voteCard(v, live = true) {
         h(
           'span',
           { class: 'by' },
-          done && o.author !== 'human' ? [tile({ agent: o.author, label: o.authorLabel }, 's16'), `${nameOf(o.authorLabel)} 出的方案`] : null,
-          mine && mine.choice === o.key ? h('span', { class: 'mine' }, '已投') : null,
-          adopted ? h('span', { class: 'mine' }, '已采纳') : null
+          done && o.author !== 'human' ? [tile({ agent: o.author, label: o.authorLabel }, 's16'), T`${nameOf(o.authorLabel)} 出的方案`] : null,
+          mine && mine.choice === o.key ? h('span', { class: 'mine' }, T`已投`) : null,
+          adopted ? h('span', { class: 'mine' }, T`已采纳`) : null
         ),
-        live && done && !v.adopted ? h('button', { class: 'btn small primary adopt', onclick: (e) => adopt(e.currentTarget, v, o) }, '采纳') : null
+        live && done && !v.adopted ? h('button', { class: 'btn small primary adopt', onclick: (e) => adopt(e.currentTarget, v, o) }, T`采纳`) : null
       )
     );
   }
@@ -3634,13 +3704,13 @@ function voteCard(v, live = true) {
       h(
         'details',
         { class: 'ballots' },
-        h('summary', { class: 'link' }, `每一票 · ${why.length}`),
+        h('summary', { class: 'link' }, T`每一票 · ${why.length}`),
         why.map((b) =>
           h(
             'div',
             { class: 'b' },
             b.voter === 'human' ? me() : tile({ agent: b.voter, label: b.voterLabel }, 's16'),
-            h('span', null, h('b', null, b.voter === 'human' ? '我' : nameOf(b.voterLabel)), ` · ${b.choice ? `投 ${b.choice}` : `弃权${b.void ? `（${b.void}）` : ''}`}${b.reason ? ` · ${b.reason}` : ''}`)
+            h('span', null, h('b', null, b.voter === 'human' ? T`我` : nameOf(b.voterLabel)), ` · ${b.choice ? T`投 ${b.choice}` : T`弃权${b.void ? T`（${b.void}）` : ''}`}${b.reason ? ` · ${b.reason}` : ''}`)
           )
         )
       )
@@ -3650,11 +3720,11 @@ function voteCard(v, live = true) {
 }
 
 function castVote(v, o) {
-  act(null, () => api('/api/vote/cast', { id: v.id, key: o.key }), `已投方案 ${o.key}`).then(loadTalk);
+  act(null, () => api('/api/vote/cast', { id: v.id, key: o.key }), T`已投方案 ${o.key}`).then(loadTalk);
 }
 
 function adopt(btn, v, o) {
-  act(btn, () => api('/api/vote/adopt', { id: v.id, key: o.key }), `已采纳方案 ${o.key}`).then(loadTalk);
+  act(btn, () => api('/api/vote/adopt', { id: v.id, key: o.key }), T`已采纳方案 ${o.key}`).then(loadTalk);
 }
 
 // ----- 页签：打开的文件、改动、接力本、日志 -----
@@ -3688,9 +3758,9 @@ function closeTab(i) {
 
 function tabLabel(t) {
   if (t.type === 'file') return basename(t.path);
-  if (t.type === 'diff') return t.path ? `${basename(t.path)} · 第 ${t.id} 棒` : `第 ${t.id} 棒 · 改动`;
-  if (t.type === 'log') return `第 ${t.id} 棒 · 日志`;
-  return '接力本';
+  if (t.type === 'diff') return t.path ? T`${basename(t.path)} · 第 ${t.id} 棒` : T`第 ${t.id} 棒 · 改动`;
+  if (t.type === 'log') return T`第 ${t.id} 棒 · 日志`;
+  return T`接力本`;
 }
 
 function renderTabs() {
@@ -3700,7 +3770,7 @@ function renderTabs() {
   const chat = S.view === 'chat';
   // 新开的页签淡进来，别的页签滑过去让位
   morph(CE.tabs, () => CE.tabs.replaceChildren(
-    h('button', { class: 'tab chat-tab', 'data-k': 'main', role: 'tab', 'aria-selected': String(S.tab === 0), onclick: () => ((S.tab = 0), renderCenter(), scrollBottom()) }, icon(chat ? 'chat' : S.view === 'dispatch' ? 'list' : 'route'), chat ? '群聊' : S.view === 'dispatch' ? '派活' : '任务'),
+    h('button', { class: 'tab chat-tab', 'data-k': 'main', role: 'tab', 'aria-selected': String(S.tab === 0), onclick: () => ((S.tab = 0), renderCenter(), scrollBottom()) }, icon(chat ? 'chat' : S.view === 'dispatch' ? 'list' : 'route'), chat ? T`群聊` : S.view === 'dispatch' ? T`派活` : T`任务`),
     ...S.tabs.map((t, i) =>
       h(
         'div',
@@ -3723,7 +3793,7 @@ function renderTabs() {
         },
         icon(t.type === 'file' ? 'file' : t.type === 'diff' ? 'diff' : t.type === 'log' ? 'log' : 'book'),
         h('span', { class: 'ell' }, tabLabel(t)),
-        h('button', { class: 'x', 'aria-label': '关闭', onclick: () => closeTab(i) }, icon('x'))
+        h('button', { class: 'x', 'aria-label': T`关闭`, onclick: () => closeTab(i) }, icon('x'))
       )
     )
   ), (b) => b.children);
@@ -3805,7 +3875,7 @@ function renderDoc(t) {
   }
   const head = h('div', { class: 'doc-head' });
   const body = h('div', { class: 'doc-body' });
-  if (d && d.error) body.append(h('div', { class: 'empty-note' }, d.error));
+  if (d && d.error) body.append(h('div', { class: 'empty-note' }, tr(d.error)));
   else if (!d || d.loading) body.append(h('div', { class: 'skel', style: 'width:50%;margin:16px 0' }), h('div', { class: 'skel', style: 'width:70%' }));
 
   if (t.type === 'file') {
@@ -3818,14 +3888,14 @@ function renderDoc(t) {
       head.append(
         h(
           'div',
-          { class: 'seg', role: 'group', 'aria-label': '看什么' },
-          h('button', { 'aria-pressed': String(!t.view), onclick: () => ((t.view = 0), (docSig = ''), renderCenter()) }, '内容'),
+          { class: 'seg', role: 'group', 'aria-label': T`看什么` },
+          h('button', { 'aria-pressed': String(!t.view), onclick: () => ((t.view = 0), (docSig = ''), renderCenter()) }, T`内容`),
           who.map((s) =>
             h(
               'button',
               {
                 'aria-pressed': String(t.view === s.id),
-                'data-tip': `第 ${s.id} 棒 · ${nameOf(s.who.label, s.who.model)}`,
+                'data-tip': T`第 ${s.id} 棒 · ${nameOf(s.who.label, s.who.model)}`,
                 onclick: () => {
                   t.view = s.id;
                   docSig = '';
@@ -3833,40 +3903,40 @@ function renderDoc(t) {
                   renderCenter();
                 },
               },
-              `第 ${s.id} 棒`
+              T`第 ${s.id} 棒`
             )
           )
         )
       );
     }
     head.append(
-      iconBtn('引用', 'insert', () => addFile(t.path)),
-      iconBtn('复制路径', 'copy', () => copyToast(t.path)),
-      iconBtn('在访达中显示', 'folder', () => reveal(t.path))
+      iconBtn(T`引用`, 'insert', () => addFile(t.path)),
+      iconBtn(T`复制路径`, 'copy', () => copyToast(t.path)),
+      iconBtn(REVEAL, 'folder', () => reveal(t.path))
     );
     if (t.view) {
       if (!extra || extra.loading) body.append(h('div', { class: 'skel', style: 'width:60%;margin:16px 0' }));
-      else if (extra.error) body.append(h('div', { class: 'empty-note' }, extra.error));
-      else body.append(extra.data.diff ? h('div', { class: 'diff-file' }, h('div', { class: 'diff', html: diffHtml(extra.data.diff) })) : h('div', { class: 'empty-note' }, '这一棒没有改它'));
+      else if (extra.error) body.append(h('div', { class: 'empty-note' }, tr(extra.error)));
+      else body.append(extra.data.diff ? h('div', { class: 'diff-file' }, h('div', { class: 'diff', html: diffHtml(extra.data.diff) })) : h('div', { class: 'empty-note' }, T`这一棒没有改它`));
     } else if (d && d.data) {
       const f = d.data;
-      if (f.binary) body.append(h('div', { class: 'empty-note' }, `二进制文件 · ${size(f.size)}`));
+      if (f.binary) body.append(h('div', { class: 'empty-note' }, T`二进制文件 · ${size(f.size)}`));
       else {
         const lines = f.text.replace(/\n$/, '').split('\n');
         const cap = 4000;
         body.append(h('div', { class: 'code', html: lines.slice(0, cap).map((l) => `<div class="l">${esc(l) || ' '}</div>`).join('') }));
-        if (lines.length > cap || f.truncated) body.append(h('div', { class: 'empty-note' }, '只显示了前面一部分'));
+        if (lines.length > cap || f.truncated) body.append(h('div', { class: 'empty-note' }, T`只显示了前面一部分`));
       }
     }
   } else if (t.type === 'diff') {
     const s = stintById(t.id);
     head.append(
-      h('div', { class: 'crumbs' }, s ? tile(s.who, 's20') : null, h('b', null, `第 ${t.id} 棒`), s ? h('span', null, ` · ${nameOf(s.who.label, s.who.model)}`) : null, t.path ? [icon('chev'), h('span', null, t.path)] : null),
-      ...(t.path ? [h('button', { class: 'btn small ghost', onclick: () => openDiff(t.id) }, '全部文件')] : [])
+      h('div', { class: 'crumbs' }, s ? tile(s.who, 's20') : null, h('b', null, T`第 ${t.id} 棒`), s ? h('span', null, ` · ${nameOf(s.who.label, s.who.model)}`) : null, t.path ? [icon('chev'), h('span', null, t.path)] : null),
+      ...(t.path ? [h('button', { class: 'btn small ghost', onclick: () => openDiff(t.id) }, T`全部文件`)] : [])
     );
     if (d && d.data) {
       const files = splitDiff(d.data.diff);
-      if (!files.length) body.append(h('div', { class: 'empty-note' }, '没有改动'));
+      if (!files.length) body.append(h('div', { class: 'empty-note' }, T`没有改动`));
       for (const f of files) {
         body.append(
           h(
@@ -3882,8 +3952,8 @@ function renderDoc(t) {
                 'button',
                 {
                   class: 'icon-btn',
-                  'aria-label': '打开文件',
-                  'data-tip': '打开文件',
+                  'aria-label': T`打开文件`,
+                  'data-tip': T`打开文件`,
                   onclick: (e) => {
                     e.preventDefault();
                     openFile(f.path);
@@ -3898,11 +3968,11 @@ function renderDoc(t) {
       }
     }
   } else if (t.type === 'log') {
-    head.append(h('div', { class: 'crumbs' }, h('b', null, `第 ${t.id} 棒 · 日志`)));
-    if (d && d.data) body.append(h('pre', { class: 'pre' }, d.data.text || '（空的）'));
+    head.append(h('div', { class: 'crumbs' }, h('b', null, T`第 ${t.id} 棒 · 日志`)));
+    if (d && d.data) body.append(h('pre', { class: 'pre' }, d.data.text || T`（空的）`));
   } else {
-    head.append(h('div', { class: 'crumbs' }, h('b', null, '接力本')));
-    if (d && d.data) body.append(h('div', { class: 'doc-md' }, h('div', { class: 'doc-md', html: md(d.data.text || '（还没有）') })));
+    head.append(h('div', { class: 'crumbs' }, h('b', null, T`接力本`)));
+    if (d && d.data) body.append(h('div', { class: 'doc-md' }, h('div', { class: 'doc-md', html: md(d.data.text || T`（还没有）`) })));
   }
   CE.doc.replaceChildren(h('div', { class: 'doc-pane' }, head, body));
 }
@@ -3914,7 +3984,7 @@ const C = {};
 function buildComposer() {
   C.attach = h('div', { class: 'attach' });
   C.pill = h('span', { class: 'slash-pill', hidden: true });
-  C.ta = h('textarea', { rows: '1', 'aria-label': '输入', oninput: onComposerInput, onkeydown: onComposerKey, onclick: updateSuggest, onpaste: onComposerPaste });
+  C.ta = h('textarea', { rows: '1', 'aria-label': T`输入`, oninput: onComposerInput, onkeydown: onComposerKey, onclick: updateSuggest, onpaste: onComposerPaste });
   C.fileIn = h('input', {
     type: 'file',
     multiple: true,
@@ -3924,11 +3994,11 @@ function buildComposer() {
       C.fileIn.value = '';
     },
   });
-  C.plus = iconBtn('上传文件', 'plus', () => C.fileIn.click(), '', 'plus-btn');
+  C.plus = iconBtn(T`上传文件`, 'plus', () => C.fileIn.click(), '', 'plus-btn');
   C.optInput = h('input', {
     type: 'text',
-    placeholder: '加选项',
-    'aria-label': '加选项',
+    placeholder: T`加选项`,
+    'aria-label': T`加选项`,
     onkeydown: (e) => {
       if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Enter' && C.optInput.value.trim()) {
@@ -3948,11 +4018,11 @@ function buildComposer() {
   C.optRow = h('div', { class: 'opt-row', hidden: true }, C.optChips, C.optInput);
   C.seg = h(
     'div',
-    { class: 'seg ink', role: 'group', 'aria-label': '方式' },
+    { class: 'seg ink', role: 'group', 'aria-label': T`方式` },
     [
-      ['turn', '讨论', '轮流回答，后面的看得到前面的'],
-      ['solo', '对比', '同时回答，互相看不到，并排放'],
-      ['vote', '投票', '各出方案，匿名投票'],
+      ['turn', T`讨论`, T`轮流回答，后面的看得到前面的`],
+      ['solo', T`对比`, T`同时回答，互相看不到，并排放`],
+      ['vote', T`投票`, T`各出方案，匿名投票`],
     ].map(([k, label, tip]) =>
       h(
         'button',
@@ -3971,7 +4041,7 @@ function buildComposer() {
     )
   );
   // 谁来回答：选中的几位叠成一叠，点开勾选
-  C.pick = h('button', { class: 'picker', 'aria-haspopup': 'menu', 'aria-label': '成员', 'data-tip': '成员', onclick: (e) => pickMenu(e.currentTarget) });
+  C.pick = h('button', { class: 'picker', 'aria-haspopup': 'menu', 'aria-label': T`成员`, 'data-tip': T`成员`, onclick: (e) => pickMenu(e.currentTarget) });
   C.auto = h(
     'button',
     {
@@ -3984,9 +4054,9 @@ function buildComposer() {
       },
     },
     h('span', { class: 'track' }),
-    (C.autoWord = h('span', null, '全自动'))
+    (C.autoWord = h('span', null, T`全自动`))
   );
-  C.send = h('button', { class: 'send', 'aria-label': '发送', 'data-tip': '发送', 'data-kbd': '↵', onclick: send }, icon('up'));
+  C.send = h('button', { class: 'send', 'aria-label': T`发送`, 'data-tip': T`发送`, 'data-kbd': '↵', onclick: send }, icon('up'));
   C.tools = h('div', { class: 'tools' }, C.plus, C.seg, C.auto, C.pick, h('span', { class: 'sp' }), C.send);
   C.box = h(
     'div',
@@ -4051,7 +4121,7 @@ function drawOptions() {
           'button',
           {
             class: 'x',
-            'aria-label': '去掉',
+            'aria-label': T`去掉`,
             onclick: () => {
               S.options.splice(i, 1);
               drawOptions();
@@ -4074,7 +4144,7 @@ function updateComposer() {
   C.plus.hidden = !!S.slash;
   C.auto.hidden = !task;
   C.auto.setAttribute('aria-checked', String(S.autoAfter));
-  C.autoWord.textContent = S.view === 'dispatch' ? '派活' : '全自动';
+  C.autoWord.textContent = S.view === 'dispatch' ? T`派活` : T`全自动`;
   C.optRow.hidden = !vote || !!S.slash;
   for (const b of C.seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === S.mode));
   C.pill.hidden = !S.slash;
@@ -4086,7 +4156,7 @@ function updateComposer() {
         'button',
         {
           class: 'x',
-          'aria-label': '取消',
+          'aria-label': T`取消`,
           onclick: () => {
             S.slash = null;
             updateComposer();
@@ -4097,7 +4167,7 @@ function updateComposer() {
       )
     );
   }
-  C.ta.placeholder = task ? '要做什么' : S.slash ? S.slash.placeholder : vote ? '投票的问题' : '消息';
+  C.ta.placeholder = task ? T`要做什么` : S.slash ? S.slash.placeholder : vote ? T`投票的问题` : T`消息`;
   // 谁来回答
   const people = talkers();
   if (!S.ask) {
@@ -4108,8 +4178,8 @@ function updateComposer() {
   if (C.pick.dataset.sig !== askSig) {
     C.pick.dataset.sig = askSig;
     const chosen = people.filter((m) => S.ask.has(m.name));
-    C.pick.replaceChildren(chosen.length ? stack(chosen, (m) => (m.cooling ? 'cooling' : ''), 6) : h('span', { class: 'none' }, '成员'), icon('down', 'caret'));
-    C.pick.dataset.tip = chosen.length ? chosen.map(memberName).join('、') : '成员';
+    C.pick.replaceChildren(chosen.length ? stack(chosen, (m) => (m.cooling ? 'cooling' : ''), 6) : h('span', { class: 'none' }, T`成员`), icon('down', 'caret'));
+    C.pick.dataset.tip = chosen.length ? chosen.map(memberName).join(T`、`) : T`成员`;
   }
   // 带上的文件：图片是缩略图；正在传的转圈（只在变了的时候重画，缩略图不会每打一个字就重新读）
   const attSig = JSON.stringify([S.files, S.uploading.map((u) => u.name)]);
@@ -4139,7 +4209,7 @@ function updateComposer() {
             'button',
             {
               class: 'x',
-              'aria-label': '去掉',
+              'aria-label': T`去掉`,
               onclick: () => {
                 S.files.splice(i, 1);
                 updateComposer();
@@ -4149,7 +4219,7 @@ function updateComposer() {
           )
         )
       ),
-      ...S.uploading.map((u) => h('span', { class: 'chip busy', 'data-tip': '上传中' }, h('span', { class: 'spin' }), h('span', { class: 'ell' }, u.name)))
+      ...S.uploading.map((u) => h('span', { class: 'chip busy', 'data-tip': T`上传中` }, h('span', { class: 'spin' }), h('span', { class: 'ell' }, u.name)))
     );
   }
   const text = C.ta.value.trim();
@@ -4181,11 +4251,11 @@ function pickMenu(anchor) {
   openMenu(
     anchor,
     [
-      { label: '全部', icon: 'user', keep: true, on: all, run: () => set(all() ? [] : people.filter((m) => !m.cooling).map((m) => m.name)) },
+      { label: T`全部`, icon: 'user', keep: true, on: all, run: () => set(all() ? [] : people.filter((m) => !m.cooling).map((m) => m.name)) },
       '-',
       ...people.map((m) => ({
         label: memberName(m),
-        sub: m.cooling ? `额度用完 · ${m.coolingText}` : m.tool || '',
+        sub: m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : tr(m.tool) || '',
         tile: tile(m, 's20', m.cooling ? 'cooling' : ''),
         keep: true,
         on: () => S.ask.has(m.name),
@@ -4251,20 +4321,20 @@ async function uploadFiles(files) {
       await refresh(true);
     }
   } catch (e) {
-    return fail('上传', e);
+    return fail(T`上传`, e);
   }
   await Promise.all(
     files.map(async (f) => {
-      const job = { name: f.name || '图片' };
+      const job = { name: f.name || T`图片` };
       S.uploading.push(job);
       updateComposer();
       try {
         const r = await fetch(q(`/api/upload?name=${encodeURIComponent(job.name)}`), { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: f });
-        const j = await r.json().catch(() => ({ ok: false, error: `传不上去（${r.status}）` }));
-        if (!j.ok) throw new Error(j.error || '出错');
+        const j = await r.json().catch(() => ({ ok: false, error: T`传不上去（${r.status}）` }));
+        if (!j.ok) throw new Error(j.error || T`出错`);
         if (!S.files.includes(j.path)) S.files.push(j.path);
       } catch (e) {
-        fail(`上传「${job.name}」`, e);
+        fail(T`上传「${job.name}」`, e);
       } finally {
         S.uploading = S.uploading.filter((x) => x !== job);
         updateComposer();
@@ -4335,16 +4405,16 @@ function onComposerKey(e) {
 
 const idleNow = () => !runState().running && !runState().waiting;
 const SLASH = [
-  { key: 'step', label: '加一步', icon: 'plus', needsText: true, placeholder: '这一步', run: (text) => act(null, () => api('/api/task/edit', { op: 'add', text }), '已加入清单') },
-  { key: 'go', label: '接着做', icon: 'play', when: () => idleNow() && !!defaultWorker(), run: goDefault },
-  { key: 'auto', label: '全自动', icon: 'bolt', when: () => idleNow() && ready().length > 0 && !accepted(), run: () => act(null, () => startWork('/api/auto', {}), '已开始全自动') },
-  { key: 'review', label: '复核', icon: 'review', when: () => idleNow() && S.st.project.pending.length > 0 && !!reviewer(), run: reviewNow },
-  { key: 'stop', label: '停止', icon: 'stop', when: () => !idleNow(), run: stopNow },
-  { key: 'task', label: '新任务', icon: 'plus', run: newThread },
-  { key: 'snap', label: '对账', icon: 'sync', run: snapNow },
-  { key: 'brief', label: '接力本', icon: 'book', run: openBrief },
-  { key: 'edit', label: '编辑任务', icon: 'pencil', run: editTaskRaw },
-  { key: 'settings', label: '设置', icon: 'sliders', run: () => openSettings() },
+  { key: 'step', label: T`加一步`, icon: 'plus', needsText: true, placeholder: T`这一步`, run: (text) => act(null, () => api('/api/task/edit', { op: 'add', text }), T`已加入清单`) },
+  { key: 'go', label: T`接着做`, icon: 'play', when: () => idleNow() && !!defaultWorker(), run: goDefault },
+  { key: 'auto', label: T`全自动`, icon: 'bolt', when: () => idleNow() && ready().length > 0 && !accepted(), run: () => act(null, () => startWork('/api/auto', {}), T`已开始全自动`) },
+  { key: 'review', label: T`复核`, icon: 'review', when: () => idleNow() && S.st.project.pending.length > 0 && !!reviewer(), run: reviewNow },
+  { key: 'stop', label: T`停止`, icon: 'stop', when: () => !idleNow(), run: stopNow },
+  { key: 'task', label: T`新任务`, icon: 'plus', run: newThread },
+  { key: 'snap', label: T`对账`, icon: 'sync', run: snapNow },
+  { key: 'brief', label: T`接力本`, icon: 'book', run: openBrief },
+  { key: 'edit', label: T`编辑任务`, icon: 'pencil', run: editTaskRaw },
+  { key: 'settings', label: T`设置`, icon: 'sliders', run: () => openSettings() },
 ];
 
 const SUG = { menu: null, items: [], hot: 0, kind: '', start: 0 };
@@ -4382,7 +4452,7 @@ function updateSuggest() {
       .slice(0, qy ? 8 : 4)
       .map((f) => ({ label: basename(f), sub: f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '', icon: 'file', file: f }));
     if (ais.length) ais[0].head = 'AI';
-    if (files.length) files[0].head = '文件';
+    if (files.length) files[0].head = T`文件`;
     items = [...ais, ...files];
   }
   if (!items.length) return closeSuggest();
@@ -4505,7 +4575,7 @@ async function send() {
     schedule();
     scrollBottom(true);
   } catch (e) {
-    fail('发送', e);
+    fail(T`发送`, e);
   } finally {
     C.send.classList.remove('busy');
     updateComposer();
@@ -4529,7 +4599,7 @@ async function createTask(text) {
   // 派活页写的任务：全自动用派活（强模型拆、弱模型做）
   const dispatch = S.view === 'dispatch';
   await api('/api/task', { text: [lines[0].trim(), ...body, refs].filter(Boolean).join('\n'), steps, ...(dispatch ? { mode: 'dispatch' } : {}) });
-  if (S.autoAfter) await startWork('/api/auto', {}).catch((e) => e.code !== 'cancelled' && fail(dispatch ? '开始派活' : '开始全自动', e));
+  if (S.autoAfter) await startWork('/api/auto', {}).catch((e) => e.code !== 'cancelled' && fail(dispatch ? T`开始派活` : T`开始全自动`, e));
   S.draft = false;
   S.thread = null;
   S.autoAfter = false;
@@ -4544,8 +4614,8 @@ const RE = {};
 let treeSig = '';
 
 function buildRight() {
-  RE.title = h('span', { class: 'cap' }, '文件');
-  RE.filterBtn = iconBtn('筛选', 'search', () => toggleFilter(), '⌘P');
+  RE.title = h('span', { class: 'cap' }, T`文件`);
+  RE.filterBtn = iconBtn(T`筛选`, 'search', () => toggleFilter(), '⌘P');
   RE.filterBtn.setAttribute('aria-pressed', 'false');
   RE.changedBtn = h(
     'button',
@@ -4559,10 +4629,10 @@ function buildRight() {
       },
     },
     h('span', { class: 'track' }),
-    '只看改过的'
+    T`只看改过的`
   );
   // 全部展开 / 全部收起：按现在是不是全开着，点一下换一边
-  RE.foldBtn = iconBtn('全部展开', 'unfold', () => {
+  RE.foldBtn = iconBtn(T`全部展开`, 'unfold', () => {
     const dirs = treeDirs();
     if (dirs.every((d) => S.treeOpen.has(d))) S.treeOpen.clear();
     else for (const d of dirs) S.treeOpen.add(d);
@@ -4571,8 +4641,8 @@ function buildRight() {
   });
   RE.input = h('input', {
     type: 'text',
-    placeholder: '筛选文件',
-    'aria-label': '筛选文件',
+    placeholder: T`筛选文件`,
+    'aria-label': T`筛选文件`,
     oninput: () => {
       S.treeFilter = RE.input.value;
       renderRight(true);
@@ -4591,11 +4661,11 @@ function buildRight() {
       }
     },
   });
-  RE.filter = h('div', { class: 'filter', hidden: true }, icon('search'), RE.input, h('button', { class: 'x', 'aria-label': '清除', onclick: () => toggleFilter(false) }, icon('x')));
-  RE.tree = h('div', { class: 'tree', role: 'tree', 'aria-label': '项目文件', onkeydown: treeKeys });
+  RE.filter = h('div', { class: 'filter', hidden: true }, icon('search'), RE.input, h('button', { class: 'x', 'aria-label': T`清除`, onclick: () => toggleFilter(false) }, icon('x')));
+  RE.tree = h('div', { class: 'tree', role: 'tree', 'aria-label': T`项目文件`, onkeydown: treeKeys });
   RE.tree.addEventListener('scroll', () => WIRE.from && drawWires(), { passive: true });
   RE.note = h('div', { class: 'tree-note', hidden: true });
-  $('#right-in').append(h('div', { class: 'right-head' }, RE.title, RE.changedBtn, RE.filterBtn, RE.foldBtn, iconBtn('收起', 'sideR', toggleRight, '⌥⌘B')), RE.filter, RE.tree, RE.note);
+  $('#right-in').append(h('div', { class: 'right-head' }, RE.title, RE.changedBtn, RE.filterBtn, RE.foldBtn, iconBtn(T`收起`, 'sideR', toggleRight, '⌥⌘B')), RE.filter, RE.tree, RE.note);
 }
 
 function toggleFilter(on) {
@@ -4630,7 +4700,7 @@ function syncFoldBtn() {
   const dirs = treeDirs();
   const all = dirs.length > 0 && dirs.every((d) => S.treeOpen.has(d));
   RE.foldBtn.hidden = !dirs.length;
-  const label = all ? '全部收起' : '全部展开';
+  const label = all ? T`全部收起` : T`全部展开`;
   if (RE.foldBtn.dataset.tip === label) return;
   RE.foldBtn.dataset.tip = label;
   RE.foldBtn.setAttribute('aria-label', label);
@@ -4741,16 +4811,16 @@ function renderRight(force) {
   RE.note.hidden = true;
   if (!S.tree) {
     RE.note.hidden = false;
-    RE.note.textContent = '读取中…';
+    RE.note.textContent = T`读取中…`;
   } else if (S.tree.error) {
     RE.note.hidden = false;
-    RE.note.textContent = S.tree.error;
+    RE.note.textContent = tr(S.tree.error);
   } else if (!rows.length) {
     RE.note.hidden = false;
-    RE.note.textContent = filtering ? '没有匹配的文件' : '空文件夹';
+    RE.note.textContent = filtering ? T`没有匹配的文件` : T`空文件夹`;
   } else if (S.tree.truncated && !filtering) {
     RE.note.hidden = false;
-    RE.note.textContent = `只列出了前 ${files.length} 个文件`;
+    RE.note.textContent = T`只列出了前 ${files.length} 个文件`;
   }
   if (focused) RE.rows.get(focused)?.focus({ preventScroll: true });
   if (LIT.paths) lightPaths(LIT.paths);
@@ -4817,9 +4887,9 @@ function treeRow(r, touched) {
         wireTo(null);
       },
     },
-    r.dir ? icon('chev', 'caret') : t ? h('span', { class: `ring ${t.looks[t.looks.length - 1]}`, 'data-tip': t.ids.map((id) => `第 ${id} 棒`).join('、') }) : h('span', { class: 'fi' }),
+    r.dir ? icon('chev', 'caret') : t ? h('span', { class: `ring ${t.looks[t.looks.length - 1]}`, 'data-tip': t.ids.map((id) => T`第 ${id} 棒`).join(T`、`) }) : h('span', { class: 'fi' }),
     h('span', { class: 'nm' }, r.node.name),
-    t && t.pending ? h('span', { class: 'rd', 'data-tip': '待复核' }) : null,
+    t && t.pending ? h('span', { class: 'rd', 'data-tip': T`待复核` }) : null,
     r.dir && r.marked && !r.open ? h('span', { class: 'd' }) : null
   );
   RE.rows.set(p, el);
@@ -4836,13 +4906,13 @@ function toggleDir(p) {
 }
 
 function fileMenuItems(p, dir, gone) {
-  if (gone) return [{ label: '复制路径', icon: 'copy', run: () => copyToast(p) }];
+  if (gone) return [{ label: T`复制路径`, icon: 'copy', run: () => copyToast(p) }];
   return [
-    dir ? { label: S.treeOpen.has(p) ? '收起' : '展开', icon: 'chev', run: () => toggleDir(p) } : { label: '打开', icon: 'file', run: () => openFile(p) },
-    { label: '引用', icon: 'insert', run: () => addFile(p) },
+    dir ? { label: S.treeOpen.has(p) ? T`收起` : T`展开`, icon: 'chev', run: () => toggleDir(p) } : { label: T`打开`, icon: 'file', run: () => openFile(p) },
+    { label: T`引用`, icon: 'insert', run: () => addFile(p) },
     '-',
-    { label: '复制路径', icon: 'copy', run: () => copyToast(p) },
-    { label: '在访达中显示', icon: 'folder', run: () => reveal(p) },
+    { label: T`复制路径`, icon: 'copy', run: () => copyToast(p) },
+    { label: REVEAL, icon: 'folder', run: () => reveal(p) },
   ];
 }
 
@@ -5043,15 +5113,15 @@ let consentCache = null;
 function openSettings(tab) {
   if (tab) settingsTab = tab;
   const tabs = [
-    ['members', '成员', 'user'],
-    ['project', '项目', 'folder'],
-    ['relay', '运行', 'bolt'],
-    ['general', '通用', 'sliders'],
+    ['members', T`成员`, 'user'],
+    ['project', L('项目', '设置'), 'folder'],
+    ['relay', T`运行`, 'bolt'],
+    ['general', T`通用`, 'sliders'],
   ];
   // 左边的页签：选中的那一块是滑过去的（和分段按钮一样的弹簧）
   const hl = h('span', { class: 'hl', 'aria-hidden': 'true' });
   const btns = tabs.map(([k, label, ic]) => h('button', { role: 'tab', 'data-tab': k, onclick: () => go(k) }, icon(ic), label));
-  const nav = h('nav', { 'aria-label': '设置' }, h('h3', null, '设置'), hl, btns);
+  const nav = h('nav', { 'aria-label': T`设置` }, h('h3', null, T`设置`), hl, btns);
   const pane = h('div', { class: 'pane-in' });
   const mark = () => {
     const on = btns.find((b) => b.dataset.tab === settingsTab);
@@ -5060,7 +5130,7 @@ function openSettings(tab) {
   };
   // 换一页：这一页先淡出一点点，新的一页一行接一行升上来；存完设置后原地重画不再升
   const draw = (enter) => {
-    pane.replaceChildren(h('button', { class: 'icon-btn close', 'aria-label': '关闭', onclick: () => close() }, icon('x')), ...settingsPane(settingsTab, draw));
+    pane.replaceChildren(h('button', { class: 'icon-btn close', 'aria-label': T`关闭`, onclick: () => close() }, icon('x')), ...settingsPane(settingsTab, draw));
     syncSegs(pane);
     if (enter === true && !still()) [...pane.children].forEach((el, i) => el.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 300, delay: Math.round(stagger(i) * 0.6), easing: EASE.ease, fill: 'backwards' }));
   };
@@ -5075,7 +5145,7 @@ function openSettings(tab) {
     out.onfinish = () => draw(true);
   };
   const close = sheet({
-    title: '设置',
+    title: T`设置`,
     wide: true,
     bare: true,
     body: h('div', { class: 'settings' }, nav, pane),
@@ -5094,7 +5164,7 @@ let savedAt = 0;
 
 /** 「已保存」：存完面板会重画，所以记住存的时间，新画出来的也亮一会儿。 */
 function savedMark() {
-  const m = h('span', { class: 'saved' }, icon('check'), '已保存');
+  const m = h('span', { class: 'saved' }, icon('check'), T`已保存`);
   const light = () => {
     const left = 1600 - (Date.now() - savedAt);
     if (left <= 0) return;
@@ -5130,8 +5200,8 @@ function setSec(text) {
 }
 
 const LEVEL_DESC = {
-  safe: '只改这个项目文件夹里的文件，命令在各家工具自己的沙箱里跑。',
-  full: '工具不拦截任何操作：能装依赖、联网、改项目以外的文件。',
+  safe: T`只改这个项目文件夹里的文件，命令在各家工具自己的沙箱里跑。`,
+  full: T`工具不拦截任何操作：能装依赖、联网、改项目以外的文件。`,
 };
 
 function settingsBody(tab, redraw) {
@@ -5139,9 +5209,9 @@ function settingsBody(tab, redraw) {
   if (tab === 'members') return membersPane(redraw);
   if (tab === 'project') {
     const p = st.project;
-    if (!p.init) return [h('div', { class: 'set-title' }, '项目'), h('div', { class: 'empty-note' }, '这个文件夹还没接入')];
+    if (!p.init) return [h('div', { class: 'set-title' }, L('项目', '设置')), h('div', { class: 'empty-note' }, T`这个文件夹还没接入`)];
     const mark = savedMark();
-    const gate = h('input', { class: 'input mono', value: p.config.gate, placeholder: '例如 npm test', 'aria-label': '检查命令' });
+    const gate = h('input', { class: 'input mono', value: p.config.gate, placeholder: T`例如 npm test`, 'aria-label': T`检查命令` });
     const tags = [...p.config.protectedPaths];
     const tagBox = h('div', { class: 'tags' });
     const saveCfg = async () => {
@@ -5150,13 +5220,13 @@ function settingsBody(tab, redraw) {
         mark.flash();
         await refresh();
       } catch (e) {
-        fail('保存设置', e);
+        fail(T`保存设置`, e);
       }
     };
     const tagInput = h('input', {
       type: 'text',
-      placeholder: tags.length ? '' : '文件或文件夹，例如 .env、secrets/',
-      'aria-label': '不许改的文件',
+      placeholder: tags.length ? '' : T`文件或文件夹，例如 .env、secrets/`,
+      'aria-label': T`不许改的文件`,
       onkeydown: (e) => {
         if (e.isComposing || e.keyCode === 229) return;
         if ((e.key === 'Enter' || e.key === ',') && tagInput.value.trim()) {
@@ -5173,7 +5243,7 @@ function settingsBody(tab, redraw) {
       },
     });
     const drawTags = () => {
-      tagInput.placeholder = tags.length ? '' : '文件或文件夹，例如 .env、secrets/';
+      tagInput.placeholder = tags.length ? '' : T`文件或文件夹，例如 .env、secrets/`;
       tagBox.replaceChildren(
         ...tags.map((t, i) =>
           h(
@@ -5184,7 +5254,7 @@ function settingsBody(tab, redraw) {
               'button',
               {
                 class: 'x',
-                'aria-label': `去掉 ${t}`,
+                'aria-label': T`去掉 ${t}`,
                 onclick: () => {
                   tags.splice(i, 1);
                   drawTags();
@@ -5202,15 +5272,15 @@ function settingsBody(tab, redraw) {
     gate.addEventListener('keydown', (e) => e.key === 'Enter' && gate.blur());
     gate.addEventListener('change', saveCfg);
     return [
-      h('div', { class: 'set-title' }, '项目', mark.el),
-      setField('检查命令', '每一棒结束后在项目文件夹里跑一遍，确认没改坏（比如跑测试）。没通过就不算完成。', gate, gateResult(p)),
-      setField('不许改的文件', '写进给每位 AI 的接力规矩。哪一棒改到了，会标在那一棒上。', tagBox),
+      h('div', { class: 'set-title' }, L('项目', '设置'), mark.el),
+      setField(T`检查命令`, T`每一棒结束后在项目文件夹里跑一遍，确认没改坏（比如跑测试）。没通过就不算完成。`, gate, gateResult(p)),
+      setField(T`不许改的文件`, T`写进给每位 AI 的接力规矩。哪一棒改到了，会标在那一棒上。`, tagBox),
       p.protocol === 'ok'
         ? null
         : setRow(
-            p.protocol === 'old' ? '接力规矩有新版本' : '接力规矩不见了',
-            '项目里的 AGENTS.md、CLAUDE.md 里写给各家 AI 的那一段。',
-            h('button', { class: 'btn small primary', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已更新').then(redraw) }, '更新')
+            p.protocol === 'old' ? T`接力规矩有新版本` : T`接力规矩不见了`,
+            T`项目里的 AGENTS.md、CLAUDE.md 里写给各家 AI 的那一段。`,
+            h('button', { class: 'btn small primary', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), T`已更新`).then(redraw) }, T`更新`)
           ),
     ];
   }
@@ -5225,7 +5295,7 @@ function settingsBody(tab, redraw) {
         S.st.settings = r.settings;
         mark.flash();
       } catch (e) {
-        fail('保存设置', e);
+        fail(T`保存设置`, e);
         redraw();
       }
     };
@@ -5244,9 +5314,9 @@ function settingsBody(tab, redraw) {
       return h(
         'span',
         { class: 'stepper' },
-        h('button', { 'aria-label': '减少', onclick: () => set(Number(input.value) - step) }, icon('minus')),
+        h('button', { 'aria-label': T`减少`, onclick: () => set(Number(input.value) - step) }, icon('minus')),
         input,
-        h('button', { 'aria-label': '增加', onclick: () => set(Number(input.value) + step) }, icon('plus')),
+        h('button', { 'aria-label': T`增加`, onclick: () => set(Number(input.value) + step) }, icon('plus')),
         h('span', { class: 'u' }, unit)
       );
     };
@@ -5271,7 +5341,7 @@ function settingsBody(tab, redraw) {
           'aria-pressed': String(s.level === lv),
           onclick: async () => {
             if (s.level === lv) return;
-            if (lv === 'full' && !(await confirmSheet('不限制 AI 的权限？', LEVEL_DESC.full, '不限制'))) return;
+            if (lv === 'full' && !(await confirmSheet(T`不限制 AI 的权限？`, LEVEL_DESC.full, T`不限制`))) return;
             for (const b of level.querySelectorAll(':scope > button')) b.setAttribute('aria-pressed', String(b.dataset.lv === lv));
             syncSegs(level.parentNode);
             swapText(levelRow.desc, LEVEL_DESC[lv]);
@@ -5280,20 +5350,20 @@ function settingsBody(tab, redraw) {
         },
         label
       );
-    const level = h('div', { class: 'seg', role: 'group', 'aria-label': 'AI 的权限' });
-    level.append(levelBtn('safe', '只在项目里'), levelBtn('full', '不限制'));
-    const levelRow = setRow('AI 的权限', LEVEL_DESC[s.level], level);
+    const level = h('div', { class: 'seg', role: 'group', 'aria-label': T`AI 的权限` });
+    level.append(levelBtn('safe', T`只在项目里`), levelBtn('full', T`不限制`));
+    const levelRow = setRow(T`AI 的权限`, LEVEL_DESC[s.level], level);
     return [
-      h('div', { class: 'set-title' }, '运行', mark.el),
-      setSec('权限'),
+      h('div', { class: 'set-title' }, T`运行`, mark.el),
+      setSec(T`权限`),
       levelRow,
-      setSec('时限'),
-      setRow('每一棒最长', '一位 AI 接着做一段叫一棒。到时间还没交接就停下，算作出错。', stepper('stintTimeoutMin', 1, 600, '分钟', 5)),
-      setRow('复核、终审最长', '强模型检查别人做的活，到时间就停下。', stepper('reviewTimeoutMin', 1, 240, '分钟', 5)),
-      setSec('全自动'),
-      setRow('最多接力', '接满这么多棒就停下，不会一直做下去。', stepper('maxStints', 1, 100, '棒')),
-      setRow('额度用完时等恢复', '所有 AI 的额度都用完时，等最早恢复的那一位接着做；关掉就直接停下。', sw('waitForQuota', '额度用完时等恢复')),
-      setRow('做完后终审', '清单全部打勾后，请强模型把整件事从头过一遍，通过了才算完成。', sw('finalReview', '做完后终审')),
+      setSec(T`时限`),
+      setRow(T`每一棒最长`, T`一位 AI 接着做一段叫一棒。到时间还没交接就停下，算作出错。`, stepper('stintTimeoutMin', 1, 600, T`分钟`, 5)),
+      setRow(T`复核、终审最长`, T`强模型检查别人做的活，到时间就停下。`, stepper('reviewTimeoutMin', 1, 240, T`分钟`, 5)),
+      setSec(T`全自动`),
+      setRow(T`最多接力`, T`接满这么多棒就停下，不会一直做下去。`, stepper('maxStints', 1, 100, T`棒`)),
+      setRow(T`额度用完时等恢复`, T`所有 AI 的额度都用完时，等最早恢复的那一位接着做；关掉就直接停下。`, sw('waitForQuota', T`额度用完时等恢复`)),
+      setRow(T`做完后终审`, T`清单全部打勾后，请强模型把整件事从头过一遍，通过了才算完成。`, sw('finalReview', T`做完后终审`)),
     ];
   }
   const theme = store.get('theme') || '';
@@ -5309,11 +5379,11 @@ function settingsBody(tab, redraw) {
   };
   const look = h(
     'div',
-    { class: 'seg', role: 'group', 'aria-label': '外观' },
+    { class: 'seg', role: 'group', 'aria-label': T`外观` },
     [
-      ['', '跟随系统'],
-      ['light', '浅色'],
-      ['dark', '深色'],
+      ['', T`跟随系统`],
+      ['light', T`浅色`],
+      ['dark', T`深色`],
     ].map(([k, label]) =>
       h(
         'button',
@@ -5331,18 +5401,19 @@ function settingsBody(tab, redraw) {
     )
   );
   return [
-    h('div', { class: 'set-title' }, '通用'),
-    setRow('外观', null, look),
+    h('div', { class: 'set-title' }, T`通用`),
+    setRow(T`语言`, null, langSeg()),
+    setRow(T`外观`, null, look),
     setRow(
-      '关闭接力台',
-      '正在做的会先停下、记好账。下次打开「接力台」时自己启动。',
+      T`关闭接力台`,
+      T`正在做的会先停下、记好账。下次打开「接力台」时自己启动。`,
       h(
         'button',
         {
           class: 'btn small',
           onclick: async (e) => {
             const b = e.currentTarget;
-            if (!(await confirmSheet('关闭接力台？', '正在进行的调度会停止。', '关闭'))) return;
+            if (!(await confirmSheet(T`关闭接力台？`, T`正在进行的调度会停止。`, T`关闭`))) return;
             b.disabled = true;
             try {
               await api('/api/quit', {});
@@ -5350,7 +5421,7 @@ function settingsBody(tab, redraw) {
               // 接力台先回话再退出；回话前就断了也算关上了
               if (!(err instanceof TypeError)) {
                 b.disabled = false;
-                return fail('关闭接力台', err);
+                return fail(T`关闭接力台`, err);
               }
             }
             S.closed = true;
@@ -5359,7 +5430,7 @@ function settingsBody(tab, redraw) {
           },
         },
         icon('power'),
-        '关闭'
+        T`关闭`
       )
     ),
   ];
@@ -5369,11 +5440,11 @@ function settingsBody(tab, redraw) {
 function gateResult(p) {
   const g = p.acceptance && p.acceptance.gate;
   if (!g || g.status === 'off') return null;
-  const after = g.stint ? ` · 第 ${g.stint} 棒之后` : '';
-  if (g.status === 'pass') return h('small', { class: 'res' }, icon('check'), `上次通过${after}`);
-  if (g.status === 'fail') return h('small', { class: 'res bad' }, h('span', { class: 'rd' }), `上次没通过${after}`);
-  if (g.status === 'error') return h('small', { class: 'res bad', 'data-tip': g.text }, h('span', { class: 'rd' }), `上次没跑成${after}`);
-  return h('small', { class: 'res' }, g.status === 'none' ? '还没跑过' : g.text);
+  const after = g.stint ? T` · 第 ${g.stint} 棒之后` : '';
+  if (g.status === 'pass') return h('small', { class: 'res' }, icon('check'), T`上次通过${after}`);
+  if (g.status === 'fail') return h('small', { class: 'res bad' }, h('span', { class: 'rd' }), T`上次没通过${after}`);
+  if (g.status === 'error') return h('small', { class: 'res bad', 'data-tip': tr(g.text) }, h('span', { class: 'rd' }), T`上次没跑成${after}`);
+  return h('small', { class: 'res' }, g.status === 'none' ? T`还没跑过` : tr(g.text));
 }
 
 /** 一行字换成另一句：旧的淡出、新的淡进来。 */
@@ -5398,8 +5469,8 @@ function membersPane(redraw) {
     const look = h('span', { class: 'mt' }, tile(m, 's28', m.cooling ? 'cooling' : ''));
     const seg = h(
       'div',
-      { class: 'seg', role: 'group', 'aria-label': `${name} 强弱` },
-      ['strong', 'weak'].map((t) => h('button', { 'data-t': t, 'aria-pressed': String(m.tier === t), onclick: () => m.tier !== t && setTier(t) }, t === 'strong' ? '强' : '弱'))
+      { class: 'seg', role: 'group', 'aria-label': T`${name} 强弱` },
+      ['strong', 'weak'].map((t) => h('button', { 'data-t': t, 'aria-pressed': String(m.tier === t), onclick: () => m.tier !== t && setTier(t) }, t === 'strong' ? T`强` : T`弱`))
     );
     const paint = (t) => {
       for (const b of seg.querySelectorAll(':scope > button')) b.setAttribute('aria-pressed', String(b.dataset.t === t));
@@ -5420,7 +5491,7 @@ function membersPane(redraw) {
         class: 'member',
         'data-name': m.name,
         draggable: canDrag ? 'true' : null,
-        oncontextmenu: (e) => ctx(e, [m.tierSet ? { label: '强弱改回自动', icon: 'sync', run: () => setTier('auto') } : null, { label: '删除', icon: 'trash', run: () => removeMember(m, row) }]),
+        oncontextmenu: (e) => ctx(e, [m.tierSet ? { label: T`强弱改回自动`, icon: 'sync', run: () => setTier('auto') } : null, { label: T`删除`, icon: 'trash', run: () => removeMember(m, row) }]),
         ondragstart: (e) => {
           dragName = m.name;
           e.dataTransfer.effectAllowed = 'move';
@@ -5448,13 +5519,13 @@ function membersPane(redraw) {
       },
       h('span', { class: `handle${canDrag ? '' : ' off'}`, 'aria-hidden': 'true' }, icon('grip')),
       look,
-      h('div', { class: 'mn' }, h('b', null, name), note ? h('small', { 'data-tip': m.update || (!m.canWork && m.why ? m.why : null) || limitsTip(m) }, note) : null),
+      h('div', { class: 'mn' }, h('b', null, name), note ? h('small', { 'data-tip': tr(m.update || (!m.canWork && m.why ? m.why : null)) || limitsTip(m) }, note) : null),
       seg,
-      h('button', { class: 'icon-btn del', 'aria-label': `删除 ${name}`, 'data-tip': '删除', onclick: () => removeMember(m, row) }, icon('trash'))
+      h('button', { class: 'icon-btn del', 'aria-label': T`删除 ${name}`, 'data-tip': T`删除`, onclick: () => removeMember(m, row) }, icon('trash'))
     );
     list.append(row);
   }
-  if (!all.length) list.append(h('div', { class: 'empty-note' }, '名单是空的'));
+  if (!all.length) list.append(h('div', { class: 'empty-note' }, T`名单是空的`));
   const consent = h('div');
   const fillConsent = (want) =>
     consent.replaceChildren(
@@ -5464,7 +5535,7 @@ function membersPane(redraw) {
           { class: 'consent' },
           icon('warn'),
           h('span', { class: 'grow' }, `${llmName(p.model) || p.label}${p.model ? ` · ${p.label}` : ''}`),
-          h('button', { class: 'btn small primary', onclick: (e) => act(e.currentTarget, () => api('/api/detect/use', { id: p.id }), '已加入').then(() => ((consentCache = null), redraw())) }, '同意使用')
+          h('button', { class: 'btn small primary', onclick: (e) => act(e.currentTarget, () => api('/api/detect/use', { id: p.id }), T`已加入`).then(() => ((consentCache = null), redraw())) }, T`同意使用`)
         )
       )
     );
@@ -5481,20 +5552,20 @@ function membersPane(redraw) {
     h(
       'div',
       { class: 'set-title' },
-      '成员',
+      T`成员`,
       h('span', { class: 'sp' }),
       h(
         'button',
         {
           class: `btn small${st.detecting ? ' busy' : ''}`,
           onclick: (e) =>
-            act(e.currentTarget, () => api('/api/detect', {}), (r) => (r.changes.length ? `名单更新了 ${r.changes.length} 处` : '名单没有变化')).then(() => {
+            act(e.currentTarget, () => api('/api/detect', {}), (r) => (r.changes.length ? T`名单更新了 ${r.changes.length} 处` : T`名单没有变化`)).then(() => {
               consentCache = null;
               redraw();
             }),
         },
         icon('sync'),
-        '重新识别'
+        T`重新识别`
       ),
       h(
         'button',
@@ -5505,34 +5576,34 @@ function membersPane(redraw) {
             openMenu(
               e.currentTarget,
               [
-                { label: '接口', icon: 'plus', run: () => addApiSheet(redraw) },
-                { label: '桌面程序', icon: 'plus', run: () => addAppSheet(redraw) },
+                { label: T`接口`, icon: 'plus', run: () => addApiSheet(redraw) },
+                { label: T`桌面程序`, icon: 'plus', run: () => addAppSheet(redraw) },
               ],
               { align: 'end' }
             ),
         },
         icon('plus'),
-        '添加'
+        T`添加`
       )
     ),
-    h('p', { class: 'set-desc' }, '弱模型做的每一棒都要强模型复核。派活按这个顺序，额度用完的跳过。'),
+    h('p', { class: 'set-desc' }, T`弱模型做的每一棒都要强模型复核。派活按这个顺序，额度用完的跳过。`),
     list,
     consent,
   ];
 }
 
 /** 接力台对这个工具实测到什么程度：都实测过的不写。 */
-const TESTED_WORD = { partial: '部分实测', no: '没实测' };
+const TESTED_WORD = { partial: T`部分实测`, no: T`没实测` };
 
 /** 成员名字底下一行：在哪个工具里跑（名字就是工具名时不重复写）、实测到什么程度、现在能不能用。 */
 function memberNote(m) {
   const name = memberName(m);
-  const tool = m.kind === 'app' ? (m.tool && m.tool !== name ? `${m.tool} 桌面版` : '桌面程序') : m.tool && m.tool !== name ? m.tool : '';
-  const state = m.cooling ? `额度用完 · ${m.coolingText}` : !m.canWork && m.kind !== 'app' ? '不可调度' : limitsText(m);
-  return [tool, TESTED_WORD[m.tested], state, m.update ? '命令行需要更新' : ''].filter(Boolean).join(' · ');
+  const tool = m.kind === 'app' ? (m.tool && m.tool !== name ? T`${m.tool} 桌面版` : T`桌面程序`) : m.tool && m.tool !== name ? tr(m.tool) : '';
+  const state = m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : !m.canWork && m.kind !== 'app' ? T`不可调度` : limitsText(m);
+  return [tool, TESTED_WORD[m.tested], state, m.update ? T`命令行需要更新` : ''].filter(Boolean).join(' · ');
 }
 
-const LIMIT_WORD = { '5h': '5 小时', '7d': '一周', '7d-opus': 'Opus' };
+const LIMIT_WORD = { '5h': T`5 小时`, '7d': T`一周`, '7d-opus': 'Opus' };
 
 /** 工具自己报的额度：「5 小时 5% · 一周 72%」；没报过就是空的。 */
 function limitsText(m) {
@@ -5541,7 +5612,7 @@ function limitsText(m) {
 
 /** 悬停看几点恢复：「5 小时 21:40 恢复 · 一周 周五 09:00 恢复」。 */
 function limitsTip(m) {
-  return (m.limits || []).filter((w) => w.resetsAt).map((w) => `${LIMIT_WORD[w.kind] || w.kind} ${aheadClock(w.resetsAt)} 恢复`).join(' · ') || null;
+  return (m.limits || []).filter((w) => w.resetsAt).map((w) => T`${LIMIT_WORD[w.kind] || w.kind} ${aheadClock(w.resetsAt)} 恢复`).join(' · ') || null;
 }
 
 /** 将来的时间：今天写几点，明天写「明天 00:30」，一周内写星期，再远写日期。 */
@@ -5550,15 +5621,15 @@ function aheadClock(ts) {
   if (Number.isNaN(d.getTime())) return '';
   const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const n = Math.round((day(d) - day(new Date())) / 86400000);
-  const pre = n <= 0 ? '' : n === 1 ? '明天 ' : n < 7 ? `${['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]} ` : `${d.getMonth() + 1}月${d.getDate()}日 `;
+  const pre = n <= 0 ? '' : n === 1 ? T`明天 ` : n < 7 ? `${[T`周日`, T`周一`, T`周二`, T`周三`, T`周四`, T`周五`, T`周六`][d.getDay()]} ` : T`${d.getMonth() + 1}月${d.getDate()}日 `;
   return pre + clock(ts);
 }
 
 /** 删掉一位：它那一行淡出，下面的行滑上来补位。 */
 async function removeMember(m, row) {
   const name = memberName(m);
-  if (!(await confirmSheet(`删除 ${name}？`, '它自己的程序不受影响；重新识别也不会再加回来。', '删除'))) return;
-  const r = await act(null, () => api('/api/workers/delete', { name: m.name }), `已删除 ${name}`);
+  if (!(await confirmSheet(T`删除 ${name}？`, T`它自己的程序不受影响；重新识别也不会再加回来。`, T`删除`))) return;
+  const r = await act(null, () => api('/api/workers/delete', { name: m.name }), T`已删除 ${name}`);
   if (!r || !row.isConnected) return;
   row.classList.add('going');
   setTimeout(() => {
@@ -5596,16 +5667,16 @@ function addSheet(title, inputs, agentOf, redraw) {
             syncSegs(layer);
           },
         },
-        t === 'strong' ? '强' : '弱'
+        t === 'strong' ? T`强` : T`弱`
       )
     )
   );
   const close = sheet({
     title,
-    body: h('div', null, inputs.map(([label, input]) => field(label, input)), h('div', { class: 'field' }, h('span', null, '强弱'), seg)),
+    body: h('div', null, inputs.map(([label, input]) => field(label, input)), h('div', { class: 'field' }, h('span', null, T`强弱`), seg)),
     foot: [
-      h('button', { class: 'btn ghost', onclick: () => close() }, '取消'),
-      h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, () => api('/api/workers/save', { agent: { ...agentOf(), tier, tierSet: true } }), '已添加').then((r) => r && (close(), redraw())) }, '添加'),
+      h('button', { class: 'btn ghost', onclick: () => close() }, T`取消`),
+      h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, () => api('/api/workers/save', { agent: { ...agentOf(), tier, tierSet: true } }), T`已添加`).then((r) => r && (close(), redraw())) }, T`添加`),
     ],
   });
   syncSegs(layer);
@@ -5614,13 +5685,13 @@ function addSheet(title, inputs, agentOf, redraw) {
 function addApiSheet(redraw) {
   const [name, label, base, model, env] = [['kimi'], ['Kimi'], ['https://api.moonshot.cn/v1', 'mono'], ['kimi-k2', 'mono'], ['MOONSHOT_API_KEY', 'mono']].map(([ph, mono]) => h('input', { class: `input ${mono || ''}`.trim(), placeholder: ph }));
   addSheet(
-    '添加接口',
+    T`添加接口`,
     [
-      ['名字', name],
-      ['显示名', label],
-      ['接口地址', base],
-      ['模型', model],
-      ['密钥环境变量', env],
+      [T`名字`, name],
+      [T`显示名`, label],
+      [T`接口地址`, base],
+      [T`模型`, model],
+      [T`密钥环境变量`, env],
     ],
     () => ({ name: name.value.trim(), label: label.value.trim() || undefined, kind: 'api', api: { baseUrl: base.value.trim(), model: model.value.trim(), apiKeyEnv: env.value.trim() } }),
     redraw
@@ -5631,10 +5702,10 @@ function addAppSheet(redraw) {
   const name = h('input', { class: 'input', placeholder: 'trae' });
   const app = h('input', { class: 'input', placeholder: 'Trae' });
   addSheet(
-    '添加桌面程序',
+    T`添加桌面程序`,
     [
-      ['名字', name],
-      ['程序', app],
+      [T`名字`, name],
+      [T`程序`, app],
     ],
     () => {
       const a = app.value.trim();
@@ -5684,42 +5755,43 @@ function paletteItems(query, scope) {
   if (scope !== 'files') {
     const cmds = [
       ...[
-        ['relay', '接力', 'route'],
-        ['dispatch', '派活', 'list'],
-        ['chat', '群聊', 'chat'],
+        ['relay', T`接力`, 'route'],
+        ['dispatch', T`派活`, 'list'],
+        ['chat', T`群聊`, 'chat'],
       ]
         .filter(([v]) => v !== S.view)
         .map(([v, label, ic]) => ({ label, icon: ic, run: () => setView(v) })),
-      p.pick ? null : { label: '新任务', icon: 'plus', run: newThread },
-      p.pick ? null : { label: '新群聊', icon: 'plus', run: newChat },
-      p.init && !p.task.empty && !run.running && ready().length ? { label: '接着做', icon: 'play', run: goDefault } : null,
-      ...(p.init && !p.task.empty && !run.running && ready().length && !accepted() ? [pageOf(threads().at(-1)) === 'dispatch' ? '派活' : '全自动'] : []).map((word) => ({ label: word, icon: 'bolt', run: () => act(null, () => startWork('/api/auto', {}), `已开始${word}`) })),
-      p.pending.length && reviewer() ? { label: '复核', icon: 'review', run: reviewNow } : null,
-      run.running || run.waiting ? { label: '停止', icon: 'stop', kbd: '⌘.', run: stopNow } : null,
-      p.init ? { label: '编辑任务', icon: 'pencil', run: editTaskRaw } : null,
-      p.init ? { label: '接力本', sub: SUB.brief, icon: 'book', run: openBrief } : null,
-      p.init ? { label: '对账', sub: SUB.snap, icon: 'sync', run: snapNow } : null,
-      { label: '打开文件夹', icon: 'folder', run: chooseFolder },
-      p.pick ? null : { label: '在访达中显示', icon: 'folder', run: () => reveal('') },
-      p.pick ? null : { label: '复制开场白', sub: SUB.hint, icon: 'copy', run: copyHint },
-      { label: '成员', icon: 'user', run: () => openSettings('members') },
-      { label: '设置', icon: 'sliders', run: () => openSettings() },
-      { label: UI.noLeft ? '显示左栏' : '隐藏左栏', icon: 'sideL', kbd: '⌘B', run: toggleLeft },
-      { label: UI.noRight ? '显示右栏' : '隐藏右栏', icon: 'sideR', kbd: '⌥⌘B', run: toggleRight },
+      p.pick ? null : { label: T`新任务`, icon: 'plus', run: newThread },
+      p.pick ? null : { label: T`新群聊`, icon: 'plus', run: newChat },
+      p.init && !p.task.empty && !run.running && ready().length ? { label: T`接着做`, icon: 'play', run: goDefault } : null,
+      ...(p.init && !p.task.empty && !run.running && ready().length && !accepted() ? [pageOf(threads().at(-1)) === 'dispatch' ? T`派活` : T`全自动`] : []).map((word) => ({ label: word, icon: 'bolt', run: () => act(null, () => startWork('/api/auto', {}), T`已开始${word}`) })),
+      p.pending.length && reviewer() ? { label: T`复核`, icon: 'review', run: reviewNow } : null,
+      run.running || run.waiting ? { label: T`停止`, icon: 'stop', kbd: '⌘.', run: stopNow } : null,
+      p.init ? { label: T`编辑任务`, icon: 'pencil', run: editTaskRaw } : null,
+      p.init ? { label: T`接力本`, sub: SUB.brief, icon: 'book', run: openBrief } : null,
+      p.init ? { label: T`对账`, sub: SUB.snap, icon: 'sync', run: snapNow } : null,
+      { label: T`打开文件夹`, icon: 'folder', run: chooseFolder },
+      p.pick ? null : { label: REVEAL, icon: 'folder', run: () => reveal('') },
+      p.pick ? null : { label: T`复制开场白`, sub: SUB.hint, icon: 'copy', run: copyHint },
+      { label: T`成员`, icon: 'user', run: () => openSettings('members') },
+      { label: T`设置`, icon: 'sliders', run: () => openSettings() },
+      { label: UI.noLeft ? T`显示左栏` : T`隐藏左栏`, icon: 'sideL', kbd: '⌘B', run: toggleLeft },
+      { label: UI.noRight ? T`显示右栏` : T`隐藏右栏`, icon: 'sideR', kbd: '⌥⌘B', run: toggleRight },
+      { label: LANG.zh ? 'English' : '中文', alt: 'language 语言 english 中文', icon: 'sync', run: () => switchLang(LANG.zh ? 'en' : 'zh') },
     ].filter(Boolean);
-    pick(cmds, '操作', qy ? 6 : 8);
-    if (p.init && !p.task.empty) pick(ready().map((m) => ({ label: `派给 ${memberName(m)}`, alt: `${m.name} ${m.tool || ''}`, tile: tile(m, 's20'), sub: m.tool || '', run: () => goWith(null, m) })), '成员', 5);
-    pick([...threads()].reverse().filter((t) => !blank(t)).map((t) => ({ label: t.title || '未命名', icon: pageOf(t) === 'dispatch' ? 'list' : 'route', sub: when(lastActive(t)), run: () => selectThread(t) })), '任务', 6);
-    const chats = [talkHas(S.talk) ? { id: null, title: talkTitle(S.talk) || '群聊', at: talkAt(S.talk) } : null, ...(S.talk.sessions || [])].filter(Boolean);
-    pick(chats.map((x) => ({ label: x.title, icon: 'chat', sub: x.at ? when(x.at) : '', run: () => selectChat(x.id) })), '群聊', 6);
-    pick(S.st.projects.filter((x) => !x.current).map((x) => ({ label: x.name, icon: 'folder', sub: tildify(x.root), alt: x.root, run: () => switchProject(x.root) })), '项目', 5);
+    pick(cmds, T`操作`, qy ? 6 : 8);
+    if (p.init && !p.task.empty) pick(ready().map((m) => ({ label: T`派给 ${memberName(m)}`, alt: `${m.name} ${m.tool || ''}`, tile: tile(m, 's20'), sub: m.tool || '', run: () => goWith(null, m) })), T`成员`, 5);
+    pick([...threads()].reverse().filter((t) => !blank(t)).map((t) => ({ label: t.title || T`未命名`, icon: pageOf(t) === 'dispatch' ? 'list' : 'route', sub: when(lastActive(t)), run: () => selectThread(t) })), T`任务`, 6);
+    const chats = [talkHas(S.talk) ? { id: null, title: talkTitle(S.talk) || T`群聊`, at: talkAt(S.talk) } : null, ...(S.talk.sessions || [])].filter(Boolean);
+    pick(chats.map((x) => ({ label: x.title, icon: 'chat', sub: x.at ? when(x.at) : '', run: () => selectChat(x.id) })), T`群聊`, 6);
+    pick(S.st.projects.filter((x) => !x.current).map((x) => ({ label: x.name, icon: 'folder', sub: tildify(x.root), alt: x.root, run: () => switchProject(x.root) })), T`项目`, 5);
   }
   if (qy || scope === 'files') {
     const files = ((S.tree && S.tree.files) || []).map((f) => ({ label: basename(f), alt: f, sub: f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '', icon: 'file', run: () => openFile(f) }));
-    pick(files, '文件', scope === 'files' ? 40 : 10);
+    pick(files, T`文件`, scope === 'files' ? 40 : 10);
   }
   // 输入的正好是一个文件名：文件排在最前面
-  const fg = groups.find((g) => g.label === '文件');
+  const fg = groups.find((g) => g.label === T`文件`);
   if (fg && fg.items.some((it) => it.label.toLowerCase() === qy)) groups.unshift(...groups.splice(groups.indexOf(fg), 1));
   return groups;
 }
@@ -5728,10 +5800,10 @@ function openPalette(initial = '', scope = '') {
   if (!S.st) return;
   closeMenus();
   if (PAL.el) return PAL.input.focus();
-  const input = h('input', { type: 'text', value: initial, placeholder: scope === 'files' ? '文件名' : '搜索', 'aria-label': '搜索' });
+  const input = h('input', { type: 'text', value: initial, placeholder: scope === 'files' ? T`文件名` : T`搜索`, 'aria-label': T`搜索` });
   const list = h('div', { class: 'plist', role: 'listbox' });
   const scrim = h('div', { class: 'scrim', onclick: () => close() });
-  const box = h('div', { class: 'palette', role: 'dialog', 'aria-label': '搜索' }, h('div', { class: 'pin' }, icon('search'), input), list);
+  const box = h('div', { class: 'palette', role: 'dialog', 'aria-label': T`搜索` }, h('div', { class: 'pin' }, icon('search'), input), list);
   let flat = [];
   let hot = 0;
   const close = () => {
@@ -5760,12 +5832,12 @@ function openPalette(initial = '', scope = '') {
             it.tile || icon(it.icon),
             h('span', { class: 't', html: marked(it.label, it.hits || []) }),
             it.sub ? h('span', { class: 'sub' }, it.sub) : null,
-            it.kbd ? h('kbd', null, it.kbd) : null
+            it.kbd ? h('kbd', null, keys(it.kbd)) : null
           );
         }),
       ])
     );
-    if (!flat.length) list.append(h('div', { class: 'none' }, '没有结果'));
+    if (!flat.length) list.append(h('div', { class: 'none' }, T`没有结果`));
   };
   const paint = () => {
     [...list.querySelectorAll('.mi')].forEach((b, i) => {
@@ -5849,6 +5921,16 @@ setInterval(() => {
   for (const el of document.querySelectorAll('[data-since]')) el.textContent = elapsed(el.dataset.since);
 }, 1000);
 
+// 窗口拉宽拉窄过了 1180px：右栏跟着自己收放（和点按钮一样滑、扫一道点）
+mqMid.addEventListener('change', () => {
+  UI.peek = false;
+  if (!fitRight() || narrow()) return;
+  applyLayout();
+  sideSweep('right', !UI.noRight);
+  wireTo(null);
+  renderAll();
+});
+
 mqNarrow.addEventListener('change', () => {
   closeDrawers();
   barSig = '';
@@ -5871,6 +5953,90 @@ new ResizeObserver(() => (paperSize(), paperHolesSoon())).observe($('#center'));
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paperInk);
 new MutationObserver(paperInk).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
+// ---------- 语言 ----------
+
+/** 按钮上写的是另一种语言的名字（中文界面写 EN，英文界面写「中」），点一下就换。 */
+function langBtn() {
+  const to = LANG.zh ? 'en' : 'zh';
+  return h('button', { class: 'lang-btn', lang: to === 'zh' ? 'zh-CN' : 'en', 'aria-label': to === 'zh' ? '中文' : 'English', 'data-tip': to === 'zh' ? '中文' : 'English', onclick: () => switchLang(to) }, to === 'zh' ? '中' : 'EN');
+}
+
+function langSeg() {
+  const seg = h(
+    'div',
+    { class: 'seg', role: 'group', 'aria-label': T`语言` },
+    [
+      ['zh', '中文'],
+      ['en', 'English'],
+    ].map(([k, label]) =>
+      h(
+        'button',
+        {
+          lang: k === 'zh' ? 'zh-CN' : 'en',
+          'aria-pressed': String(LANG.now === k),
+          onclick: (e) => {
+            for (const b of seg.children) b.setAttribute('aria-pressed', String(b === e.currentTarget));
+            syncSegs(seg.parentNode);
+            setTimeout(() => switchLang(k), still() ? 0 : 220);
+          },
+        },
+        label
+      )
+    )
+  );
+  return seg;
+}
+
+/**
+ * 换语言：界面上的字都是画的时候取的，最稳的是整页重新载入一次。先记下正在看的（哪段对话、打开的页签、
+ * 展开的卡片、滚到哪、设置开在哪一页）和输入框里的字，整页淡出；载入后照原样摆好再淡进来（i18n.js 里先藏着）。
+ */
+function switchLang(to) {
+  if (to === LANG.now) return;
+  try {
+    localStorage.setItem('relay.lang', to);
+    if (C.ta && S.dir) store.set(`draft:${S.dir}`, C.ta.value);
+    const t = S.st && centerMode() === 'thread' ? selectedThread() : null;
+    sessionStorage.setItem(
+      'relay.carry',
+      JSON.stringify({ thread: S.thread, draft: S.draft, chat: S.chat, tabs: S.tabs, tab: S.tab, open: [...S.open], scroll: t ? CE.scroll.scrollTop : null, stick, settings: layer.querySelector('.settings') ? settingsTab : null })
+    );
+  } catch (e) {
+    return fail(T`换语言`, e);
+  }
+  document.documentElement.classList.add('lang-out');
+  // 接力台那边也记一下：英文时请 AI 用英文写交接、复核和回答
+  const told = syncLang(to);
+  Promise.race([told, new Promise((r) => setTimeout(r, still() ? 0 : 200))]).then(() => setTimeout(() => location.reload(), 0));
+}
+
+/** 网页的语言告诉接力台（存在运行设置里）；和记下的一样就不发。 */
+function syncLang(lang = LANG.now) {
+  const cur = S.st && S.st.settings;
+  if (!cur || cur.lang === lang) return Promise.resolve();
+  return api('/api/settings', { settings: { ...cur, lang } }).catch(() => {});
+}
+
+/** 换语言之后第一次画好：摆回原样，淡进来。 */
+function carryBack() {
+  let c = null;
+  try {
+    c = JSON.parse(sessionStorage.getItem('relay.carry') || 'null');
+    sessionStorage.removeItem('relay.carry');
+  } catch {
+    /* 拿不到就从头看 */
+  }
+  if (c && S.st) {
+    Object.assign(S, { thread: c.thread ?? null, draft: !!c.draft, chat: c.chat ?? null, tabs: Array.isArray(c.tabs) ? c.tabs : [], tab: Number(c.tab) || 0, open: new Set(c.open || []) });
+    if (S.tab >= S.tabs.length + 1) S.tab = 0;
+    renderAll();
+    if (c.scroll !== null && !c.stick) CE.scroll.scrollTop = c.scroll;
+    else scrollBottom();
+    if (c.settings) openSettings(c.settings);
+  }
+  requestAnimationFrame(() => document.documentElement.classList.remove('lang-in'));
+}
+
 // ---------- 开始 ----------
 
 function renderAll() {
@@ -5887,6 +6053,8 @@ function renderAll() {
 }
 
 (async function start() {
+  $('#left').setAttribute('aria-label', T`项目和对话`);
+  $('#right').setAttribute('aria-label', T`项目文件`);
   applyLayout();
   buildCenter();
   buildComposer();
@@ -5897,5 +6065,7 @@ function renderAll() {
   await Promise.all([loadTalk(), loadTree()]);
   stintsKey = S.st ? S.st.project.stints.map((s) => `${s.id}${s.status}${s.endedAt || ''}`).join() : '';
   scrollBottom();
+  carryBack();
+  syncLang();
   schedule();
 })();
