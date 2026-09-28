@@ -84,11 +84,11 @@ function iconBtn(label, name, onclick, kbd, cls = '') {
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 /** 格点的伪随机数（0～999）：同一个格子每次都一样，边缘毛毛的但不闪。 */
 const hash = (i, j) => (((i * 73856093) ^ (j * 19349663)) >>> 0) % 1000;
-/** 缓动，和 app.css 的 --snap / --exit / --spring 同一套（弹簧是 CSS 的 linear()，不支持的浏览器退回贝塞尔）。 */
+/** 缓动，和 app.css 的 --ease / --snap / --exit / --spring 同一套（弹簧是 CSS 的 linear()，不支持的浏览器退回贝塞尔）。 */
 const EASE = (() => {
   const css = getComputedStyle(document.documentElement);
   const v = (k, d) => css.getPropertyValue(k).trim() || d;
-  return { snap: v('--snap', 'cubic-bezier(.16,1,.3,1)'), exit: v('--exit', 'cubic-bezier(.4,0,1,1)'), spring: v('--spring', 'cubic-bezier(.2,.7,.2,1)') };
+  return { ease: v('--ease', 'cubic-bezier(.2,.7,.2,1)'), snap: v('--snap', 'cubic-bezier(.16,1,.3,1)'), exit: v('--exit', 'cubic-bezier(.4,0,1,1)'), spring: v('--spring', 'cubic-bezier(.2,.7,.2,1)') };
 })();
 /** 一批一起进场的第 i 个晚多少毫秒：前几个拉开，后面的挤在一起到（不像节拍器一样等距），最多 110。 */
 const stagger = (i) => Math.round(110 * (1 - 0.82 ** i));
@@ -100,6 +100,45 @@ function leave(el) {
   el.classList.add('leave');
   el.addEventListener('animationend', () => el.remove(), { once: true });
   setTimeout(() => el.remove(), 200);
+}
+
+/** 显示 / 藏起一个元素：出来时由样式里的进场动画接上，藏起时先淡出再藏（中途又要显示就停下淡出）。 */
+function show(el, on) {
+  if (!el) return;
+  if (on) {
+    el.getAnimations().forEach((a) => a.id === 'hide' && a.cancel());
+    el.hidden = false;
+    return;
+  }
+  if (el.hidden || el.getAnimations().some((a) => a.id === 'hide')) return;
+  if (still()) return (el.hidden = true);
+  const a = el.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(4px) scale(0.98)' }], { id: 'hide', duration: 140, easing: EASE.exit, fill: 'forwards' });
+  a.onfinish = () => {
+    el.hidden = true;
+    a.cancel();
+  };
+}
+
+/**
+ * 整块重画、看着却是接上的：重画前记下每一项（有 data-k 按它，没有按标签和样式）在哪、写的什么；
+ * 重画后还在的从原来的位置滑过去，字变了的淡一下换上，新来的晚一点淡进来。顶栏、空白页顶上都用它。
+ */
+function morph(box, render, pick = (b) => b.querySelectorAll(':scope > * > *')) {
+  if (still() || !box.isConnected || box.hidden || !box.offsetWidth) return render();
+  const id = (el) => el.dataset.k || `${el.tagName}.${el.className}`;
+  const was = new Map();
+  for (const el of pick(box)) was.set(id(el), { x: el.getBoundingClientRect().left, text: el.textContent });
+  render();
+  for (const el of pick(box)) {
+    const o = was.get(id(el));
+    if (!o) {
+      el.animate([{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }], { duration: 260, delay: 60, easing: EASE.snap, fill: 'backwards' });
+      continue;
+    }
+    const dx = o.x - el.getBoundingClientRect().left;
+    if (Math.abs(dx) > 0.5) el.animate([{ transform: `translateX(${dx}px)` }, { transform: 'none' }], { duration: 420, easing: EASE.spring });
+    if (o.text !== el.textContent && !el.querySelector('.roll')) el.animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 260, easing: EASE.ease });
+  }
 }
 
 /** 一组元素重排（删掉一行、换了顺序）：还在的从原来的位置滑过去，不是一下子跳过去。 */
@@ -161,44 +200,49 @@ function underlay(host, draw) {
 }
 
 /**
- * 收起 / 打开侧栏：一道点扫过这一栏，收起从外往里，打开从里往外；前沿和侧栏收起、打开一样长、一样先快后慢（0.32 秒），每颗点分三档变小、0.1 秒散掉。
- * 点盖在最上面，扫完就拿掉。
+ * 收起 / 打开侧栏：这一栏挨着对话的那条边化成一道点，跟着边走（画布贴着内沿、放在这一栏里面，栏收窄就一起被裁掉，
+ * 点不会落到对话上）。越靠边越密越大，分三档；收起时点一出来就跟着边收走，打开时边停稳前分三档散掉。
  */
+const SIDE_BAND = 42;
 function sideSweep(side, open) {
-  app.querySelector(`:scope > .specks[data-side="${side}"]`)?.remove();
+  const host = side === 'left' ? $('#left') : $('#right');
+  host.querySelector(':scope > .specks.side')?.remove();
   const w = side === 'left' ? UI.left : UI.right;
-  const H = app.clientHeight;
+  const H = host.clientHeight;
   if (still() || narrow() || !w || !H) return;
-  const cv = h('canvas', { class: 'specks side', 'data-side': side, 'aria-hidden': 'true', style: `${side}: 0; width: ${w}px; height: ${H}px` });
-  app.append(cv);
-  // 往哪边走：左栏收起、右栏打开是往右，另外两种往左
-  const dir = (side === 'left') !== open ? 1 : -1;
+  const cv = h('canvas', { class: 'specks side', 'aria-hidden': 'true', style: `${side === 'left' ? 'right' : 'left'}: 0; width: ${SIDE_BAND}px; height: ${H}px` });
+  host.append(cv);
+  // 离内沿多远（0 贴着边）：左栏的内沿在画布右边，右栏在左边
   const dots = [];
   for (let y = 6; y < H; y += 10) {
-    for (let x = 5; x < w; x += 10) {
-      const r = hash(x, y);
-      if (r > 350) dots.push(x, y, r);
+    for (let d = 3; d < SIDE_BAND; d += 10) {
+      const r = hash(d, y);
+      // 越靠边越密：贴边一列留七成，最外一列留两成
+      if (r > 300 + (d / SIDE_BAND) * 500) dots.push(side === 'left' ? SIDE_BAND - d : d, y, d, r);
     }
   }
-  specks(cv, w, H, (ctx, t) => {
+  const T = 420;
+  specks(cv, SIDE_BAND, H, (ctx, t) => {
     const lv = [new Path2D(), new Path2D(), new Path2D()];
-    let live = t < 380;
-    for (let n = 0; n < dots.length; n += 3) {
+    // 整道点的份量：收起时 60 毫秒长满、跟着边走完；打开时长满后在边停稳前退掉
+    const grow = clamp(t / 60, 0, 1);
+    const env = open ? grow * (1 - smooth(T * 0.35, T, t)) : grow;
+    for (let n = 0; n < dots.length; n += 4) {
+      const d = dots[n + 2];
+      const r = dots[n + 3];
+      const k = Math.ceil(env * 3 * (1 - d / SIDE_BAND) - (r % 3) * 0.25) - 1;
+      if (k < 0) continue;
       const x = dots[n];
       const y = dots[n + 1];
-      const age = t - 320 * reachAt(dir > 0 ? x / w : 1 - x / w, 3) - (dots[n + 2] % 40);
-      const k = 2 - Math.floor(age / 35);
-      if (age < 0 || k < 0) continue;
-      live = true;
-      const r = 0.7 + 0.5 * k;
-      lv[k].moveTo(x + r, y);
-      lv[k].arc(x, y, r, 0, 6.2832);
+      const rad = 0.7 + 0.45 * Math.min(k, 2);
+      lv[Math.min(k, 2)].moveTo(x + rad, y);
+      lv[Math.min(k, 2)].arc(x, y, rad, 0, 6.2832);
     }
     lv.forEach((p, k) => {
-      ctx.globalAlpha = 0.14 + 0.1 * k;
+      ctx.globalAlpha = 0.16 + 0.1 * k;
       ctx.fill(p);
     });
-    return live;
+    return t < T + 40;
   });
 }
 
@@ -1119,23 +1163,20 @@ function drawer(side) {
   document.body.append(h('div', { class: 'drawer-scrim', onclick: closeDrawers }));
 }
 
-function toggleLeft() {
-  if (narrow()) return drawer('left');
-  UI.noLeft = !UI.noLeft;
-  store.set('noLeft', UI.noLeft ? '1' : '');
+/** 收起 / 打开一边的栏：栏收放、内容滑走或滑回、内沿扫一道点；顶栏上替它留的那颗按钮淡进淡出，旁边的字滑过去让位。 */
+function toggleSide(side) {
+  if (narrow()) return drawer(side);
+  hideTip();
+  const k = side === 'left' ? 'noLeft' : 'noRight';
+  UI[k] = !UI[k];
+  store.set(k, UI[k] ? '1' : '');
   applyLayout();
-  sideSweep('left', !UI.noLeft);
+  sideSweep(side, !UI[k]);
+  if (side === 'right') wireTo(null);
   renderAll();
 }
-
-function toggleRight() {
-  if (narrow()) return drawer('right');
-  UI.noRight = !UI.noRight;
-  store.set('noRight', UI.noRight ? '1' : '');
-  applyLayout();
-  sideSweep('right', !UI.noRight);
-  renderAll();
-}
+const toggleLeft = () => toggleSide('left');
+const toggleRight = () => toggleSide('right');
 
 for (const g of document.querySelectorAll('.grip')) {
   const side = g.dataset.grip;
@@ -1171,7 +1212,9 @@ for (const g of document.querySelectorAll('.grip')) {
 }
 
 function sideBtn(side) {
-  return side === 'left' ? iconBtn('项目和对话', 'sideL', toggleLeft, '⌘B') : iconBtn('文件', 'sideR', toggleRight, '⌥⌘B');
+  const b = side === 'left' ? iconBtn('项目和对话', 'sideL', toggleLeft, '⌘B') : iconBtn('文件', 'sideR', toggleRight, '⌥⌘B');
+  b.dataset.k = `side-${side}`;
+  return b;
 }
 
 // ---------- 数据 ----------
@@ -1184,7 +1227,7 @@ function setOffline(v) {
   S.offline = v;
   S.shownClosed = closed;
   if (!CE.offline) return;
-  CE.offline.hidden = !v;
+  show(CE.offline, v);
   CE.offlineText.textContent = closed ? '已关闭接力台' : '连不上接力台';
   CE.offlineDot.hidden = CE.offlineRetry.hidden = closed;
 }
@@ -1357,14 +1400,18 @@ function centerMode() {
   return 'thread';
 }
 
-function selectThread(t) {
+/** after：画好之后再做的（跳到某一棒）。 */
+function selectThread(t, after) {
   showView(pageOf(t));
   S.draft = false;
   S.thread = t.current ? null : t.id;
   S.tab = 0;
   closeDrawers();
-  renderAll();
-  scrollBottom();
+  turnPage(() => {
+    renderAll();
+    scrollBottom();
+    after && after();
+  });
 }
 
 function newThread() {
@@ -1373,8 +1420,30 @@ function newThread() {
   S.thread = null;
   S.tab = 0;
   closeDrawers();
-  renderAll();
-  C.ta.focus();
+  turnPage(() => {
+    renderAll();
+    C.ta.focus();
+  });
+}
+
+/**
+ * 中间换一段内容（换对话、新任务、换一段群聊）：左边的选中马上跟过去，中间旧的先淡出一点点（0.1 秒）再画新的，
+ * 新的一项项升上来（renderStream 的 enterAnim）。换页（接力 / 派活 / 群聊）是整页滑进来，不走这里。
+ */
+let turning = null;
+function turnPage(render) {
+  const box = [CE.chat, CE.hero, CE.doc].find((el) => !el.hidden);
+  turning?.cancel();
+  turning = null;
+  if (still() || S.swap || !box || !S.st) return render();
+  renderLeft();
+  const a = box.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(-4px)' }], { duration: 100, easing: EASE.exit });
+  turning = a;
+  a.onfinish = () => {
+    if (turning !== a) return;
+    turning = null;
+    render();
+  };
 }
 
 // ---------- 三页：接力、派活、群聊 ----------
@@ -1494,6 +1563,8 @@ function drawLeft() {
     box.replaceChildren(LE.brand, LE.body);
   }
   const keep = LE.body.querySelector('.nav')?.scrollTop || 0;
+  // 重画前记下每一行右边写的什么：重画后新来的一行淡进来，右边的字变了的淡一下（不是整列一闪）
+  const was = new Map([...LE.body.querySelectorAll('.thread')].map((el) => [el.dataset.id, el.querySelector('.when')?.textContent]));
   // 刚切了页：这一列新换上的对话一行接一行浮上来
   const swap = !!S.swap;
   const projects = [];
@@ -1576,6 +1647,11 @@ function drawLeft() {
     )
   );
   LE.body.querySelector('.nav').scrollTop = keep;
+  if (swap || !was.size || still()) return;
+  for (const el of LE.body.querySelectorAll('.thread')) {
+    if (!was.has(el.dataset.id)) el.animate([{ opacity: 0, transform: 'translateX(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: EASE.ease });
+    else if (was.get(el.dataset.id) !== el.querySelector('.when')?.textContent) el.querySelector('.when')?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: EASE.ease });
+  }
 }
 
 /** 哪天几点：今天只写几点，昨天写「昨天 21:43」，更早写「9月25日 21:43」。 */
@@ -1710,22 +1786,22 @@ function buildCenter() {
 function onScroll() {
   const s = CE.scroll;
   stick = s.scrollHeight - s.scrollTop - s.clientHeight < 80;
-  if (stick) CE.toBottom.hidden = true;
-  if (WIRE.card) drawWires();
+  if (stick) show(CE.toBottom, false);
+  if (WIRE.from) drawWires();
   if (PAPER.kind === 'chat') paperHolesSoon();
 }
 
 function scrollBottom(smooth) {
   CE.scroll.scrollTo({ top: CE.scroll.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   stick = true;
-  CE.toBottom.hidden = true;
+  show(CE.toBottom, false);
 }
 
 function renderCenter() {
   if (!S.st) return;
-  CE.offline.hidden = !S.offline;
+  show(CE.offline, S.offline);
   const cfgErr = S.st.project.config && S.st.project.config.error;
-  CE.cfgBad.hidden = !cfgErr;
+  show(CE.cfgBad, !!cfgErr);
   if (cfgErr && CE.cfgBad.dataset.err !== cfgErr) {
     CE.cfgBad.dataset.err = cfgErr;
     CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': cfgErr }, '配置文件坏了'), h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, '打开'));
@@ -1773,12 +1849,12 @@ function renderHero(mode) {
   const p = S.st.project;
   // 还没有项目（停在家目录这种大文件夹）：只请你选一个项目文件夹
   if (mode === 'pick') {
-    const sig = JSON.stringify([mode, members().length, !!S.st.detecting, UI.noLeft, UI.noRight, narrow()]);
+    const sig = JSON.stringify([mode, members().length, !!S.st.detecting]);
     if (sig !== heroSig) {
       heroSig = sig;
       C.wrap.remove();
       CE.hero.replaceChildren(
-        h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null),
+        heroBar(),
         h(
           'div',
           { class: 'hero-in' },
@@ -1791,13 +1867,13 @@ function renderHero(mode) {
         )
       );
     }
-    return;
+    return syncHeroBar();
   }
   const setup = mode === 'setup' || mode === 'chat-setup';
   const chat = mode === 'chat-new' || mode === 'chat-setup';
   const pend = setup || chat ? [] : p.pending;
   const canCancel = mode === 'new' && S.draft && pageThreads().some((t) => !blank(t));
-  const sig = JSON.stringify([mode, S.view, p.root, p.name, pend.map((s) => [s.id, s.summary]), UI.noLeft, UI.noRight, narrow(), canCancel]);
+  const sig = JSON.stringify([mode, S.view, p.root, p.name, pend.map((s) => [s.id, s.summary]), canCancel]);
   if (sig !== heroSig) {
     heroSig = sig;
     const s = pend[0];
@@ -1825,12 +1901,28 @@ function renderHero(mode) {
           )
         )
       : h('div', { class: 'under', hidden: true });
-    CE.hero.replaceChildren(h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null), h('div', { class: 'hero-in' }, head, notice, C.wrap, under));
+    CE.hero.replaceChildren(heroBar(), h('div', { class: 'hero-in' }, head, notice, C.wrap, under));
   } else if (C.wrap.parentNode !== CE.hero.querySelector('.hero-in')) {
     const inner = CE.hero.querySelector('.hero-in');
     inner.insertBefore(C.wrap, inner.querySelector('.under'));
   }
+  syncHeroBar();
   setComposerKind(chat ? 'talk' : 'task');
+}
+
+/** 空白页顶上：收起了的侧栏在这里留一颗按钮。和下面的内容分开画，收放侧栏时只有按钮淡进淡出。 */
+function heroBar() {
+  const bar = h('div', { class: 'hero-bar' });
+  bar.dataset.sig = '';
+  return bar;
+}
+
+function syncHeroBar() {
+  const bar = CE.hero.querySelector('.hero-bar');
+  const sig = JSON.stringify([UI.noLeft, UI.noRight, narrow()]);
+  if (!bar || bar.dataset.sig === sig) return;
+  bar.dataset.sig = sig;
+  morph(bar, () => bar.replaceChildren(...[UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null].filter(Boolean)), (b) => b.children);
 }
 
 // ----- 纸：中间这一栏的底，一张画布画完 -----
@@ -2282,17 +2374,25 @@ function renderBar(t) {
   const ctl = [];
   if (latest) {
     meta.push(statusEl(run));
-    if (p.pending.length) meta.push(h('button', { class: 'meta-btn', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget) }, h('span', { class: 'rd' }), h('span', null, '待复核 ', num('pend', p.pending.length))));
-    if (p.task.total) meta.push(h('button', { class: 'meta-btn', 'data-tip': '清单', onclick: () => CE.stream.querySelector('.head')?.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'start' }) }, h('span', null, '清单 ', num('done', p.task.done), `/${p.task.total}`)));
+    if (p.pending.length)
+      meta.push(
+        h(
+          'button',
+          { class: 'meta-btn', 'data-k': 'pending', 'aria-haspopup': 'menu', onclick: (e) => pendingMenu(e.currentTarget), onmouseenter: () => lightStints(p.pending.map((s) => s.id)), onmouseleave: unlightCards },
+          h('span', { class: 'rd' }),
+          h('span', null, '待复核 ', num('pend', p.pending.length))
+        )
+      );
+    if (p.task.total) meta.push(h('button', { class: 'meta-btn', 'data-k': 'checks', 'data-tip': '清单', onclick: () => CE.stream.querySelector('.head')?.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'start' }) }, h('span', null, '清单 ', num('done', p.task.done), `/${p.task.total}`)));
     if (run.running || run.waiting) {
-      ctl.push(h('button', { class: 'btn primary', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), h('span', { class: 'lbl' }, '停止')));
+      ctl.push(h('button', { class: 'btn primary', 'data-k': 'go', 'data-tip': '停止', 'data-kbd': '⌘.', onclick: (e) => act(e.currentTarget, () => api('/api/stop', {}), '已停止') }, icon('stop'), h('span', { class: 'lbl' }, '停止')));
     } else {
       const why = p.task.empty ? '还没有任务' : accepted() ? '验收通过' : !ready().length ? '没有可用的成员' : '';
       const word = pageOf(t) === 'dispatch' ? '派活' : '全自动';
       ctl.push(
         h(
           'span',
-          { class: 'split' },
+          { class: 'split', 'data-k': 'go' },
           h(
             'button',
             { class: 'btn primary', disabled: !!why, 'data-tip': why || null, onclick: (e) => act(e.currentTarget, () => startWork('/api/auto', {}), `已开始${word}`) },
@@ -2306,10 +2406,12 @@ function renderBar(t) {
     ctl.push(iconBtn('更多', 'more', (e) => barMenu(e.currentTarget)));
   }
   if (UI.noRight || narrow()) ctl.push(sideBtn('right'));
-  CE.bar.replaceChildren(
-    h('div', { class: 'bar-l' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'crumb cap' }, p.name, h('i', null, '/'), `任务 ${n}`)),
-    h('div', { class: 'bar-m' }, meta),
-    h('div', { class: 'bar-ctl' }, ctl)
+  morph(CE.bar, () =>
+    CE.bar.replaceChildren(
+      h('div', { class: 'bar-l' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'crumb cap', 'data-k': 'crumb' }, p.name, h('i', null, '/'), `任务 ${n}`)),
+      h('div', { class: 'bar-m' }, meta),
+      h('div', { class: 'bar-ctl' }, ctl)
+    )
   );
 }
 
@@ -2320,7 +2422,7 @@ function statusEl(run) {
     const auto = run.g && run.g.mode === 'auto' ? (run.g.dispatch ? '派活' : '全自动') : '';
     return h(
       'span',
-      { class: 'status live', 'data-tip': c ? `${auto ? `${auto} · ` : ''}${nameOf(c.label)}` : null },
+      { class: 'status live', 'data-k': 'status', 'data-tip': c ? `${auto ? `${auto} · ` : ''}${nameOf(c.label)}` : null },
       h('span', { class: 'dot' }),
       auto ? h('span', { class: 'w' }, auto) : null,
       c ? tile({ name: c.member, label: c.label }, 's16') : null,
@@ -2330,12 +2432,12 @@ function statusEl(run) {
   }
   if (run.waiting) {
     const g = run.g;
-    return h('span', { class: 'status wait', 'data-tip': g && g.phase }, h('span', { class: 'dot' }), h('span', { class: 'w' }, `等额度${g && g.waitingUntil ? ` · ${clock(g.waitingUntil)}` : ''}`));
+    return h('span', { class: 'status wait', 'data-k': 'status', 'data-tip': g && g.phase }, h('span', { class: 'dot' }), h('span', { class: 'w' }, `等额度${g && g.waitingUntil ? ` · ${clock(g.waitingUntil)}` : ''}`));
   }
   if (run.native) {
     const s = S.st.project.stints.find((x) => x.status === 'working');
     const known = s && s.who.label !== '不知道是谁';
-    return h('span', { class: 'status live', 'data-tip': known ? nameOf(s.who.label, s.who.model) : null }, h('span', { class: 'dot' }), known ? tile(s.who, 's16') : null, h('span', { class: 'w' }, '进行中'));
+    return h('span', { class: 'status live', 'data-k': 'status', 'data-tip': known ? nameOf(s.who.label, s.who.model) : null }, h('span', { class: 'dot' }), known ? tile(s.who, 's16') : null, h('span', { class: 'w' }, '进行中'));
   }
   return null;
 }
@@ -2371,6 +2473,8 @@ function acceptPanel() {
   // 读不到的（配置文件坏了、改动读不到）和还差的（没复核、没终审、检查没过）分开说。
   const unread = a.items.filter((i) => i.kind === 'config' || i.kind === 'evidence');
   const missing = a.items.filter((i) => i.kind !== 'config' && i.kind !== 'evidence');
+  const p = S.st.project;
+  const cmd = p.init && p.config && p.config.gate;
   close = sheet({
     title: { accepted: '验收通过', blocked: '验收没过', unknown: '没法验收' }[a.state] || '验收',
     body: h(
@@ -2380,7 +2484,8 @@ function acceptPanel() {
       unread.length ? h('p', null, '读不到：') : null,
       unread.length ? list(unread) : null,
       missing.length ? h('p', null, '还差：') : null,
-      missing.length ? list(missing) : null
+      missing.length ? list(missing) : null,
+      cmd ? h('div', { class: 'gate-line' }, h('span', { class: 'cap' }, '检查命令'), h('code', null, cmd), gateResult(p)) : null
     ),
     foot: [h('button', { class: 'btn primary', autofocus: true, onclick: () => close() }, '知道了')],
   });
@@ -2459,7 +2564,9 @@ function keepHead() {
   const now = fresh.querySelectorAll('.checks li');
   if (was.length !== now.length) return;
   was.forEach((li, k) => {
+    const ticked = !li.classList.contains('done') && now[k].classList.contains('done');
     li.className = now[k].className;
+    if (ticked) li.classList.add('ticked');
     li.querySelector('.box')?.setAttribute('aria-checked', now[k].querySelector('.box')?.getAttribute('aria-checked'));
   });
   head.querySelector('.cap').textContent = fresh.querySelector('.cap').textContent;
@@ -2484,9 +2591,17 @@ function whoMenu(anchor) {
     for (const m of self) items.push({ label: memberName(m), sub: m.app, tile: tile(m, 's20'), run: () => openIn(m) });
   }
   if (!items.length) items.push({ label: '没有成员', disabled: true });
-  items.push('-', { label: '复制开场白', icon: 'copy', run: copyHint });
+  items.push('-', { label: '复制开场白', sub: SUB.hint, icon: 'copy', run: copyHint });
   openMenu(anchor, items, { align: 'end' });
 }
+
+/** 菜单里名字看不出是做什么的几项：底下一行灰字写它是什么（只写事实）。 */
+const SUB = {
+  brief: '每位 AI 开工先读的：进度、规矩、上一棒的交接',
+  snap: '把在接力台之外改的文件记进账本',
+  hint: '在别的 AI 工具里接着做时，对它说的第一句',
+  protocol: 'AGENTS.md、CLAUDE.md 里写给各家 AI 的那一段',
+};
 
 function pendingMenu(anchor) {
   const p = S.st.project;
@@ -2502,11 +2617,11 @@ function barMenu(anchor) {
     anchor,
     [
       { label: '编辑任务', icon: 'pencil', run: editTaskRaw },
-      { label: '接力本', icon: 'book', run: openBrief },
-      { label: '对账', icon: 'sync', run: snapNow },
-      { label: '复制开场白', icon: 'copy', run: copyHint },
+      { label: '接力本', sub: SUB.brief, icon: 'book', run: openBrief },
+      { label: '对账', sub: SUB.snap, icon: 'sync', run: snapNow },
+      { label: '复制开场白', sub: SUB.hint, icon: 'copy', run: copyHint },
       { label: '在访达中显示', icon: 'folder', run: () => reveal('') },
-      p.protocol !== 'ok' ? { label: '更新接力规矩', icon: 'warn', run: updateProtocol } : null,
+      p.protocol !== 'ok' ? { label: '更新接力规矩', sub: SUB.protocol, icon: 'warn', run: updateProtocol } : null,
     ],
     { align: 'end' }
   );
@@ -2659,12 +2774,30 @@ function enterAnim(el, i) {
   el.addEventListener('animationend', done);
 }
 
-/** 按 key 对齐：没变的不动，变了的换掉，新来的加进来（带一点动画）。keep：正在编辑，先别动。 */
+/** 一项换成新画的：状态、那一句、底下一行、时间里变了的淡一下换上，不是一下子跳过去。 */
+const MORPH_PARTS = ['.pill', '.sum', '.say', '.foot', '.vt', '.why', '.q', '.opts', '.text', '.cap', '.ttl', '.sub'];
+function settle(old, fresh) {
+  if (still()) return;
+  for (const sel of MORPH_PARTS) {
+    const a = old.querySelector(sel);
+    const b = fresh.querySelector(sel);
+    if (b && (!a || a.textContent !== b.textContent)) b.animate([{ opacity: 0.15 }, { opacity: 1 }], { duration: 300, easing: EASE.ease });
+  }
+  // 清单：AI 打了勾的那一行也画一笔勾，新加的一步淡进来
+  const was = old.querySelectorAll('.checks li:not(.add)');
+  fresh.querySelectorAll('.checks li:not(.add)').forEach((li, i) => {
+    const o = was[i];
+    if (o && !o.classList.contains('done') && li.classList.contains('done')) li.classList.add('ticked');
+    else if (!o || o.textContent !== li.textContent) li.animate([{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }], { duration: 280, easing: EASE.ease });
+  });
+}
+
+/** 按 key 对齐：没变的不动，变了的换掉（变了的地方淡一下），新来的加进来（带一点动画），不要了的淡出。keep：正在编辑，先别动。 */
 function syncList(box, items, animate) {
   const old = new Map();
   for (const el of [...box.children]) {
-    if (el.dataset.key) old.set(el.dataset.key, el);
-    else el.remove();
+    if (el.dataset.key && !el.classList.contains('leave')) old.set(el.dataset.key, el);
+    else if (!el.classList.contains('leave')) el.remove();
   }
   let prev = null;
   let added = 0;
@@ -2676,6 +2809,7 @@ function syncList(box, items, animate) {
       fresh.dataset.key = it.key;
       fresh.dataset.sig = it.sig;
       el.replaceWith(fresh);
+      if (animate) settle(el, fresh);
       el = fresh;
     } else if (!el) {
       el = it.make();
@@ -2685,11 +2819,12 @@ function syncList(box, items, animate) {
       added++;
     }
     old.delete(it.key);
-    const want = prev ? prev.nextSibling : box.firstChild;
+    let want = prev ? prev.nextSibling : box.firstChild;
+    while (want && want.classList.contains('leave')) want = want.nextSibling;
     if (el !== want) box.insertBefore(el, want);
     prev = el;
   }
-  for (const el of old.values()) el.remove();
+  for (const el of old.values()) (animate ? leave(el) : el.remove());
   return added;
 }
 
@@ -2730,7 +2865,7 @@ function renderStream(t) {
     if (!S.detail.has(s.id)) loadDetail(s.id);
   }
   if (fresh || wasStuck) scrollBottom();
-  else if (added) CE.toBottom.hidden = false;
+  else if (added) show(CE.toBottom, true);
 }
 
 /** 正在干活的那一棒：日志尾巴原地更新，不重画卡片。 */
@@ -3041,7 +3176,7 @@ function cardFoot(s) {
   if (s.factsError) warn('读不到改动', s.factsError);
   if (s.gate && s.gate.status === 'fail') warn('检查没过');
   if (s.gate && s.gate.status === 'error') warn('检查没跑成', s.gate.detail);
-  if (s.protectedHits) warn('改了保护的文件', s.protectedHits.join('\n'));
+  if (s.protectedHits) warn('改了不许改的文件', s.protectedHits.join('\n'));
   // 复核、并进了复核的终审：列出复核了哪几棒、结论是什么
   if (s.kind !== 'work' && s.targets) {
     for (const id of s.targets) {
@@ -3253,18 +3388,21 @@ function undoRollback(btn) {
 /** 跳到某一棒：不在当前这段对话里就先切过去，然后闪一下。 */
 function jumpTo(id) {
   closeMenus();
+  const go = () => {
+    const el = CE.stream.querySelector(`.card[data-stint="${id}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+  };
   const t = threads().find((x) => x.stints.includes(id));
-  if (t && selectedThread() !== t) selectThread(t);
+  if (t && selectedThread() !== t) return selectThread(t, go);
   if (S.tab !== 0) {
     S.tab = 0;
     renderCenter();
   }
-  const el = CE.stream.querySelector(`.card[data-stint="${id}"]`);
-  if (!el) return;
-  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  el.classList.remove('flash');
-  void el.offsetWidth;
-  el.classList.add('flash');
+  go();
 }
 
 // ----- 群聊：一个项目里的几段群聊（正在用的一段，加上点「新群聊」时存下的） -----
@@ -3310,8 +3448,10 @@ function selectChat(id) {
   S.tab = 0;
   closeDrawers();
   if (id && !(S.archive && S.archive.id === id)) loadArchive(id);
-  renderAll();
-  scrollBottom();
+  turnPage(() => {
+    renderAll();
+    scrollBottom();
+  });
 }
 
 async function loadArchive(id) {
@@ -3402,7 +3542,7 @@ function renderTalk() {
   const last = !S.chat && S.talk.rows[S.talk.rows.length - 1];
   if (last && last.ts > (store.get(`seen:${S.dir}`) || '')) store.set(`seen:${S.dir}`, last.ts);
   if (fresh || wasStuck) scrollBottom();
-  else if (added) CE.toBottom.hidden = false;
+  else if (added) show(CE.toBottom, true);
 }
 
 /** 群聊的顶栏：项目 / 这段群聊；存档的写上是哪天的。 */
@@ -3413,10 +3553,12 @@ function renderChatBar() {
   const sig = JSON.stringify(['chat', p.name, S.chat, title, old && old.at, UI.noLeft, UI.noRight, narrow()]);
   if (sig === barSig) return;
   barSig = sig;
-  CE.bar.replaceChildren(
-    h('div', { class: 'bar-l' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'crumb cap' }, p.name, h('i', null, '/'), title)),
-    h('div', { class: 'bar-m' }, old ? h('span', { class: 'cap' }, dayClock(old.at)) : null),
-    h('div', { class: 'bar-ctl' }, UI.noRight || narrow() ? sideBtn('right') : null)
+  morph(CE.bar, () =>
+    CE.bar.replaceChildren(
+      h('div', { class: 'bar-l' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'crumb cap', 'data-k': 'crumb' }, p.name, h('i', null, '/'), title)),
+      h('div', { class: 'bar-m' }, old ? h('span', { class: 'cap' }, dayClock(old.at)) : null),
+      h('div', { class: 'bar-ctl' }, UI.noRight || narrow() ? sideBtn('right') : null)
+    )
   );
 }
 
@@ -3555,13 +3697,15 @@ function renderTabs() {
   if (sig === tabsSig) return;
   tabsSig = sig;
   const chat = S.view === 'chat';
-  CE.tabs.replaceChildren(
-    h('button', { class: 'tab chat-tab', role: 'tab', 'aria-selected': String(S.tab === 0), onclick: () => ((S.tab = 0), renderCenter(), scrollBottom()) }, icon(chat ? 'chat' : S.view === 'dispatch' ? 'list' : 'route'), chat ? '群聊' : S.view === 'dispatch' ? '派活' : '任务'),
+  // 新开的页签淡进来，别的页签滑过去让位
+  morph(CE.tabs, () => CE.tabs.replaceChildren(
+    h('button', { class: 'tab chat-tab', 'data-k': 'main', role: 'tab', 'aria-selected': String(S.tab === 0), onclick: () => ((S.tab = 0), renderCenter(), scrollBottom()) }, icon(chat ? 'chat' : S.view === 'dispatch' ? 'list' : 'route'), chat ? '群聊' : S.view === 'dispatch' ? '派活' : '任务'),
     ...S.tabs.map((t, i) =>
       h(
         'div',
         {
           class: 'tab',
+          'data-k': tabKey(t),
           role: 'tab',
           tabindex: '0',
           'aria-selected': String(S.tab === i + 1),
@@ -3581,7 +3725,7 @@ function renderTabs() {
         h('button', { class: 'x', 'aria-label': '关闭', onclick: () => closeTab(i) }, icon('x'))
       )
     )
-  );
+  ), (b) => b.children);
 }
 
 function openFile(path) {
@@ -3974,7 +4118,20 @@ function updateComposer() {
       ...S.files.map((f, i) =>
         h(
           'span',
-          { class: 'chip', 'data-tip': f },
+          {
+            class: 'chip',
+            'data-tip': f,
+            // 带上的是项目里的文件：停上去，文件树里那一行点亮、拉一根线过去
+            onmouseenter: (e) => {
+              if (f.startsWith(UPLOADS)) return;
+              lightPaths([f]);
+              wireTo(e.currentTarget);
+            },
+            onmouseleave: () => {
+              unlight();
+              wireTo(null);
+            },
+          },
           isShot(f) ? h('img', { class: 'thumb', src: rawUrl(f), alt: '' }) : icon('file'),
           h('span', { class: 'ell' }, fileLabel(f)),
           h(
@@ -4308,6 +4465,11 @@ async function send() {
     drawOptions();
     store.set(`draft:${S.dir}`, null);
     updateComposer();
+    // 发出去了：输入框空出来时占位字淡进来，发送键的箭头从底下补上来
+    if (!still()) {
+      C.ta.animate([{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 240, easing: EASE.ease });
+      C.send.firstChild?.animate([{ opacity: 0, transform: 'translateY(9px)' }, { opacity: 1, transform: 'none' }], { duration: 300, delay: 80, easing: EASE.snap, fill: 'backwards' });
+    }
   };
   C.send.classList.add('busy');
   C.send.disabled = true;
@@ -4430,10 +4592,9 @@ function buildRight() {
   });
   RE.filter = h('div', { class: 'filter', hidden: true }, icon('search'), RE.input, h('button', { class: 'x', 'aria-label': '清除', onclick: () => toggleFilter(false) }, icon('x')));
   RE.tree = h('div', { class: 'tree', role: 'tree', 'aria-label': '项目文件', onkeydown: treeKeys });
-  RE.tree.addEventListener('scroll', () => WIRE.card && drawWires(), { passive: true });
+  RE.tree.addEventListener('scroll', () => WIRE.from && drawWires(), { passive: true });
   RE.note = h('div', { class: 'tree-note', hidden: true });
-  RE.gate = h('div', { class: 'gate', hidden: true });
-  $('#right-in').append(h('div', { class: 'right-head' }, RE.title, RE.changedBtn, RE.filterBtn, RE.foldBtn, iconBtn('收起', 'sideR', toggleRight, '⌥⌘B')), RE.filter, RE.tree, RE.note, RE.gate);
+  $('#right-in').append(h('div', { class: 'right-head' }, RE.title, RE.changedBtn, RE.filterBtn, RE.foldBtn, iconBtn('收起', 'sideR', toggleRight, '⌥⌘B')), RE.filter, RE.tree, RE.note);
 }
 
 function toggleFilter(on) {
@@ -4525,7 +4686,6 @@ function renderRight(force) {
   const p = S.st.project;
   RE.changedBtn.setAttribute('aria-checked', String(S.onlyChanged));
   RE.changedBtn.hidden = RE.filterBtn.hidden = !!p.pick;
-  renderGate(p);
   syncFoldBtn();
   if (p.pick) {
     // 还没有项目：右边空着
@@ -4622,21 +4782,6 @@ function glide(before) {
   }
 }
 
-/** 右栏底下：检查命令，和最近一次跑的结果。 */
-function renderGate(p) {
-  const cmd = p.init && p.config && p.config.gate;
-  const g = p.acceptance && p.acceptance.gate;
-  const sig = JSON.stringify([cmd, g && [g.status, g.text, g.stint]]);
-  RE.gate.hidden = !cmd;
-  if (!cmd || RE.gate.dataset.sig === sig) return;
-  RE.gate.dataset.sig = sig;
-  RE.gate.replaceChildren(
-    h('span', { class: 'cap' }, '检查'),
-    h('code', null, cmd),
-    g && g.status ? h('span', { class: 'res' }, g.status === 'pass' ? icon('check') : g.status === 'fail' || g.status === 'error' ? h('span', { class: 'rd' }) : null, [g.text, g.stint ? `第 ${g.stint} 棒` : ''].filter(Boolean).join(' · ')) : null
-  );
-}
-
 function treeRow(r, touched) {
   const p = r.node.path;
   const t = touched.get(p);
@@ -4665,8 +4810,11 @@ function treeRow(r, touched) {
         el.classList.add('dragging');
       },
       ondragend: () => el.classList.remove('dragging'),
-      onmouseenter: () => lightCards(p, r.dir),
-      onmouseleave: unlightCards,
+      onmouseenter: (e) => lightCards(p, r.dir) && wireTo(e.currentTarget),
+      onmouseleave: () => {
+        unlightCards();
+        wireTo(null);
+      },
     },
     r.dir ? icon('chev', 'caret') : t ? h('span', { class: `ring ${t.looks[t.looks.length - 1]}`, 'data-tip': t.ids.map((id) => `第 ${id} 棒`).join('、') }) : h('span', { class: 'fi' }),
     h('span', { class: 'nm' }, r.node.name),
@@ -4763,7 +4911,7 @@ function lightPaths(paths) {
       }
     }
   }
-  if (WIRE.card) drawWires();
+  if (WIRE.from) drawWires();
 }
 
 function clearLit() {
@@ -4775,27 +4923,74 @@ function unlight() {
   clearLit();
 }
 
+/** 停在文件上：改过它的那几棒描边（点亮了几张）。 */
 function lightCards(p, dir) {
   const t = selectedThread();
-  if (!t || centerMode() !== 'thread') return;
+  if (!t || centerMode() !== 'thread' || S.view === 'chat') return 0;
   const hit = (path) => (dir ? path.startsWith(`${p}/`) : path === p);
-  for (const s of threadStints(t)) {
-    if (!s.facts || !s.facts.paths.some(hit)) continue;
-    CE.stream.querySelector(`.card[data-stint="${s.id}"]`)?.classList.add('lit');
+  return lightStints(threadStints(t).filter((s) => !s.rolledBack && s.facts && s.facts.paths.some(hit)).map((s) => s.id));
+}
+
+/** 这几棒描边（停在文件上、停在「待复核」上）。 */
+function lightStints(ids) {
+  let n = 0;
+  for (const id of ids) {
+    const el = CE.stream.querySelector(`.card[data-stint="${id}"]`);
+    if (el) {
+      el.classList.add('lit');
+      n++;
+    }
   }
+  return n;
 }
 
 function unlightCards() {
   for (const el of CE.stream.querySelectorAll('.card.lit')) el.classList.remove('lit');
 }
 
-// 连线：停在一棒上，从小条右边拉几根细线到它改过的文件（像实验笔记里钉照片的线）。只在看得见的时候画，滚动时跟着走。
+// 连线（实验笔记里钉照片的点线）：停在一棒上，从小条右边拉线到它改过的文件；停在文件上，从文件拉线到改过它的那几棒；
+// 停在输入框里带上的文件上，拉到文件树里的那一行。线从「+」那头一格一格点出去、一根接一根；移开时收回「+」。
+// 只在看得见的时候画，滚动、换大小时跟着走。
 
-const WIRE = { svg: null, card: null, raf: 0 };
+const WIRE = { svg: null, from: null, raf: 0, off: 0 };
 
-function wireTo(card) {
-  WIRE.card = card;
+/** 从 el 拉线（一棒的卡片、文件树的一行、输入框里的文件）；null：收回去。 */
+function wireTo(el) {
+  WIRE.from = el;
   drawWires(true);
+}
+
+/** 这一刻要画的线：起点（「+」的位置）和每一根的终点；画不了（看不见、没有要连的）就是 null。 */
+function wireLines() {
+  const el = WIRE.from;
+  if (!el || !el.isConnected || narrow() || UI.noRight || S.tab !== 0) return null;
+  const view = CE.scroll.getBoundingClientRect();
+  const tree = RE.tree.getBoundingClientRect();
+  const mark = (r) => (r.querySelector('.ring, .caret, .fi') || r).getBoundingClientRect();
+  const lines = [];
+  let hub;
+  if (el.classList.contains('tree-row')) {
+    // 文件 → 改过它的那几棒（小条右边、名字那一行的高度）
+    const m = mark(el);
+    hub = [m.left - 6, m.top + m.height / 2];
+    for (const c of CE.stream.querySelectorAll('.card.lit')) {
+      const slip = c.querySelector('.slip').getBoundingClientRect();
+      // 露出一半的小条也连：连到露出来的那一截
+      if (slip.bottom > view.top + 16 && slip.top < view.bottom - 16) lines.push([slip.right, clamp(slip.top + 24, view.top + 12, Math.min(slip.bottom - 10, view.bottom - 12))]);
+    }
+  } else {
+    // 一棒、带上的文件 → 文件树里点亮的那几行
+    const card = el.classList.contains('card');
+    const r = (card ? el.querySelector('.slip') : el).getBoundingClientRect();
+    if (card && (r.bottom < view.top + 20 || r.top > view.bottom - 20)) return null;
+    hub = [r.right + (card ? 0 : 6), card ? clamp(r.top + 24, view.top + 12, view.bottom - 12) : r.top + r.height / 2];
+    for (const row of RE.tree.querySelectorAll('.tree-row.lit, .tree-row.lit-in')) {
+      const m = mark(row);
+      const y = m.top + m.height / 2;
+      if (y >= tree.top && y <= tree.bottom) lines.push([m.left - 5, y]);
+    }
+  }
+  return lines.length ? { hub, lines } : null;
 }
 
 function drawWires(fresh) {
@@ -4807,30 +5002,36 @@ function drawWires(fresh) {
       WIRE.svg.setAttribute('aria-hidden', 'true');
       document.body.append(WIRE.svg);
     }
-    const card = WIRE.card;
-    const rows = card && card.isConnected && !narrow() && !UI.noRight && S.tab === 0 ? RE.tree.querySelectorAll('.tree-row.lit, .tree-row.lit-in') : [];
-    const slip = rows.length && card.querySelector('.slip').getBoundingClientRect();
-    const view = CE.scroll.getBoundingClientRect();
-    if (!rows.length || slip.bottom < view.top + 20 || slip.top > view.bottom - 20) return WIRE.svg.replaceChildren();
-    const tree = RE.tree.getBoundingClientRect();
-    const x1 = slip.right;
-    const y1 = clamp(slip.top + 24, view.top + 12, view.bottom - 12);
-    // 每根线是一串点；刚出来时从小条那头一格一格点到文件（下面那层遮罩按 draw 的动画画出来）
+    const svg = WIRE.svg;
+    const w = wireLines();
+    if (!w) return unwire();
+    clearTimeout(WIRE.off);
+    svg.classList.remove('off');
+    const [x, y] = w.hub.map((v) => v.toFixed(1));
+    // 每根线是一串点；刚出来时从「+」那头一格一格点到终点（下面那层遮罩按 draw 的动画画出来）
     let out = '';
     let reveal = '';
-    for (const r of rows) {
-      const mark = (r.querySelector('.ring, .caret') || r).getBoundingClientRect();
-      const y2 = mark.top + mark.height / 2;
-      if (y2 < tree.top || y2 > tree.bottom) continue;
-      const x2 = mark.left - 5;
-      const xy = `x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"`;
+    w.lines.forEach(([x2, y2], i) => {
+      const xy = `x1="${x}" y1="${y}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"`;
       out += `<line ${xy}/>`;
-      reveal += `<line ${xy} style="--len:${Math.hypot(x2 - x1, y2 - y1).toFixed(0)}"/>`;
-    }
-    const [x, y] = [x1.toFixed(1), y1.toFixed(1)];
-    WIRE.svg.innerHTML = out ? `<mask id="wire-m" maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%">${reveal}</mask><g mask="url(#wire-m)">${out}</g><path class="hub" d="M${x - 4.5} ${y}h9M${x} ${y - 4.5}v9"/>` : '';
-    WIRE.svg.classList.toggle('draw', !!fresh && !still());
+      reveal += `<line ${xy} style="--len:${Math.hypot(x2 - x, y2 - y).toFixed(0)};--i:${i}"/>`;
+    });
+    svg.innerHTML = `<mask id="wire-m" maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%">${reveal}</mask><g mask="url(#wire-m)">${out}</g><path class="hub" d="M${x - 4.5} ${y}h9M${x} ${y - 4.5}v9"/>`;
+    svg.classList.toggle('draw', !!fresh && !still());
   });
+}
+
+/** 线收回「+」那头再拿掉（不是一下子没了）。 */
+function unwire() {
+  const svg = WIRE.svg;
+  if (!svg || !svg.firstChild || svg.classList.contains('off')) return;
+  if (still()) return svg.replaceChildren();
+  svg.classList.remove('draw');
+  svg.classList.add('off');
+  WIRE.off = setTimeout(() => {
+    svg.replaceChildren();
+    svg.classList.remove('off');
+  }, 230);
 }
 
 // ---------- 设置 ----------
@@ -4840,36 +5041,37 @@ let consentCache = null;
 
 function openSettings(tab) {
   if (tab) settingsTab = tab;
-  const nav = h('nav', { 'aria-label': '设置' });
-  const pane = h('div', { class: 'pane-in' });
   const tabs = [
     ['members', '成员', 'user'],
     ['project', '项目', 'folder'],
-    ['relay', '调度', 'bolt'],
+    ['relay', '运行', 'bolt'],
     ['general', '通用', 'sliders'],
   ];
-  const draw = () => {
-    nav.replaceChildren(
-      h('h3', null, '设置'),
-      ...tabs.map(([k, label, ic]) =>
-        h(
-          'button',
-          {
-            role: 'tab',
-            'aria-selected': String(settingsTab === k),
-            onclick: () => {
-              settingsTab = k;
-              draw();
-            },
-          },
-          icon(ic),
-          label
-        )
-      )
-    );
-    // 各页返回的列表里可能有空位（比如接力规矩是最新的就没有「更新」那一行）：去掉，不然会显示成「null」。
-    pane.replaceChildren(h('button', { class: 'icon-btn close', 'aria-label': '关闭', onclick: () => close() }, icon('x')), ...settingsBody(settingsTab, draw).filter((x) => x !== null && x !== undefined && x !== false));
+  // 左边的页签：选中的那一块是滑过去的（和分段按钮一样的弹簧）
+  const hl = h('span', { class: 'hl', 'aria-hidden': 'true' });
+  const btns = tabs.map(([k, label, ic]) => h('button', { role: 'tab', 'data-tab': k, onclick: () => go(k) }, icon(ic), label));
+  const nav = h('nav', { 'aria-label': '设置' }, h('h3', null, '设置'), hl, btns);
+  const pane = h('div', { class: 'pane-in' });
+  const mark = () => {
+    const on = btns.find((b) => b.dataset.tab === settingsTab);
+    for (const b of btns) b.setAttribute('aria-selected', String(b === on));
+    if (on && on.offsetHeight) nav.style.setProperty('--hy', `${on.offsetTop}px`);
+  };
+  // 换一页：这一页先淡出一点点，新的一页一行接一行升上来；存完设置后原地重画不再升
+  const draw = (enter) => {
+    pane.replaceChildren(h('button', { class: 'icon-btn close', 'aria-label': '关闭', onclick: () => close() }, icon('x')), ...settingsPane(settingsTab, draw));
     syncSegs(pane);
+    if (enter === true && !still()) [...pane.children].forEach((el, i) => el.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 300, delay: Math.round(stagger(i) * 0.6), easing: EASE.ease, fill: 'backwards' }));
+  };
+  let out = null;
+  const go = (k) => {
+    if (k === settingsTab) return;
+    settingsTab = k;
+    mark();
+    out?.cancel();
+    if (still()) return draw(true);
+    out = pane.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(-4px)' }], { duration: 110, easing: EASE.exit });
+    out.onfinish = () => draw(true);
   };
   const close = sheet({
     title: '设置',
@@ -4877,7 +5079,14 @@ function openSettings(tab) {
     bare: true,
     body: h('div', { class: 'settings' }, nav, pane),
   });
-  draw();
+  mark();
+  requestAnimationFrame(() => nav.classList.add('ready'));
+  draw(true);
+}
+
+/** 各页返回的列表里可能有空位（比如接力规矩是最新的就没有「更新」那一行）：去掉，不然会显示成「null」。 */
+function settingsPane(tab, redraw) {
+  return settingsBody(tab, redraw).filter((x) => x !== null && x !== undefined && x !== false);
 }
 
 let savedAt = 0;
@@ -4901,6 +5110,29 @@ function savedMark() {
   };
 }
 
+/** 设置里的一行：名字，底下一行灰字写它管什么（只写事实），右边是开关、数字或分段。 */
+function setRow(label, desc, control) {
+  const d = h('small', null, desc);
+  const row = h('div', { class: 'row' }, h('div', { class: 'lbl' }, h('span', null, label), desc ? d : null), control);
+  row.desc = d;
+  return row;
+}
+
+/** 设置里的一栏：名字、灰字说明、输入框，底下可以再跟一行结果。 */
+function setField(label, desc, input, ...after) {
+  return h('div', { class: 'field' }, h('span', null, label), desc ? h('small', null, desc) : null, input, ...after);
+}
+
+/** 一小节的标题：几行设置归在一起。 */
+function setSec(text) {
+  return h('div', { class: 'set-sec' }, text);
+}
+
+const LEVEL_DESC = {
+  safe: '只改这个项目文件夹里的文件，命令在各家工具自己的沙箱里跑。',
+  full: '工具不拦截任何操作：能装依赖、联网、改项目以外的文件。',
+};
+
 function settingsBody(tab, redraw) {
   const st = S.st;
   if (tab === 'members') return membersPane(redraw);
@@ -4908,7 +5140,7 @@ function settingsBody(tab, redraw) {
     const p = st.project;
     if (!p.init) return [h('div', { class: 'set-title' }, '项目'), h('div', { class: 'empty-note' }, '这个文件夹还没接入')];
     const mark = savedMark();
-    const gate = h('input', { class: 'input mono', value: p.config.gate, placeholder: 'npm test', 'aria-label': '检查命令' });
+    const gate = h('input', { class: 'input mono', value: p.config.gate, placeholder: '例如 npm test', 'aria-label': '检查命令' });
     const tags = [...p.config.protectedPaths];
     const tagBox = h('div', { class: 'tags' });
     const saveCfg = async () => {
@@ -4922,8 +5154,8 @@ function settingsBody(tab, redraw) {
     };
     const tagInput = h('input', {
       type: 'text',
-      placeholder: '.env、secrets/',
-      'aria-label': '保护的文件',
+      placeholder: tags.length ? '' : '文件或文件夹，例如 .env、secrets/',
+      'aria-label': '不许改的文件',
       onkeydown: (e) => {
         if (e.isComposing || e.keyCode === 229) return;
         if ((e.key === 'Enter' || e.key === ',') && tagInput.value.trim()) {
@@ -4939,7 +5171,8 @@ function settingsBody(tab, redraw) {
         }
       },
     });
-    const drawTags = () =>
+    const drawTags = () => {
+      tagInput.placeholder = tags.length ? '' : '文件或文件夹，例如 .env、secrets/';
       tagBox.replaceChildren(
         ...tags.map((t, i) =>
           h(
@@ -4963,19 +5196,19 @@ function settingsBody(tab, redraw) {
         ),
         tagInput
       );
+    };
     drawTags();
     gate.addEventListener('keydown', (e) => e.key === 'Enter' && gate.blur());
     gate.addEventListener('change', saveCfg);
     return [
       h('div', { class: 'set-title' }, '项目', mark.el),
-      h('label', { class: 'field' }, h('span', null, '检查命令'), gate),
-      h('div', { class: 'field' }, h('span', null, '保护的文件'), tagBox),
+      setField('检查命令', '每一棒结束后在项目文件夹里跑一遍，确认没改坏（比如跑测试）。没通过就不算完成。', gate, gateResult(p)),
+      setField('不许改的文件', '写进给每位 AI 的接力规矩。哪一棒改到了，会标在那一棒上。', tagBox),
       p.protocol === 'ok'
         ? null
-        : h(
-            'div',
-            { class: 'row' },
-            h('span', { class: 'lbl' }, p.protocol === 'old' ? '接力规矩有新版本' : '接力规矩不见了'),
+        : setRow(
+            p.protocol === 'old' ? '接力规矩有新版本' : '接力规矩不见了',
+            '项目里的 AGENTS.md、CLAUDE.md 里写给各家 AI 的那一段。',
             h('button', { class: 'btn small primary', onclick: (e) => act(e.currentTarget, () => api('/api/init', {}), '已更新').then(redraw) }, '更新')
           ),
     ];
@@ -4983,22 +5216,27 @@ function settingsBody(tab, redraw) {
   if (tab === 'relay') {
     const s = st.settings;
     const mark = savedMark();
+    // 原地改好再存：开关的圆钮、分段的滑块是滑过去的，存的时候不重画这一页；存失败再按接力台的重画回来
     const save = async (patch) => {
+      Object.assign(s, patch);
       try {
         const r = await api('/api/settings', { settings: { ...S.st.settings, ...patch } });
         S.st.settings = r.settings;
         mark.flash();
       } catch (e) {
         fail('保存设置', e);
+        redraw();
       }
-      redraw();
     };
     const stepper = (key, lo, hi, unit, step = 1) => {
       const input = h('input', { type: 'number', min: String(lo), max: String(hi), value: String(s[key]), 'aria-label': unit });
       const set = (v) => {
         const n = clamp(Math.round(Number(v) || s[key]), lo, hi);
-        input.value = String(n);
-        if (n !== S.st.settings[key]) save({ [key]: n });
+        if (String(n) !== input.value) {
+          input.value = String(n);
+          if (!still()) input.animate([{ opacity: 0.3, transform: `translateY(${n > s[key] ? 5 : -5}px)` }, { opacity: 1, transform: 'none' }], { duration: 240, easing: EASE.snap });
+        }
+        if (n !== s[key]) save({ [key]: n });
       };
       input.addEventListener('change', () => set(input.value));
       input.addEventListener('keydown', (e) => e.key === 'Enter' && input.blur());
@@ -5011,35 +5249,50 @@ function settingsBody(tab, redraw) {
         h('span', { class: 'u' }, unit)
       );
     };
-    const sw = (key) => h('button', { class: 'switch', role: 'switch', 'aria-checked': String(!!s[key]), 'aria-label': key, onclick: () => save({ [key]: !s[key] }) }, h('span', { class: 'track' }));
-    return [
-      h('div', { class: 'set-title' }, '调度', mark.el),
+    const sw = (key, label) => {
+      const b = h('button', {
+        class: 'switch',
+        role: 'switch',
+        'aria-checked': String(!!s[key]),
+        'aria-label': label,
+        onclick: () => {
+          b.setAttribute('aria-checked', String(!s[key]));
+          save({ [key]: !s[key] });
+        },
+      }, h('span', { class: 'track' }));
+      return b;
+    };
+    const levelBtn = (lv, label) =>
       h(
-        'div',
-        { class: 'row' },
-        h('span', { class: 'lbl' }, '权限'),
-        h(
-          'div',
-          { class: 'seg', role: 'group', 'aria-label': '权限' },
-          h('button', { 'aria-pressed': String(s.level === 'safe'), onclick: () => s.level !== 'safe' && save({ level: 'safe' }) }, '安全'),
-          h(
-            'button',
-            {
-              'aria-pressed': String(s.level === 'full'),
-              onclick: async () => {
-                if (s.level === 'full') return;
-                if (await confirmSheet('完全放开？', '编程工具不再拦截任何操作。', '完全放开')) save({ level: 'full' });
-              },
-            },
-            '完全放开'
-          )
-        )
-      ),
-      h('div', { class: 'row' }, h('span', { class: 'lbl' }, '一棒上限'), stepper('stintTimeoutMin', 1, 600, '分钟', 5)),
-      h('div', { class: 'row' }, h('span', { class: 'lbl' }, '复核上限'), stepper('reviewTimeoutMin', 1, 240, '分钟', 5)),
-      h('div', { class: 'row' }, h('span', { class: 'lbl' }, '全自动上限'), stepper('maxStints', 1, 100, '棒')),
-      h('div', { class: 'row' }, h('span', { class: 'lbl' }, '等额度恢复'), sw('waitForQuota')),
-      h('div', { class: 'row' }, h('span', { class: 'lbl' }, '做完后终审'), sw('finalReview')),
+        'button',
+        {
+          'data-lv': lv,
+          'aria-pressed': String(s.level === lv),
+          onclick: async () => {
+            if (s.level === lv) return;
+            if (lv === 'full' && !(await confirmSheet('不限制 AI 的权限？', LEVEL_DESC.full, '不限制'))) return;
+            for (const b of level.querySelectorAll(':scope > button')) b.setAttribute('aria-pressed', String(b.dataset.lv === lv));
+            syncSegs(level.parentNode);
+            swapText(levelRow.desc, LEVEL_DESC[lv]);
+            save({ level: lv });
+          },
+        },
+        label
+      );
+    const level = h('div', { class: 'seg', role: 'group', 'aria-label': 'AI 的权限' });
+    level.append(levelBtn('safe', '只在项目里'), levelBtn('full', '不限制'));
+    const levelRow = setRow('AI 的权限', LEVEL_DESC[s.level], level);
+    return [
+      h('div', { class: 'set-title' }, '运行', mark.el),
+      setSec('权限'),
+      levelRow,
+      setSec('时限'),
+      setRow('每一棒最长', '一位 AI 接着做一段叫一棒。到时间还没交接就停下，算作出错。', stepper('stintTimeoutMin', 1, 600, '分钟', 5)),
+      setRow('复核、终审最长', '强模型检查别人做的活，到时间就停下。', stepper('reviewTimeoutMin', 1, 240, '分钟', 5)),
+      setSec('全自动'),
+      setRow('最多接力', '接满这么多棒就停下，不会一直做下去。', stepper('maxStints', 1, 100, '棒')),
+      setRow('额度用完时等恢复', '所有 AI 的额度都用完时，等最早恢复的那一位接着做；关掉就直接停下。', sw('waitForQuota', '额度用完时等恢复')),
+      setRow('做完后终审', '清单全部打勾后，请强模型把整件事从头过一遍，通过了才算完成。', sw('finalReview', '做完后终审')),
     ];
   }
   const theme = store.get('theme') || '';
@@ -5052,28 +5305,36 @@ function settingsBody(tab, redraw) {
     // 换浅色、深色：整页淡入淡出，不是一下子跳过去
     if (document.startViewTransition && !still()) document.startViewTransition(apply);
     else apply();
-    redraw();
   };
+  const look = h(
+    'div',
+    { class: 'seg', role: 'group', 'aria-label': '外观' },
+    [
+      ['', '跟随系统'],
+      ['light', '浅色'],
+      ['dark', '深色'],
+    ].map(([k, label]) =>
+      h(
+        'button',
+        {
+          'data-k': k,
+          'aria-pressed': String(theme === k),
+          onclick: (e) => {
+            for (const b of look.children) b.setAttribute('aria-pressed', String(b === e.currentTarget));
+            syncSegs(look.parentNode);
+            setTheme(k);
+          },
+        },
+        label
+      )
+    )
+  );
   return [
     h('div', { class: 'set-title' }, '通用'),
-    h(
-      'div',
-      { class: 'row' },
-      h('span', { class: 'lbl' }, '外观'),
-      h(
-        'div',
-        { class: 'seg', role: 'group', 'aria-label': '外观' },
-        [
-          ['', '跟随系统'],
-          ['light', '浅色'],
-          ['dark', '深色'],
-        ].map(([k, label]) => h('button', { 'aria-pressed': String(theme === k), onclick: () => setTheme(k) }, label))
-      )
-    ),
-    h(
-      'div',
-      { class: 'row' },
-      h('span', { class: 'lbl' }, '关闭接力台'),
+    setRow('外观', null, look),
+    setRow(
+      '关闭接力台',
+      '正在做的会先停下、记好账。下次打开「接力台」时自己启动。',
       h(
         'button',
         {
@@ -5101,6 +5362,27 @@ function settingsBody(tab, redraw) {
       )
     ),
   ];
+}
+
+/** 检查命令底下一行：最近一次跑的结果、是哪一棒之后跑的（验收看的就是它）。 */
+function gateResult(p) {
+  const g = p.acceptance && p.acceptance.gate;
+  if (!g || g.status === 'off') return null;
+  const after = g.stint ? ` · 第 ${g.stint} 棒之后` : '';
+  if (g.status === 'pass') return h('small', { class: 'res' }, icon('check'), `上次通过${after}`);
+  if (g.status === 'fail') return h('small', { class: 'res bad' }, h('span', { class: 'rd' }), `上次没通过${after}`);
+  if (g.status === 'error') return h('small', { class: 'res bad', 'data-tip': g.text }, h('span', { class: 'rd' }), `上次没跑成${after}`);
+  return h('small', { class: 'res' }, g.status === 'none' ? '还没跑过' : g.text);
+}
+
+/** 一行字换成另一句：旧的淡出、新的淡进来。 */
+function swapText(el, text) {
+  if (!el || el.textContent === text) return;
+  if (still()) return (el.textContent = text);
+  el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 110, easing: EASE.exit }).onfinish = () => {
+    el.textContent = text;
+    el.animate([{ opacity: 0, transform: 'translateY(2px)' }, { opacity: 1, transform: 'none' }], { duration: 220, easing: EASE.ease });
+  };
 }
 
 function membersPane(redraw) {
@@ -5232,6 +5514,7 @@ function membersPane(redraw) {
         '添加'
       )
     ),
+    h('p', { class: 'set-desc' }, '弱模型做的每一棒都要强模型复核。派活按这个顺序，额度用完的跳过。'),
     list,
     consent,
   ];
@@ -5413,11 +5696,11 @@ function paletteItems(query, scope) {
       p.pending.length && reviewer() ? { label: '复核', icon: 'review', run: reviewNow } : null,
       run.running || run.waiting ? { label: '停止', icon: 'stop', kbd: '⌘.', run: stopNow } : null,
       p.init ? { label: '编辑任务', icon: 'pencil', run: editTaskRaw } : null,
-      p.init ? { label: '接力本', icon: 'book', run: openBrief } : null,
-      p.init ? { label: '对账', icon: 'sync', run: snapNow } : null,
+      p.init ? { label: '接力本', sub: SUB.brief, icon: 'book', run: openBrief } : null,
+      p.init ? { label: '对账', sub: SUB.snap, icon: 'sync', run: snapNow } : null,
       { label: '打开文件夹', icon: 'folder', run: chooseFolder },
       p.pick ? null : { label: '在访达中显示', icon: 'folder', run: () => reveal('') },
-      p.pick ? null : { label: '复制开场白', icon: 'copy', run: copyHint },
+      p.pick ? null : { label: '复制开场白', sub: SUB.hint, icon: 'copy', run: copyHint },
       { label: '成员', icon: 'user', run: () => openSettings('members') },
       { label: '设置', icon: 'sliders', run: () => openSettings() },
       { label: UI.noLeft ? '显示左栏' : '隐藏左栏', icon: 'sideL', kbd: '⌘B', run: toggleLeft },
@@ -5579,7 +5862,7 @@ new MutationObserver((recs) => {
 
 addEventListener('resize', () => {
   if (SUG.menu) updateSuggest();
-  if (WIRE.card) drawWires();
+  if (WIRE.from) drawWires();
   syncSegs();
 });
 // 纸：这一栏大小变了换画布重画，换了浅色 / 深色换颜色重画

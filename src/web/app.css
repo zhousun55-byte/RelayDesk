@@ -55,6 +55,8 @@
   --exit: cubic-bezier(0.4, 0, 1, 1); /* 退场：加速离开 · t80 .87 */
   --spring: var(--ease); /* 手拖的切换（下面换成弹簧） */
   --pop: cubic-bezier(0.3, 1.3, 0.5, 1); /* 落定（下面换成弹簧） */
+  --drawer: cubic-bezier(0.32, 0.72, 0, 1); /* 侧栏收放：像抽屉，起步利落、收尾很长 · t80 .26 */
+  --side-t: 0.42s;
   color-scheme: light;
 }
 @supports (transition-timing-function: linear(0, 1)) {
@@ -370,7 +372,7 @@ svg.i {
   grid-template-rows: minmax(0, 1fr);
   height: 100vh;
   height: 100dvh;
-  transition: grid-template-columns 0.32s var(--ease);
+  transition: grid-template-columns var(--side-t) var(--drawer);
 }
 .app.no-left {
   grid-template-columns: 0 minmax(0, 1fr) var(--right);
@@ -385,13 +387,44 @@ svg.i {
   transition: none;
   user-select: none;
 }
+/* 两栏收起、打开：栏宽跟着抽屉的节奏收放，里面的内容整块朝屏幕边上滑出去、渐淡（左栏贴右边放，收窄时往左滑走，不是被一刀切掉）；
+   打开时内容晚一点从边上滑回来。栏的内沿扫一道点，只画在这一栏里面（app.js 的 sideSweep） */
 .left,
 .right {
   min-width: 0;
   overflow: hidden;
   position: relative;
+  display: flex;
   background: var(--side);
   isolation: isolate;
+}
+.left {
+  justify-content: flex-end;
+}
+.left-in,
+.right-in {
+  flex: none;
+}
+@media (min-width: 861px) {
+  .left-in,
+  .right-in {
+    transition:
+      opacity 0.3s var(--ease) 0.08s,
+      transform var(--side-t) var(--drawer);
+  }
+  .no-left .left-in,
+  .no-right .right-in {
+    opacity: 0;
+    transition:
+      opacity 0.18s var(--exit),
+      transform var(--side-t) var(--drawer);
+  }
+  .no-left .left-in {
+    transform: translateX(-18px);
+  }
+  .no-right .right-in {
+    transform: translateX(18px);
+  }
 }
 /* 两边的纸面带一点颗粒 */
 .left::before,
@@ -807,6 +840,17 @@ svg.i {
   transform: scale(0.94);
   transition-duration: 0.06s;
 }
+/* 一整行能点的（对话、文件、菜单项、顶栏的小按钮）：按下去底色深一档，松开慢慢退回 */
+.thread:active,
+.tree-row:active,
+.mi:active:not(:disabled),
+.meta-btn:active,
+.proj-row:active,
+.opt[role='button']:active,
+.link-st:active {
+  background: var(--fog-3);
+  transition-duration: 0.04s;
+}
 .icon-btn[aria-pressed='true'] {
   background: var(--fog-3);
   color: var(--ink);
@@ -988,7 +1032,7 @@ button.busy::after {
   border-radius: inherit;
   pointer-events: none;
 }
-/* 侧栏收起、打开时扫过的点：盖在这一栏上面（左右由 app.js 的 sideSweep 给），扫完就拿掉 */
+/* 侧栏收起、打开时内沿的那道点：贴着挨着对话的那条边、放在这一栏里面（栏收窄时一起被裁掉），扫完就拿掉 */
 .specks.side {
   inset: 0 auto auto auto;
   z-index: 4;
@@ -1214,7 +1258,6 @@ button.busy::after {
   box-shadow: inset 0 0 0 1.5px var(--ink);
 }
 @container (max-width: 560px) {
-  .bar-m .meta-btn.mono,
   .bar .crumb {
     display: none;
   }
@@ -1233,6 +1276,7 @@ button.busy::after {
   overflow-x: auto;
   scrollbar-width: none;
   flex: none;
+  animation: fade 0.22s var(--ease);
 }
 .tab {
   display: inline-flex;
@@ -1269,6 +1313,12 @@ button.busy::after {
 }
 .tab[aria-selected='true']::after {
   transform: scaleX(1);
+  animation: grow-x 0.28s var(--snap);
+}
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
 }
 .tab .x {
   opacity: 0;
@@ -1480,9 +1530,13 @@ button.busy::after {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.checks .step {
+  text-decoration: line-through;
+  text-decoration-color: transparent;
+  transition: color 0.24s, text-decoration-color 0.24s;
+}
 .checks li.done .step {
   color: var(--ink-3);
-  text-decoration: line-through;
   text-decoration-color: var(--ink-4);
 }
 .checks li.next .step {
@@ -1527,6 +1581,15 @@ button.busy::after {
   background: var(--ink);
   box-shadow: none;
   color: var(--paper);
+}
+/* 刚打上的勾：方框落一下，勾一笔画出来（只在点的那一下，重画出来的不再画） */
+.checks li.ticked .box {
+  animation: land 0.42s var(--pop);
+}
+.checks li.ticked .box path {
+  stroke-dasharray: 14;
+  stroke-dashoffset: 14;
+  animation: draw 0.3s 0.06s var(--snap) forwards;
 }
 .checks .x {
   opacity: 0;
@@ -2057,6 +2120,10 @@ button.busy::after {
 }
 .me .att .chip {
   cursor: pointer;
+  transition: background 0.14s;
+}
+.me .att .chip:hover {
+  background: var(--fog-2);
 }
 /* AI 说的话 */
 .ai {
@@ -2506,6 +2573,9 @@ button.busy::after {
   color: var(--ink-4);
   transform: none;
 }
+.to-bottom:hover {
+  opacity: 0.86;
+}
 .to-bottom {
   position: absolute;
   left: 50%;
@@ -2707,9 +2777,6 @@ button.busy::after {
   color: var(--ink-4);
   user-select: none;
 }
-.code .l:hover {
-  background: var(--fog);
-}
 .empty-note {
   padding: 40px 0;
   text-align: center;
@@ -2732,6 +2799,9 @@ button.busy::after {
 }
 .diff-file > summary::-webkit-details-marker {
   display: none;
+}
+.diff-file > summary:hover {
+  background: var(--fog);
 }
 .diff-file > summary .caret {
   color: var(--ink-3);
@@ -2927,6 +2997,7 @@ button.busy::after {
   border-radius: 50%;
   vertical-align: 1px;
   background: var(--ink);
+  animation: land 0.3s var(--pop);
 }
 .tree-row.dragging {
   opacity: 0.4;
@@ -2939,34 +3010,6 @@ button.busy::after {
   padding: 10px 18px;
   font-size: 12px;
   color: var(--ink-3);
-}
-.gate {
-  display: grid;
-  gap: 8px;
-  margin: 6px 18px 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--rule);
-}
-.gate code {
-  display: block;
-  padding: 8px 10px;
-  border-radius: 4px;
-  background: var(--glass-slip);
-  box-shadow: inset 0 0 0 1px var(--hair);
-  font: 11px/1.65 var(--mono);
-  color: var(--ink-2);
-  word-break: break-all;
-}
-.gate .res {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--ink-2);
-}
-.gate .res .i {
-  width: 13px;
-  height: 13px;
 }
 .drag-ghost {
   position: fixed;
@@ -2982,7 +3025,7 @@ button.busy::after {
   font-size: 12px;
 }
 
-/* 连线：停在一棒上，细线连到它改过的文件（实验笔记拼贴那种线） */
+/* 连线：停在一棒上连到它改过的文件、停在文件上连到改过它的几棒、停在带上的文件上连到文件树（实验笔记拼贴那种点线） */
 .wires {
   position: fixed;
   inset: 0;
@@ -2992,7 +3035,7 @@ button.busy::after {
   pointer-events: none;
   overflow: visible;
 }
-/* 连线是一串点（参考图里的点线）；小条那头是一个「+」 */
+/* 连线是一串点（参考图里的点线）；起点是一个「+」 */
 .wires g line {
   stroke: var(--ink-2);
   stroke-width: 1.5;
@@ -3003,14 +3046,35 @@ button.busy::after {
   stroke: #fff;
   stroke-width: 8;
 }
+/* 画出来：从「+」那头一格一格点出去，一根接一根；收回去：从终点缩回「+」 */
 .wires.draw mask line {
   stroke-dasharray: var(--len);
   stroke-dashoffset: var(--len);
-  animation: draw 0.42s var(--ease) forwards;
+  animation: draw 0.42s calc(var(--i, 0) * 32ms) var(--ease) forwards;
+}
+.wires.off mask line {
+  stroke-dasharray: var(--len);
+  animation: undraw 0.2s var(--exit) forwards;
+}
+@keyframes undraw {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--len);
+  }
 }
 .wires .hub {
   stroke: var(--ink);
   stroke-width: 1.2;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.wires.draw .hub {
+  animation: land 0.34s var(--pop);
+}
+.wires.off .hub {
+  animation: out-fade 0.2s var(--exit) forwards;
 }
 
 /* ---------- 浮层：菜单、提示、弹窗、搜索、通知 ---------- */
@@ -3251,11 +3315,28 @@ button.busy::after {
   min-height: 0;
 }
 .settings nav {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 18px 10px;
   background: var(--side);
+}
+/* 选中的页签底下那一块：滑过去，不是一下子换过去 */
+.settings nav .hl {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 32px;
+  border-radius: 7px;
+  background: var(--slip);
+  box-shadow: var(--shadow-slip);
+  transform: translateY(var(--hy, 0));
+  pointer-events: none;
+}
+.settings nav.ready .hl {
+  transition: transform 0.49s var(--spring);
 }
 .settings nav h3 {
   margin: 0 8px 14px;
@@ -3263,6 +3344,7 @@ button.busy::after {
   font-weight: 650;
 }
 .settings nav button {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3272,31 +3354,20 @@ button.busy::after {
   text-align: left;
   font-size: 13.5px;
   color: var(--ink-2);
-  transition: background 0.16s, color 0.16s, box-shadow 0.16s;
+  transition: background 0.16s, color 0.2s;
 }
-.settings nav button:hover {
-  background: var(--fog-2);
+.settings nav button:hover:not([aria-selected='true']) {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
   color: var(--ink);
 }
 .settings nav button[aria-selected='true'] {
-  background: var(--slip);
   color: var(--ink);
-  box-shadow: var(--shadow-slip);
 }
 .pane-in {
   position: relative;
   min-height: 0;
   overflow: auto;
   padding: 18px 22px 24px;
-}
-.pane-in > * {
-  animation: rise 0.28s var(--ease) backwards;
-}
-.pane-in > :nth-child(3) {
-  animation-delay: 0.03s;
-}
-.pane-in > :nth-child(n + 4) {
-  animation-delay: 0.06s;
 }
 .settings .close {
   position: absolute;
@@ -3332,6 +3403,34 @@ button.busy::after {
   flex: 1;
   min-width: 0;
   font-size: 13.5px;
+}
+/* 名字底下一行灰字：这一项管什么 */
+.row .lbl small,
+.field > small,
+.set-desc {
+  display: block;
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  text-wrap: pretty;
+}
+.row .lbl small {
+  max-width: 440px;
+}
+.set-desc {
+  margin: -6px 0 8px;
+}
+/* 几行归成一节：小标题 */
+.set-sec {
+  margin: 18px 0 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+.set-title + .set-sec {
+  margin-top: 0;
 }
 .members {
   display: flex;
@@ -3412,8 +3511,46 @@ button.busy::after {
   margin-bottom: 14px;
 }
 .field > span {
-  font-size: 12.5px;
-  color: var(--ink-2);
+  font-size: 13.5px;
+  color: var(--ink);
+}
+.field > small {
+  margin: -4px 0 2px;
+}
+/* 检查命令最近一次的结果 */
+.res {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.res.bad {
+  color: var(--ink);
+}
+.res .i {
+  width: 13px;
+  height: 13px;
+  color: var(--ink);
+}
+.res .rd {
+  width: 6px;
+  height: 6px;
+  box-shadow: none;
+}
+.gate-line {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+.gate-line code {
+  display: block;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
 }
 .input,
 .tags {
@@ -3687,6 +3824,26 @@ button.busy::after {
   }
   .stop.live .no::after {
     display: none;
+  }
+}
+
+/* 能折起来的一段（约定、每一票、改动里的文件）：展开、收起都是长开、缩回去，不是一下子跳 */
+@supports selector(::details-content) {
+  :root {
+    interpolate-size: allow-keywords;
+  }
+  details::details-content {
+    height: 0;
+    overflow: clip;
+    opacity: 0;
+    transition:
+      height 0.3s var(--ease),
+      opacity 0.24s var(--ease),
+      content-visibility 0.3s allow-discrete;
+  }
+  details[open]::details-content {
+    height: auto;
+    opacity: 1;
   }
 }
 

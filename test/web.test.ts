@@ -115,7 +115,7 @@ result.push(has(t0), has(t1));`,
 });
 
 test('网页设置：各页返回的空位不进页面（以前「项目」页在接力规矩是最新时会显示一个「null」）', () => {
-  const code = ['openSettings', 'settingsBody'].map(pick).join('\n\n');
+  const code = ['settingsPane', 'settingsBody', 'setRow', 'setField', 'setSec', 'gateResult', 'LEVEL_DESC'].map(pick).join('\n\n');
   const run = (protocol: string) => {
     const ctx: Record<string, unknown> = {};
     vm.runInNewContext(
@@ -123,26 +123,23 @@ test('网页设置：各页返回的空位不进页面（以前「项目」页�
 const node = (tag) => ({ tag, kids: [], replaceChildren(...k) { this.kids = k; }, append(...k) { this.kids.push(...k); }, addEventListener() {} });
 const h = (tag, props, ...kids) => { const n = node(tag); n.kids = kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false); return n; };
 const icon = () => 'i';
-let settingsTab = 'members', settingsRender = null;
-let pane = null;
-const sheet = ({ body }) => { pane = body.kids[1]; return () => {}; };
 const savedMark = () => ({ el: 'mark', flash() {} });
-const syncSegs = () => {};
-const S = { st: { project: { init: true, protocol: '${protocol}', config: { gate: 'npm test', protectedPaths: [] } } } };
+const S = { st: { project: { init: true, protocol: '${protocol}', config: { gate: 'npm test', protectedPaths: [] }, acceptance: { gate: { status: 'pass', stint: 3, text: '检查通过' } } } } };
 ${code}
-openSettings('project');
-result = pane.kids.map((k) => (k === null ? 'null' : typeof k === 'string' ? k : k.tag));`,
+const kids = settingsPane('project', () => {});
+result = { tags: kids.map((k) => (k === null ? 'null' : typeof k === 'string' ? k : k.tag)), gate: JSON.stringify(kids[1].kids) };`,
       ctx
     );
-    return JSON.parse(JSON.stringify(ctx.result)) as string[];
+    return JSON.parse(JSON.stringify(ctx.result)) as { tags: string[]; gate: string };
   };
-  assert.ok(!run('ok').includes('null'), '接力规矩是最新的：不留空位');
-  assert.equal(run('ok').length, 4, '关闭按钮、标题、检查命令、保护的文件');
-  assert.equal(run('old').length, 5, '接力规矩有新版本：多一行「更新」');
+  assert.ok(!run('ok').tags.includes('null'), '接力规矩是最新的：不留空位');
+  assert.equal(run('ok').tags.length, 3, '标题、检查命令、不许改的文件');
+  assert.equal(run('old').tags.length, 4, '接力规矩有新版本：多一行「更新」');
+  assert.match(run('ok').gate, /上次通过 · 第 3 棒之后/, '检查命令底下写上次的结果');
 });
 
 test('网页 ▾ 菜单：「只做一棒」列能派活的（叫模型的名字）；「打开」列有桌面程序的，命令行工具不弹终端窗口', () => {
-  const code = ['splitLabel', 'LLM_WORD', 'LLM_VARIANT', 'llmName', 'nameOf', 'memberName', 'whoMenu'].map(pick).join('\n\n');
+  const code = ['splitLabel', 'LLM_WORD', 'LLM_VARIANT', 'llmName', 'nameOf', 'memberName', 'whoMenu', 'SUB'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
   vm.runInNewContext(
     `

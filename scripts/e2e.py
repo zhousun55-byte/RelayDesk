@@ -104,8 +104,8 @@ def main():
                 else:
                     page.keyboard.press('Meta+b')
                 page.wait_for_timeout(40)
-                has = js('() => !!document.querySelector(".specks.side")')
-                check(js('() => document.querySelector(".app").classList.contains("no-left")') == want and has, f'{"收起" if want else "打开"}左栏：扫一道点')
+                has = js('() => !!document.querySelector("#left > .specks.side")')
+                check(js('() => document.querySelector(".app").classList.contains("no-left")') == want and has, f'{"收起" if want else "打开"}左栏：内沿扫一道点（点在左栏里面，不落到对话上）')
                 page.wait_for_timeout(700)
                 check(not js('() => !!document.querySelector(".specks.side")'), f'{"收起" if want else "打开"}左栏：扫完点拿掉了')
 
@@ -115,6 +115,11 @@ def main():
             page.locator('.settings').get_by_role('tab', name='成员').click()
             page.wait_for_timeout(300)
             check(page.locator('.settings .members').count() == 1, '设置：点开、切到成员')
+            y0 = js('() => getComputedStyle(document.querySelector(".settings nav")).getPropertyValue("--hy")')
+            page.locator('.settings').get_by_role('tab', name='运行').click()
+            page.wait_for_timeout(500)
+            y1 = js('() => getComputedStyle(document.querySelector(".settings nav")).getPropertyValue("--hy")')
+            check(y0 != y1 and page.locator('.settings .pane-in').get_by_text('每一棒最长').count() == 1, '设置：切到「运行」，页签底下那一块滑过去，每一项有说明')
             page.keyboard.press('Escape')
             page.wait_for_timeout(500)
             check(page.locator('.settings').count() == 0, '设置：按 Esc 关掉')
