@@ -145,14 +145,13 @@ function underlay(host, draw) {
   cv.height = H * dpr;
   host.prepend(cv);
   const ctx = cv.getContext('2d');
-  const ink = getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#151515';
   let t0 = 0;
   const frame = (now) => {
     if (!cv.isConnected) return;
     t0 ||= now;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = ink;
+    ctx.fillStyle = PAPER.ink;
     if (draw(ctx, now - t0, W, H)) requestAnimationFrame(frame);
     else cv.remove();
   };
@@ -1336,7 +1335,7 @@ function newThread() {
 
 const VIEWS = ['relay', 'dispatch', 'chat'];
 
-/** 换一页（还没画）：记下往哪边切（1 往右、-1 往左），画完后新内容顺着这个方向滑进来、纸上的点扫一遍（renderAll 里的 swapIn、flowSweep）。 */
+/** 换一页（还没画）：记下往哪边切（1 往右、-1 往左），画完后新内容顺着这个方向滑进来、纸上扫一道（renderAll 里的 swapIn、paperSweep）。 */
 function showView(v) {
   if (S.view === v) return false;
   S.swap = VIEWS.indexOf(v) > VIEWS.indexOf(S.view) ? 1 : -1;
@@ -1657,9 +1656,9 @@ function buildCenter() {
   CE.chat = h('section', { class: 'pane', 'aria-label': '对话' }, CE.scroll, CE.toBottom);
   CE.doc = h('section', { class: 'pane', hidden: true });
   CE.hero = h('section', { class: 'hero', hidden: true });
-  CE.aura = h('div', { class: 'aura', 'aria-hidden': 'true', hidden: true });
-  CE.flow = h('canvas', { class: 'flow', 'aria-hidden': 'true', hidden: true });
-  $('#center').append(CE.aura, CE.flow, CE.offline, CE.cfgBad, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
+  CE.paper = h('canvas', { class: 'paper', 'aria-hidden': 'true' });
+  $('#center').addEventListener('pointermove', paperPointer, { passive: true });
+  $('#center').append(CE.paper, CE.offline, CE.cfgBad, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
 }
 
 function onScroll() {
@@ -1715,32 +1714,12 @@ function renderCenter() {
     CE.chat.style.setProperty('--compose-h', '0px');
   }
   document.title = S.st.project.name && !S.st.project.pick ? `${S.st.project.name} · 接力台` : '接力台';
-  // 切页时扫过去的点用这一页的走向和笔画；纸也换成这一页的（旧的记下来，flowSweep 让它顺着前沿退掉）
-  FLOW.kind = mode === 'pick' ? 'pick' : S.view;
-  const center = CE.flow.parentNode;
-  if (center.dataset.paper !== S.view) {
-    FLOW.was = center.dataset.paper || '';
-    center.dataset.paper = S.view;
-  }
-  aura();
+  // 这一页的纸（切页时扫过去才换）、空白页输入框周围深一圈
+  paperSet(S.view, mode === 'pick' ? 'pick' : S.view);
+  paperAura();
 }
 
 // ----- 空闲：小标题、要人看的一行、输入框 -----
-
-/** 空白页：纸上本来的记号在输入框周围深一点，往外淡回去（淡开的方向跟着这一页的笔画，见 .aura）。输入框的位置不算动画里的位移。 */
-function aura() {
-  const b = C.box;
-  const on = !CE.hero.hidden && CE.hero.contains(b) && b.offsetWidth > 0;
-  CE.aura.hidden = !on;
-  if (!on) return;
-  const x = b.offsetLeft + CE.hero.offsetLeft;
-  const y = b.offsetTop + CE.hero.offsetTop - CE.hero.scrollTop;
-  const st = CE.aura.style;
-  st.setProperty('--l', `${x}px`);
-  st.setProperty('--r', `${x + b.offsetWidth}px`);
-  st.setProperty('--t', `${y}px`);
-  st.setProperty('--b', `${y + b.offsetHeight}px`);
-}
 
 function renderHero(mode) {
   const p = S.st.project;
@@ -1806,10 +1785,16 @@ function renderHero(mode) {
   setComposerKind(chat ? 'talk' : 'task');
 }
 
-// ----- 切页的那一下：纸上本来就有的点，顺着切过去的方向亮一遍、再散掉（连续的一笔，拆成一格一格的点） -----
+// ----- 纸：中间这一栏的底，一张画布画完 -----
+//
+// 三页三种纸，同一套 10px 的细格子（格点在 x = 10i、y = 2 + 10j）：
+//   接力是点（20px 一个）；派活是竖（10px 一列，每 4 列长一点，像刻度）；群聊是横（10px 一行，一段段长短不一、几行一段，像一页对话记录）。
+// 纸上的记号在三种时候深一点、大一点：空白页输入框周围、指针划过的地方、切页时扫过去的那一道。
+// 三样都只是给每个格点一个 0～1 的深浅，取最大的，分 4 档，一档一条路径一起画：叠几样，开销都一样。
+// 平时不画；指针在纸上划、切页那一下才逐帧画，停了就不再排下一帧。
 
 /**
- * 每一页一种走向（在中间这一栏里的归一化坐标，三次贝塞尔，可以有几条）：
+ * 切页时扫过去的那一道的走向（在中间这一栏里的归一化坐标，三次贝塞尔，可以有几条）：
  * 接力：一笔从左边起、在左上拐弯、向右散开成几股；派活：拐过弯分成三股；群聊：三股从左边来、汇成一股往右走。
  * knee：拐弯处（最紧最密）在线上的位置；w：起笔、拐弯、末尾各有多宽；ribbons：散开时分不分股。
  */
@@ -1837,149 +1822,71 @@ const FLOW_LINES = {
     ],
   },
 };
-const FLOW_STEP = 10;
-/** 前沿走完这一栏要多久（匀速，和换纸的边对得上）；每个点分三档变大、停一下、再分三档变小（一格一格地变，不是连续地缩放）。点亮得短，看到的是一道往前走的点，不是铺满再褪。 */
+/** 扫过去的节奏：前沿匀速走完这一栏；每个点分三档变大、停一下、再分三档变小。点亮得短，看到的是一道往前走的点。 */
 const SWEEP = { front: 600, grow: 45, hold: 40, fade: 150 };
-const FLOW = { kind: 'relay', was: '', w: 0, h: 0, dpr: 1, marks: [], t0: 0, raf: 0, ink: '#151515' };
+/** 每一档的样子：接力的点多大、派活的竖多长（半长）、线多粗；透明度（0 档用纸本来的颜色）。 */
+const LEVELS = [
+  { a: 0, dot: 1.05, tick: 3, w: 1.1 },
+  { a: 0.14, dot: 1.5, tick: 4.2, w: 1.3 },
+  { a: 0.2, dot: 2, tick: 5.4, w: 1.5 },
+  { a: 0.27, dot: 2.6, tick: 6.6, w: 1.7 },
+  { a: 0.34, dot: 3.2, tick: 8, w: 1.9 },
+];
+/** 输入框周围往外淡多远（横、竖）：接力四周匀开，派活往上下伸（一列列），群聊往左右伸（一行行）。 */
+const REACH = { relay: [96, 72], dispatch: [36, 150], chat: [220, 36] };
+const TRAIL_R = 84;
+const TRAIL_T = 260;
+const PAPER = { kind: 'relay', from: '', curve: 'relay', w: 0, h: 0, dpr: 1, cols: 0, rows: 0, ink: '#151515', dot: 'rgba(21, 21, 21, 0.09)', words: null, aura: null, keep: null, trail: [], sweep: null, last: null, raf: 0 };
 
 const smooth = (a, b, x) => {
   const t = clamp((x - a) / (b - a), 0, 1);
   return t * t * (3 - 2 * t);
 };
 
-/** 一条三次贝塞尔取 n 段折线：[x0, y0, x1, y1, t0, t1, 方向角]。 */
-function bezierSegs(P, n) {
-  const segs = [];
-  let prev = null;
-  for (let k = 0; k <= n; k++) {
-    const t = k / n;
-    const r = 1 - t;
-    const x = r * r * r * P[0][0] + 3 * r * r * t * P[1][0] + 3 * r * t * t * P[2][0] + t * t * t * P[3][0];
-    const y = r * r * r * P[0][1] + 3 * r * r * t * P[1][1] + 3 * r * t * t * P[2][1] + t * t * t * P[3][1];
-    if (prev) segs.push([prev[0], prev[1], x, y, prev[2], t, Math.atan2(y - prev[1], x - prev[0])]);
-    prev = [x, y, t];
-  }
-  return segs;
-}
-
-/** 点到折线第 a～b 段的最近处：[距离², t, 方向角, 在线的哪一边（+1 / -1）]。 */
-function nearSeg(segs, a, b, x, y, out) {
-  for (let k = Math.max(0, a); k <= Math.min(segs.length - 1, b); k++) {
-    const [x0, y0, x1, y1, t0, t1, ang] = segs[k];
-    const dx = x1 - x0;
-    const dy = y1 - y0;
-    const u = clamp(((x - x0) * dx + (y - y0) * dy) / (dx * dx + dy * dy || 1), 0, 1);
-    const px = x - x0 - u * dx;
-    const py = y - y0 - u * dy;
-    const d2 = px * px + py * py;
-    if (d2 < out[0]) {
-      out[0] = d2;
-      out[1] = t0 + (t1 - t0) * u;
-      out[2] = ang;
-      out[3] = dx * py - dy * px < 0 ? -1 : 1;
-      out[4] = k;
-    }
-  }
-}
-
-/**
- * 算出每个格点上画什么：纸上的点（20px 一个）离线近就变大变深；线的正中间再加密成 10px 一个。
- * 拐弯处最密；往后越散越宽，并且分成几股（参考图里一行一行的点）。keep：字和输入框那一块，离它越近越淡，里面不画。
- * 什么时候亮：前沿从 dir 那一边（1 从左、-1 从右）扫过来碰到它，再错开几十毫秒（前沿是毛边，不是一条直线）。
- */
-function flowMarks(keep, dir) {
-  const { w: W, h: H } = FLOW;
-  const spec = FLOW_LINES[FLOW.kind] || FLOW_LINES.relay;
-  const lines = spec.lines.map((pts) => {
-    const P = pts.map(([u, v]) => [u * W, v * H]);
-    return { coarse: bezierSegs(P, 12), fine: bezierSegs(P, 48) };
-  });
-  const [w0, w1, w2] = spec.w;
-  const knee = spec.knee;
-  const cols = Math.floor(W / FLOW_STEP) + 1;
-  const rows = Math.floor((H - 2) / FLOW_STEP) + 1;
-  const marks = [];
-  const far = (3.4 * w2) ** 2;
-  const best = [0, 0, 0, 0, 0];
-  for (let j = 0; j < rows; j++) {
-    for (let i = 0; i < cols; i++) {
-      const x = i * FLOW_STEP;
-      const y = 2 + j * FLOW_STEP;
-      let I = 0;
-      let ang = 0;
-      let at = 0;
-      const r = hash(i, j);
-      for (const L of lines) {
-        best[0] = Infinity;
-        nearSeg(L.coarse, 0, L.coarse.length - 1, x, y, best);
-        if (best[0] > far) continue;
-        const k = best[4] * 4;
-        best[0] = Infinity;
-        nearSeg(L.fine, k - 5, k + 8, x, y, best);
-        const [d2, t, a, side] = best;
-        // 起笔散、拐弯处最紧最密、往后越散越宽
-        const sg = t < knee ? w0 + (w1 - w0) * smooth(0, knee, t) : w1 + (w2 - w1) * smooth(knee, 1, t);
-        const n = Math.sqrt(d2) * side;
-        // 拐过弯之后分股：沿着线的法向一明一暗，越往后股和股离得越开
-        const lam = 18 + 24 * smooth(knee, 1, t);
-        const split = spec.ribbons ? 0.9 * smooth(knee, knee + 0.25, t) : 0;
-        // 起笔那一段零零散散（像参考图里往下落的点）
-        const scatter = t < knee ? 1 - 0.7 * (1 - smooth(0, knee, t)) * (r < 500 ? 1 : 0) : 1;
-        const v = smooth(0, knee * 0.8, t) * (1 - 0.45 * smooth(knee, 1, t)) * scatter * Math.exp(-d2 / (2 * sg * sg)) * (1 - split + split * (0.5 + 0.5 * Math.cos((2 * Math.PI * n) / lam)));
-        if (v > I) {
-          I = v;
-          ang = a;
-          at = t;
-        }
+/** 群聊的纸：每行一段段「字」（2～5 格一个，中间空一格），2～5 行一段、段的最后一行短，段和段之间空一行。 */
+function paperWords(cols, rows) {
+  const w = new Uint8Array(cols * rows);
+  let j = 0;
+  for (let p = 0; j < rows; p++) {
+    const n = 2 + (hash(p, 11) % 4);
+    for (let k = 0; k < n && j < rows; k++, j++) {
+      const end = k === n - 1 ? Math.round(cols * (0.25 + (hash(p, 5) % 50) / 100)) : cols;
+      for (let i = hash(j, 7) % 3; i < end; ) {
+        const len = 2 + (hash(i, j) % 4);
+        w.fill(1, j * cols + i, j * cols + Math.min(i + len, end));
+        i += len + 1;
       }
-      if (keep) {
-        const ox = Math.max(keep[0] - x, 0, x - keep[2]);
-        const oy = Math.max(keep[1] - y, 0, y - keep[3]);
-        I *= smooth(0, 56, Math.hypot(ox, oy));
-      }
-      const paper = i % 2 === 0 && j % 2 === 0;
-      if (paper ? I < 0.04 : I < 0.24) continue;
-      const q = paper ? I : (I - 0.24) / 0.76;
-      const u = clamp(dir > 0 ? x / W : 1 - x / W, 0, 1);
-      marks.push({
-        x,
-        y,
-        a: ang,
-        rx: paper ? 1.05 + 2.4 * q : 0.8 + 2.2 * q,
-        ry: paper ? 1.05 + 0.75 * q : 0.8 + 0.6 * q,
-        al: paper ? 0.09 + 0.26 * q : 0.07 + 0.26 * q,
-        ring: I > 0.55 && r < 240 && at > knee,
-        on: SWEEP.front * u + r * 0.07,
-        hold: SWEEP.hold * (0.5 + r / 1000),
-      });
     }
+    j++;
   }
-  return marks;
+  return w;
 }
 
-/** 一个点：接力是椭圆点（有几颗是空心的），派活是一竖，群聊是一横，和各自的纸一样的笔画。 */
-function flowMark(ctx, m, k) {
-  ctx.globalAlpha = m.al;
-  ctx.beginPath();
-  if (FLOW.kind === 'dispatch' || FLOW.kind === 'chat') {
-    const r = 1.2 * m.rx * k;
-    ctx.lineWidth = 0.6 + 0.6 * m.ry * k;
-    if (FLOW.kind === 'dispatch') {
-      ctx.moveTo(m.x, m.y - r);
-      ctx.lineTo(m.x, m.y + r);
-    } else {
-      ctx.moveTo(m.x - r, m.y);
-      ctx.lineTo(m.x + r, m.y);
-    }
-    ctx.stroke();
-  } else if (m.ring) {
-    ctx.lineWidth = 0.9;
-    ctx.ellipse(m.x, m.y, m.rx * 1.3 * k, m.ry * 1.3 * k, m.a, 0, 6.2832);
-    ctx.stroke();
-  } else {
-    ctx.ellipse(m.x, m.y, m.rx * k, m.ry * k, m.a, 0, 6.2832);
-    ctx.fill();
+/** 这一格平时有没有记号（派活每 4 列长一点，另算）。 */
+function isBase(kind, i, j) {
+  if (kind === 'dispatch') return j % 2 === 0;
+  if (kind === 'chat') return PAPER.words[j * PAPER.cols + i] === 1;
+  return i % 2 === 0 && j % 2 === 0;
+}
+
+/** 输入框周围深多少（0～0.5）。 */
+function auraAt(kind, x, y) {
+  const a = PAPER.aura;
+  if (!a) return 0;
+  const [ex, ey] = REACH[kind] || REACH.relay;
+  const dx = x < a[0] ? a[0] - x : x > a[2] ? x - a[2] : 0;
+  const dy = y < a[1] ? a[1] - y : y > a[3] ? y - a[3] : 0;
+  return dx >= ex || dy >= ey ? 0 : 0.5 * (1 - dx / ex) * (1 - dy / ey);
+}
+
+/** 指针划过的地方深多少（0～1）：离得越近、划过得越晚越深。 */
+function trailAt(x, y, now) {
+  let e = 0;
+  for (const [px, py, pt] of PAPER.trail) {
+    const d = Math.hypot(x - px, y - py);
+    if (d < TRAIL_R) e = Math.max(e, (1 - d / TRAIL_R) ** 2 * (1 - (now - pt) / TRAIL_T));
   }
+  return e;
 }
 
 /** 一个点亮起后第 age 毫秒有多大（0～1，三档）；-1：已经散完。 */
@@ -1991,57 +1898,269 @@ function sweepK(age, hold) {
   return f < 1 ? Math.ceil((1 - f) * 3) / 3 : -1;
 }
 
-function flowFrame(now) {
-  const ctx = CE.flow.getContext('2d');
-  const t = now - FLOW.t0;
-  ctx.setTransform(FLOW.dpr, 0, 0, FLOW.dpr, 0, 0);
-  ctx.clearRect(0, 0, FLOW.w, FLOW.h);
-  ctx.fillStyle = ctx.strokeStyle = FLOW.ink;
-  ctx.lineCap = 'round';
-  let live = false;
-  for (const m of FLOW.marks) {
-    const k = t < m.on ? 0 : sweepK(t - m.on, m.hold);
-    if (k < 0) continue;
-    live = true;
-    if (k > 0) flowMark(ctx, m, k);
+/** 一条三次贝塞尔取 n 段折线：[x0, y0, x1, y1, t0, t1]。 */
+function bezierSegs(P, n) {
+  const segs = [];
+  let prev = null;
+  for (let k = 0; k <= n; k++) {
+    const t = k / n;
+    const r = 1 - t;
+    const x = r * r * r * P[0][0] + 3 * r * r * t * P[1][0] + 3 * r * t * t * P[2][0] + t * t * t * P[3][0];
+    const y = r * r * r * P[0][1] + 3 * r * r * t * P[1][1] + 3 * r * t * t * P[2][1] + t * t * t * P[3][1];
+    if (prev) segs.push([prev[0], prev[1], x, y, prev[2], t]);
+    prev = [x, y, t];
   }
-  FLOW.raf = live ? requestAnimationFrame(flowFrame) : 0;
-  if (!live) CE.flow.hidden = true;
+  return segs;
 }
 
-/** 切了页（新的一页已经放好）：点从 dir 那一边扫过来，扫完画布就收起来，平时纸上只有原来的点。 */
-function flowSweep(dir) {
-  const was = FLOW.was;
-  FLOW.was = '';
-  cancelAnimationFrame(FLOW.raf);
-  FLOW.raf = 0;
-  CE.flow.hidden = true;
-  const center = CE.flow.parentNode;
-  center.querySelector(':scope > .paper-old')?.remove();
-  if (still()) return;
-  const box = center.getBoundingClientRect();
+/** 点到折线第 a～b 段的最近处：[距离², t, 在线的哪一边（+1 / -1）, 第几段]。 */
+function nearSeg(segs, a, b, x, y, out) {
+  for (let k = Math.max(0, a); k <= Math.min(segs.length - 1, b); k++) {
+    const [x0, y0, x1, y1, t0, t1] = segs[k];
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const u = clamp(((x - x0) * dx + (y - y0) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+    const px = x - x0 - u * dx;
+    const py = y - y0 - u * dy;
+    const d2 = px * px + py * py;
+    if (d2 < out[0]) {
+      out[0] = d2;
+      out[1] = t0 + (t1 - t0) * u;
+      out[2] = dx * py - dy * px < 0 ? -1 : 1;
+      out[3] = k;
+    }
+  }
+}
+
+/**
+ * 扫过去的那一道在每个格点上有多深（0～1）：离弯线近就深；拐弯处最紧最密，往后越散越宽、分成几股；起笔零零散散。
+ * 空白页的字和输入框那一块（keep）留白，离它越近越淡。
+ */
+function sweepField(curve) {
+  const { w: W, h: H, cols, rows, keep } = PAPER;
+  const spec = FLOW_LINES[curve] || FLOW_LINES.relay;
+  const lines = spec.lines.map((pts) => {
+    const P = pts.map(([u, v]) => [u * W, v * H]);
+    return { coarse: bezierSegs(P, 12), fine: bezierSegs(P, 48) };
+  });
+  const [w0, w1, w2] = spec.w;
+  const knee = spec.knee;
+  const far = (3.4 * w2) ** 2;
+  const best = [0, 0, 0, 0];
+  const F = new Float32Array(cols * rows);
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const x = i * 10;
+      const y = 2 + j * 10;
+      const r = hash(i, j);
+      let I = 0;
+      for (const L of lines) {
+        best[0] = Infinity;
+        nearSeg(L.coarse, 0, L.coarse.length - 1, x, y, best);
+        if (best[0] > far) continue;
+        const k = best[3] * 4;
+        best[0] = Infinity;
+        nearSeg(L.fine, k - 5, k + 8, x, y, best);
+        const [d2, t, side] = best;
+        const sg = t < knee ? w0 + (w1 - w0) * smooth(0, knee, t) : w1 + (w2 - w1) * smooth(knee, 1, t);
+        const lam = 18 + 24 * smooth(knee, 1, t);
+        const split = spec.ribbons ? 0.9 * smooth(knee, knee + 0.25, t) : 0;
+        const scatter = t < knee && r < 500 ? 1 - 0.7 * (1 - smooth(0, knee, t)) : 1;
+        const n = Math.sqrt(d2) * side;
+        I = Math.max(I, smooth(0, knee * 0.8, t) * (1 - 0.45 * smooth(knee, 1, t)) * scatter * Math.exp(-d2 / (2 * sg * sg)) * (1 - split + split * (0.5 + 0.5 * Math.cos((2 * Math.PI * n) / lam))));
+      }
+      if (keep) I *= smooth(0, 56, Math.hypot(Math.max(keep[0] - x, 0, x - keep[2]), Math.max(keep[1] - y, 0, y - keep[3])));
+      F[j * cols + i] = I;
+    }
+  }
+  return F;
+}
+
+/**
+ * 画一块（null：整张）。每个格点：先看它现在是哪种纸（切页时前沿还没到的地方还是旧的），
+ * 再取输入框周围、指针划过、扫过去三样里最深的，分档放进同一条路径，最后一档画一次。
+ */
+function paperDraw(box, now) {
+  const { cols, rows, sweep: sw, trail } = PAPER;
+  const ctx = CE.paper.getContext('2d');
+  const [x0, y0, x1, y1] = box || [0, 0, PAPER.w, PAPER.h];
+  ctx.setTransform(PAPER.dpr, 0, 0, PAPER.dpr, 0, 0);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x0, y0, x1 - x0, y1 - y0);
+  ctx.clip();
+  ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
+  // 指针划过的那一块（外面不用逐个算）
+  let tb = null;
+  if (trail.length) {
+    tb = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of trail) tb = [Math.min(tb[0], x), Math.min(tb[1], y), Math.max(tb[2], x), Math.max(tb[3], y)];
+  }
+  const t = sw ? now - sw.t0 : 0;
+  const paths = new Map();
+  const path = (key) => paths.get(key) || paths.set(key, new Path2D()).get(key);
+  const i0 = Math.max(0, Math.floor((x0 - 12) / 10));
+  const i1 = Math.min(cols - 1, Math.ceil((x1 + 12) / 10));
+  const j0 = Math.max(0, Math.floor((y0 - 14) / 10));
+  const j1 = Math.min(rows - 1, Math.ceil((y1 + 10) / 10));
+  for (let j = j0; j <= j1; j++) {
+    const y = 2 + j * 10;
+    for (let i = i0; i <= i1; i++) {
+      const x = i * 10;
+      const r = hash(i, j);
+      let kind = PAPER.kind;
+      let e = 0;
+      if (sw) {
+        const on = SWEEP.front * (sw.dir > 0 ? x / PAPER.w : 1 - x / PAPER.w) + r * 0.07;
+        if (t < on) kind = sw.from;
+        else e = sw.field[j * cols + i] * Math.max(0, sweepK(t - on, SWEEP.hold * (0.5 + r / 1000)));
+      }
+      e = Math.max(e, auraAt(kind, x, y));
+      if (tb && x > tb[0] - TRAIL_R && x < tb[2] + TRAIL_R && y > tb[1] - TRAIL_R && y < tb[3] + TRAIL_R) e = Math.max(e, trailAt(x, y, now));
+      const L = e < 0.12 ? 0 : Math.min(4, Math.ceil(e * 4));
+      if (L < 3 && !isBase(kind, i, j)) continue;
+      const v = LEVELS[L];
+      if (kind === 'dispatch') {
+        const half = v.tick + (L === 0 && i % 4 === 0 ? 1.5 : 0);
+        const p = path(`d${L}`);
+        p.moveTo(x, y - half);
+        p.lineTo(x, y + half);
+      } else if (kind === 'chat') {
+        const p = path(`c${L}`);
+        p.moveTo(x - 5, y);
+        p.lineTo(x + 5, y);
+      } else if (L === 4 && r < 250) {
+        const p = path('ring');
+        p.moveTo(x + 3.4, y);
+        p.arc(x, y, 3.4, 0, 6.2832);
+      } else {
+        const p = path(`r${L}`);
+        p.moveTo(x + v.dot, y);
+        p.arc(x, y, v.dot, 0, 6.2832);
+      }
+    }
+  }
+  for (const [key, p] of paths) {
+    const L = key === 'ring' ? 4 : Number(key.slice(1));
+    ctx.globalAlpha = L ? LEVELS[L].a : 1;
+    ctx.fillStyle = ctx.strokeStyle = L ? PAPER.ink : PAPER.dot;
+    if (key[0] === 'r' && key !== 'ring') ctx.fill(p);
+    else {
+      ctx.lineWidth = key === 'ring' ? 0.9 : LEVELS[L].w;
+      ctx.lineCap = key[0] === 'c' ? 'butt' : 'round';
+      ctx.stroke(p);
+    }
+  }
+  ctx.restore();
+}
+
+/** 下一帧：切页时整张画，只有指针划过时只画它经过的一块；都停了就不再排。 */
+function paperTick(now) {
+  PAPER.raf = 0;
+  const tr = PAPER.trail;
+  while (tr.length && now - tr[0][2] > TRAIL_T) tr.shift();
+  if (PAPER.sweep && now - PAPER.sweep.t0 > PAPER.sweep.end) {
+    PAPER.sweep = null;
+    PAPER.last = null;
+    paperDraw(null, now);
+  } else if (PAPER.sweep) paperDraw(null, now);
+  else {
+    let box = null;
+    for (const [x, y] of tr) box = box ? [Math.min(box[0], x - TRAIL_R), Math.min(box[1], y - TRAIL_R), Math.max(box[2], x + TRAIL_R), Math.max(box[3], y + TRAIL_R)] : [x - TRAIL_R, y - TRAIL_R, x + TRAIL_R, y + TRAIL_R];
+    const a = PAPER.last;
+    if (box || a) paperDraw(a && box ? [Math.min(a[0], box[0]), Math.min(a[1], box[1]), Math.max(a[2], box[2]), Math.max(a[3], box[3])] : box || a, now);
+    PAPER.last = box;
+  }
+  if (PAPER.sweep || tr.length || PAPER.last) PAPER.raf = requestAnimationFrame(paperTick);
+}
+
+/** 整张重画（大小、颜色、这一页的纸、输入框的位置变了）；正在逐帧画时交给下一帧。 */
+function paperAll() {
+  if (!PAPER.cols) return;
+  if (PAPER.raf) PAPER.last = [0, 0, PAPER.w, PAPER.h];
+  else paperDraw(null, performance.now());
+}
+
+/** 量一下这一栏：大小变了换画布，按新大小排群聊的「字」，再整张画。 */
+function paperSize() {
+  const box = CE.paper.parentNode.getBoundingClientRect();
   const W = Math.round(box.width);
   const H = Math.round(box.height);
-  if (!W || !H) return;
-  // 旧的纸盖在上面，跟着前沿退掉：扫到哪儿，纸就换到哪儿
-  if (was && was !== center.dataset.paper) {
-    const old = h('div', { class: 'paper-old', 'data-paper': was, 'data-dir': String(dir) });
-    CE.flow.before(old);
-    old.animate([{ '--wipe': '-60px' }, { '--wipe': '100%' }], { duration: SWEEP.front, easing: 'linear', fill: 'forwards' }).onfinish = () => old.remove();
-  }
-  const inner = !CE.hero.hidden && CE.hero.querySelector('.hero-in');
-  const ib = inner && inner.getBoundingClientRect();
-  const keep = ib && ib.width ? [ib.left - box.left - 24, ib.top - box.top - 20, ib.right - box.left + 24, ib.bottom - box.top + 20] : null;
+  if (!W || !H || (W === PAPER.w && H === PAPER.h)) return;
   const dpr = Math.min(2, devicePixelRatio || 1);
-  Object.assign(FLOW, { w: W, h: H, dpr, ink: getComputedStyle(document.documentElement).getPropertyValue('--ink').trim() || '#151515' });
-  FLOW.marks = flowMarks(keep, dir);
-  CE.flow.width = W * dpr;
-  CE.flow.height = H * dpr;
-  CE.flow.style.width = `${W}px`;
-  CE.flow.style.height = `${H}px`;
-  CE.flow.hidden = false;
-  FLOW.t0 = performance.now();
-  FLOW.raf = requestAnimationFrame(flowFrame);
+  Object.assign(PAPER, { w: W, h: H, dpr, cols: Math.floor(W / 10) + 1, rows: Math.floor((H - 2) / 10) + 1 });
+  PAPER.words = paperWords(PAPER.cols, PAPER.rows);
+  CE.paper.width = W * dpr;
+  CE.paper.height = H * dpr;
+  CE.paper.style.width = `${W}px`;
+  CE.paper.style.height = `${H}px`;
+  paperAura();
+  paperAll();
+}
+
+/** 换了浅色 / 深色：重新取墨色和纸上记号的颜色。 */
+function paperInk() {
+  const css = getComputedStyle(document.documentElement);
+  PAPER.ink = css.getPropertyValue('--ink').trim() || '#151515';
+  PAPER.dot = css.getPropertyValue('--dot').trim() || 'rgba(21, 21, 21, 0.09)';
+  paperAll();
+}
+
+/** 这一页的纸（renderCenter 里调）：换了页就记下旧的，切页时扫过去才换；不是切页（刚打开、换项目）直接画好。 */
+function paperSet(kind, curve) {
+  PAPER.curve = curve;
+  if (kind === PAPER.kind) return;
+  PAPER.from = PAPER.kind;
+  PAPER.kind = kind;
+  if (!S.swap) paperAll();
+}
+
+/** 空白页里一个元素在这一栏里的方框 [左, 上, 右, 下]：顺着定位的上一级一路加上去（不算动画里的位移），减去空白页滚动过的。 */
+function boxIn(el) {
+  let x = 0;
+  let y = -CE.hero.scrollTop;
+  for (let e = el; e && e !== CE.paper.parentNode; e = e.offsetParent) {
+    x += e.offsetLeft;
+    y += e.offsetTop;
+  }
+  return [x, y, x + el.offsetWidth, y + el.offsetHeight];
+}
+
+/** 空白页：记下输入框的四条边（深一圈的地方）和字、输入框那一块（扫过去时留白）。 */
+function paperAura() {
+  const b = C.box;
+  const inner = CE.hero.querySelector('.hero-in');
+  const on = !CE.hero.hidden && b && CE.hero.contains(b) && b.offsetWidth > 0;
+  const aura = on ? boxIn(b) : null;
+  const k = on && inner ? boxIn(inner) : null;
+  PAPER.keep = k && [k[0] - 24, k[1] - 20, k[2] + 24, k[3] + 20];
+  if (String(aura) === String(PAPER.aura)) return;
+  PAPER.aura = aura;
+  paperAll();
+}
+
+/** 切了页（新的一页已经放好）：从切过去的那一边扫一道，扫到哪儿纸换到哪儿。减少动态效果时直接换好。 */
+function paperSweep(dir) {
+  const from = PAPER.from || PAPER.kind;
+  PAPER.from = '';
+  if (still() || !PAPER.cols) return paperAll();
+  PAPER.sweep = { t0: performance.now(), dir, from, field: sweepField(PAPER.curve), end: SWEEP.front + 70 + SWEEP.grow + SWEEP.hold * 1.5 + SWEEP.fade };
+  if (!PAPER.raf) PAPER.raf = requestAnimationFrame(paperTick);
+}
+
+/** 指针在纸上划过（停在卡片、输入框、按钮上不算）：记下经过的点，划痕很快褪掉。 */
+function paperPointer(e) {
+  if (e.pointerType === 'touch' || still() || !e.target.matches('.center, .hero, .hero-in, .hero-bar, .pane, .scroll, .stream, .under')) return;
+  const r = CE.paper.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  const now = performance.now();
+  const tr = PAPER.trail;
+  const last = tr[tr.length - 1];
+  if (last && Math.hypot(x - last[0], y - last[1]) < 6) last[2] = now;
+  else tr.push([x, y, now]);
+  if (tr.length > 48) tr.shift();
+  if (!PAPER.raf) PAPER.raf = requestAnimationFrame(paperTick);
 }
 
 // ----- 顶栏：项目 / 任务几，现在谁在做，待复核，清单，控制 -----
@@ -3673,8 +3792,8 @@ function buildComposer() {
     C.tools
   );
   C.wrap = h('div', { class: 'composer-wrap' }, C.box);
-  // 打字打高了：空白页上输入框周围那一圈深一点的纸跟着挪
-  new ResizeObserver(() => aura()).observe(C.box);
+  // 打字打高了：空白页上输入框周围深一圈的纸跟着挪
+  new ResizeObserver(() => paperAura()).observe(C.box);
   C.kind = '';
   // 输入框浮在对话上面：对话底下留出它的高度，「新消息」按钮也跟着它走
   new ResizeObserver(() => {
@@ -5355,8 +5474,11 @@ addEventListener('resize', () => {
   if (SUG.menu) updateSuggest();
   if (WIRE.card) drawWires();
   syncSegs();
-  aura();
 });
+// 纸：这一栏大小变了换画布重画，换了浅色 / 深色换颜色重画
+new ResizeObserver(() => paperSize()).observe($('#center'));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paperInk);
+new MutationObserver(paperInk).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 // ---------- 开始 ----------
 
@@ -5368,7 +5490,7 @@ function renderAll() {
   renderRight();
   if (S.swap) {
     swapIn(S.swap);
-    flowSweep(S.swap);
+    paperSweep(S.swap);
     S.swap = 0;
   }
 }
@@ -5377,6 +5499,7 @@ function renderAll() {
   applyLayout();
   buildCenter();
   buildComposer();
+  paperInk();
   buildRight();
   await refresh();
   if (S.st) S.treeOpen = new Set(store.json(`open:${S.st.project.root}`, []));

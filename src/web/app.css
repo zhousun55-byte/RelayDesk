@@ -1,10 +1,10 @@
 /* 接力台网页。三栏：左边项目和对话、中间对话、右边项目文件。
    骨架规整（细线、线路、编号），这是「神性」的一半；纸面颗粒、点阵纸、钉上去的小条和细线，是「人性」的一半。
    只有黑白灰，外加一颗小红点：只有要人管的地方是红的。全站一种字（Albert Sans 配苹方），等宽字只给代码。
-   动画只动 transform 和 opacity（点阵流画在画布上、网点进场动遮罩，都只在一小块上）；进来、出去都有过渡，减少动态效果时全部关掉。
-   2026-09-28 按两张海报加的细节：连续的东西拆成一格一格的点（点阵流、点线、网点进场），瑞士版式的对准标记和裁切角。
-   点只在切换的那一下冒出来：切页时顺着方向扫一遍，分段按钮的滑块身后留一串，开关一颗颗铺满或散掉；平时纸上只有原来的点。
-   三页三种纸：接力是点、派活是竖、群聊是横，空白页上输入框周围的记号深一点；切页时扫到哪儿纸换到哪儿。 */
+   动画只动 transform 和 opacity（纸画在一张画布上、网点进场动遮罩，都只在一小块上）；进来、出去都有过渡，减少动态效果时全部关掉。
+   2026-09-28 按两张海报加的细节：连续的东西拆成一格一格的点（纸上扫过去的一道、点线、网点进场），瑞士版式的对准标记和裁切角。
+   纸是一张画布：三页三种笔画（接力是点、派活是竖、群聊是横），空白页输入框周围深一圈，指针划过深一道，切页时扫一道、扫到哪儿纸换到哪儿；
+   都只是给格点一个深浅，一起画一次，平时不画。分段按钮的滑块身后留一串点，开关一颗颗铺满或散掉。 */
 
 @font-face {
   font-family: 'Albert Sans';
@@ -35,7 +35,6 @@
   --red: #cb2f29;
   --red-glow: rgba(203, 47, 41, 0.14);
   --dot: rgba(21, 21, 21, 0.09);
-  --dot-2: rgba(21, 21, 21, 0.2);
   --glass: rgba(252, 252, 251, 0.74);
   --glass-slip: rgba(255, 255, 255, 0.78);
   --scrim: rgba(21, 21, 21, 0.16);
@@ -84,7 +83,6 @@
     --red: #e5483e;
     --red-glow: rgba(229, 72, 62, 0.2);
     --dot: rgba(236, 236, 234, 0.07);
-    --dot-2: rgba(236, 236, 234, 0.16);
     --glass: rgba(18, 18, 17, 0.72);
     --glass-slip: rgba(29, 29, 27, 0.78);
     --scrim: rgba(0, 0, 0, 0.45);
@@ -111,7 +109,6 @@
   --red: #e5483e;
   --red-glow: rgba(229, 72, 62, 0.2);
   --dot: rgba(236, 236, 234, 0.07);
-  --dot-2: rgba(236, 236, 234, 0.16);
   --glass: rgba(18, 18, 17, 0.72);
   --glass-slip: rgba(29, 29, 27, 0.78);
   --scrim: rgba(0, 0, 0, 0.45);
@@ -126,6 +123,8 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fog-3) transparent;
 }
 html,
 body {
@@ -161,10 +160,6 @@ button:disabled {
 }
 ::selection {
   background: color-mix(in srgb, var(--ink) 14%, transparent);
-}
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--fog-3) transparent;
 }
 [hidden] {
   display: none !important;
@@ -1091,67 +1086,15 @@ button.busy::after {
 
 /* ---------- 中间：点阵纸 ---------- */
 
+/* 中间这一栏是一张纸：底色和上面一层淡淡的亮光；纸上的记号（三页三种）画在 .paper 这张画布上 */
 .center {
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   position: relative;
-}
-/* 三页三种纸（同一套 20px 的格子，每格一个记号，只是笔画不同）：接力是点，派活是竖（拆成几列并排做），群聊是横（一行行对话） */
-.center,
-.paper-old {
-  --mark: radial-gradient(var(--dot) 0.85px, transparent 1.3px);
-  --mark-2: radial-gradient(var(--dot-2) 0.95px, transparent 1.45px);
-  --ex: 96px;
-  --ey: 72px;
   background-color: var(--paper);
-  background-image: var(--mark), radial-gradient(120% 60% at 50% -10%, var(--slip), transparent 70%);
-  background-size: 20px 20px, 100% 100%;
-  background-position: 10px 12px, 0 0;
-}
-[data-paper='dispatch'] {
-  --mark: radial-gradient(0.6px 3px, var(--dot) 70%, transparent);
-  --mark-2: radial-gradient(0.7px 3.4px, var(--dot-2) 70%, transparent);
-  --ex: 36px;
-  --ey: 150px;
-}
-[data-paper='chat'] {
-  --mark: radial-gradient(3px 0.6px, var(--dot) 70%, transparent);
-  --mark-2: radial-gradient(3.4px 0.7px, var(--dot-2) 70%, transparent);
-  --ex: 220px;
-  --ey: 36px;
-}
-/* 空白页：输入框周围纸上的记号深一点，往外淡回去；接力四周匀开，派活往上下伸（一列列），群聊往左右伸（一行行）。
-   --l --r --t --b 是输入框的四条边（app.js 的 aura），--ex --ey 是淡开多远 */
-.aura {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: var(--mark-2) 10px 12px / 20px 20px;
-  -webkit-mask: linear-gradient(to right, transparent calc(var(--l) - var(--ex)), #000 var(--l), #000 var(--r), transparent calc(var(--r) + var(--ex))), linear-gradient(to bottom, transparent calc(var(--t) - var(--ey)), #000 var(--t), #000 var(--b), transparent calc(var(--b) + var(--ey)));
-  -webkit-mask-composite: source-in;
-  mask: linear-gradient(to right, transparent calc(var(--l) - var(--ex)), #000 var(--l), #000 var(--r), transparent calc(var(--r) + var(--ex))), linear-gradient(to bottom, transparent calc(var(--t) - var(--ey)), #000 var(--t), #000 var(--b), transparent calc(var(--b) + var(--ey)));
-  mask-composite: intersect;
-}
-/* 切页时旧的纸留在前沿前面，前沿扫到哪儿换到哪儿（app.js 的 flowSweep） */
-@property --wipe {
-  syntax: '<length-percentage>';
-  inherits: false;
-  initial-value: 0%;
-}
-.paper-old {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  -webkit-mask: linear-gradient(to right, transparent var(--wipe), #000 calc(var(--wipe) + 60px));
-  mask: linear-gradient(to right, transparent var(--wipe), #000 calc(var(--wipe) + 60px));
-}
-.paper-old[data-dir='-1'] {
-  -webkit-mask: linear-gradient(to left, transparent var(--wipe), #000 calc(var(--wipe) + 60px));
-  mask: linear-gradient(to left, transparent var(--wipe), #000 calc(var(--wipe) + 60px));
+  background-image: radial-gradient(120% 60% at 50% -10%, var(--slip), transparent 70%);
 }
 .offline {
   position: relative;
@@ -2575,8 +2518,8 @@ button.busy::after {
 
 /* ---------- 空闲：一个小标题、要人看的一行、输入框 ---------- */
 
-/* 点阵流：和纸上的点对齐的一层画布，只在切页的那一下扫过去（见 app.js 的 flowSweep），平时收着 */
-.flow {
+/* 纸上的记号（app.js 的「纸」一节）：三页三种笔画、输入框周围深一圈、指针划过、切页扫一道，都画在这一张画布上 */
+.paper {
   position: absolute;
   left: 0;
   top: 0;
