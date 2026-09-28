@@ -161,7 +161,7 @@ function underlay(host, draw) {
 }
 
 /**
- * 收起 / 打开侧栏：一道点扫过这一栏，收起从外往里，打开从里往外；前沿和侧栏收起、打开一样长、一样先快后慢（0.26 秒），每颗点分三档变小、0.1 秒散掉。
+ * 收起 / 打开侧栏：一道点扫过这一栏，收起从外往里，打开从里往外；前沿和侧栏收起、打开一样长、一样先快后慢（0.32 秒），每颗点分三档变小、0.1 秒散掉。
  * 点盖在最上面，扫完就拿掉。
  */
 function sideSweep(side, open) {
@@ -182,11 +182,11 @@ function sideSweep(side, open) {
   }
   specks(cv, w, H, (ctx, t) => {
     const lv = [new Path2D(), new Path2D(), new Path2D()];
-    let live = t < 320;
+    let live = t < 380;
     for (let n = 0; n < dots.length; n += 3) {
       const x = dots[n];
       const y = dots[n + 1];
-      const age = t - 260 * reachAt(dir > 0 ? x / w : 1 - x / w, 3) - (dots[n + 2] % 40);
+      const age = t - 320 * reachAt(dir > 0 ? x / w : 1 - x / w, 3) - (dots[n + 2] % 40);
       const k = 2 - Math.floor(age / 35);
       if (age < 0 || k < 0) continue;
       live = true;
@@ -1712,6 +1712,7 @@ function onScroll() {
   stick = s.scrollHeight - s.scrollTop - s.clientHeight < 80;
   if (stick) CE.toBottom.hidden = true;
   if (WIRE.card) drawWires();
+  if (PAPER.kind === 'chat') paperHolesSoon();
 }
 
 function scrollBottom(smooth) {
@@ -1763,6 +1764,7 @@ function renderCenter() {
   // 这一页的纸（切页时扫过去才换）、空白页输入框周围深一圈
   paperSet(S.view, mode === 'pick' ? 'pick' : S.view);
   paperAura();
+  paperHoles();
 }
 
 // ----- 空闲：小标题、要人看的一行、输入框 -----
@@ -1885,7 +1887,7 @@ const BASE = { relay: 1.09, dispatch: 2.5, chat: 2.75 };
 const AURA = { relay: 1.2, dispatch: 3, chat: 3 };
 const TRAIL_R = 84;
 const TRAIL_T = 260;
-const PAPER = { kind: 'relay', from: '', curve: 'relay', w: 0, h: 0, dpr: 1, ink: '#151515', dot: 'rgba(21, 21, 21, 0.09)', dot2: 'rgba(21, 21, 21, 0.2)', aura: null, keep: null, trail: [], sweep: null, last: null, raf: 0 };
+const PAPER = { kind: 'relay', from: '', curve: 'relay', w: 0, h: 0, dpr: 1, ink: '#151515', dot: 'rgba(21, 21, 21, 0.09)', dot2: 'rgba(21, 21, 21, 0.2)', aura: null, keep: null, holes: [], holeSig: '', trail: [], sweep: null, last: null, raf: 0 };
 
 const smooth = (a, b, x) => {
   const t = clamp((x - a) / (b - a), 0, 1);
@@ -2058,12 +2060,15 @@ function paperDraw(box, now) {
   // 新纸的份量：切页时前沿后面 1、前面 0，中间 60px 渐变
   const share = (x) => (sw ? clamp(1 - ((sw.dir > 0 ? x : PAPER.w - x) - wipe) / 60, 0, 1) : 1);
   // 一种纸在这一块里的每个格点：平时的记号（份量 s），指针划过的深一点、大一点
+  // 群聊页的大段回答底下不画（字不叠在横纹上）
+  const holes = PAPER.holes.filter((b) => b[2] > x0 && b[0] < x1 && b[3] > y0 && b[1] < y1);
   const each = (kind, fresh) => {
     const P = PITCH[kind] || 20;
+    const cut = kind === 'chat' && holes.length ? holes : null;
     for (let y = 2 + P * Math.max(0, Math.floor((y0 - 14) / P)); y <= y1 + 12; y += P) {
       for (let x = P * Math.max(0, Math.floor((x0 - 12) / P)); x <= x1 + 12; x += P) {
         const s = fresh ? share(x) : 1 - share(x);
-        if (s <= 0) continue;
+        if (s <= 0 || (cut && cut.some((b) => x > b[0] && x < b[2] && y > b[1] && y < b[3]))) continue;
         mark(path(fills, 'dot', s), kind, x, y, BASE[kind], 1.1);
         const au = fresh ? auraAt(kind, x, y) * s : 0;
         if (au > 0.02) mark(path(fills, 'dot2', au), kind, x, y, AURA[kind], 1.3);
@@ -2114,6 +2119,8 @@ function paperTick(now) {
     PAPER.sweep = null;
     PAPER.last = null;
     paperDraw(null, now);
+    // 切进来的内容滑到位了：回答的方框按停好的位置再量一次
+    paperHoles();
   } else if (PAPER.sweep) paperDraw(null, now);
   else {
     let box = null;
@@ -2187,6 +2194,28 @@ function paperAura() {
   if (String(aura) === String(PAPER.aura)) return;
   PAPER.aura = aura;
   paperAll();
+}
+
+/** 群聊页：记下每段回答、每张投票在这一栏里的方框（四周多留一点），那里不画横纹；别的页没有。 */
+function paperHoles() {
+  const holes = [];
+  if (PAPER.kind === 'chat' && PAPER.w && !CE.chat.hidden) {
+    const c = CE.paper.getBoundingClientRect();
+    for (const el of CE.stream.querySelectorAll('.ai .text, .vote')) {
+      const r = el.getBoundingClientRect();
+      if (r.bottom > c.top && r.top < c.bottom) holes.push([r.left - c.left - 10, r.top - c.top - 8, r.right - c.left + 10, r.bottom - c.top + 8]);
+    }
+  }
+  const sig = holes.map((b) => b.map(Math.round).join(',')).join(';');
+  if (sig === PAPER.holeSig) return;
+  PAPER.holes = holes;
+  PAPER.holeSig = sig;
+  paperAll();
+}
+
+let holesRaf = 0;
+function paperHolesSoon() {
+  if (!holesRaf) holesRaf = requestAnimationFrame(() => ((holesRaf = 0), paperHoles()));
 }
 
 /** 切了页（新的一页已经放好）：从切过去的那一边扫一道，扫到哪儿纸换到哪儿。减少动态效果时直接换好。 */
@@ -2813,6 +2842,7 @@ function foldable(box, text) {
         const from = box.offsetHeight;
         box.classList.remove('fold');
         btn.remove();
+        setTimeout(paperHolesSoon, 300);
         if (!still()) box.animate([{ height: `${from}px`, overflow: 'hidden' }, { height: `${box.offsetHeight}px`, overflow: 'hidden' }], { duration: 280, easing: EASE.snap });
       },
     },
@@ -5215,16 +5245,26 @@ function memberNote(m) {
   return [tool, state, m.update ? '命令行需要更新' : ''].filter(Boolean).join(' · ');
 }
 
-const LIMIT_WORD = { '5h': '5 小时', '7d': '一周', '7d-opus': '一周 Opus' };
+const LIMIT_WORD = { '5h': '5 小时', '7d': '一周', '7d-opus': 'Opus' };
 
 /** 工具自己报的额度：「5 小时 5% · 一周 72%」；没报过就是空的。 */
 function limitsText(m) {
   return (m.limits || []).map((w) => `${LIMIT_WORD[w.kind] || w.kind} ${Math.round(w.used)}%`).join(' · ');
 }
 
-/** 悬停看几点恢复：「5 小时 21:40 恢复 · 一周 10月2日 09:00 恢复」。 */
+/** 悬停看几点恢复：「5 小时 21:40 恢复 · 一周 周五 09:00 恢复」。 */
 function limitsTip(m) {
-  return (m.limits || []).filter((w) => w.resetsAt).map((w) => `${LIMIT_WORD[w.kind] || w.kind} ${dayClock(w.resetsAt)} 恢复`).join(' · ') || null;
+  return (m.limits || []).filter((w) => w.resetsAt).map((w) => `${LIMIT_WORD[w.kind] || w.kind} ${aheadClock(w.resetsAt)} 恢复`).join(' · ') || null;
+}
+
+/** 将来的时间：今天写几点，明天写「明天 00:30」，一周内写星期，再远写日期。 */
+function aheadClock(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const n = Math.round((day(d) - day(new Date())) / 86400000);
+  const pre = n <= 0 ? '' : n === 1 ? '明天 ' : n < 7 ? `${['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]} ` : `${d.getMonth() + 1}月${d.getDate()}日 `;
+  return pre + clock(ts);
 }
 
 /** 删掉一位：它那一行淡出，下面的行滑上来补位。 */
@@ -5540,7 +5580,7 @@ addEventListener('resize', () => {
   syncSegs();
 });
 // 纸：这一栏大小变了换画布重画，换了浅色 / 深色换颜色重画
-new ResizeObserver(() => paperSize()).observe($('#center'));
+new ResizeObserver(() => (paperSize(), paperHolesSoon())).observe($('#center'));
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paperInk);
 new MutationObserver(paperInk).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 

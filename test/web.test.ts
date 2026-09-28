@@ -290,7 +290,7 @@ result = { dispatch, relay: pageThreads().map((t) => t.id), page: pageOf({ mode:
 });
 
 test('成员名单的额度：第二行写「5 小时 5% · 一周 72%」，悬停写几点恢复；没报过额度就什么都不写', () => {
-  const code = ['pad', 'clock', 'sameDay', 'when', 'dayClock', 'LIMIT_WORD', 'limitsText', 'limitsTip'].map(pick).join('\n\n');
+  const code = ['pad', 'clock', 'aheadClock', 'LIMIT_WORD', 'limitsText', 'limitsTip'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
   vm.runInNewContext(`${code}\nresult = { limitsText, limitsTip };`, ctx);
   const { limitsText, limitsTip } = ctx.result as { limitsText: (m: object) => string; limitsTip: (m: object) => string | null };
@@ -302,6 +302,11 @@ test('成员名单的额度：第二行写「5 小时 5% · 一周 72%」，悬�
   assert.ok(limitsTip(m)!.startsWith('5 小时 '), limitsTip(m)!);
   assert.ok(limitsTip(m)!.includes(`${at} 恢复`), limitsTip(m)!);
   assert.ok(!limitsTip(m)!.includes('一周'), '没给恢复时间的窗口不写');
+  const tmr = new Date();
+  tmr.setDate(tmr.getDate() + 1);
+  tmr.setHours(0, 30, 0, 0);
+  assert.equal(limitsTip({ limits: [{ kind: '5h', used: 1, resetsAt: tmr.toISOString() }] }), '5 小时 明天 00:30 恢复');
+  assert.equal(limitsText({ limits: [{ kind: '7d-opus', used: 40 }] }), 'Opus 40%');
   assert.equal(limitsText({}), '');
   assert.equal(limitsTip({}), null);
 });

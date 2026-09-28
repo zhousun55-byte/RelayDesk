@@ -370,7 +370,7 @@ svg.i {
   grid-template-rows: minmax(0, 1fr);
   height: 100vh;
   height: 100dvh;
-  transition: grid-template-columns 0.26s var(--ease);
+  transition: grid-template-columns 0.32s var(--ease);
 }
 .app.no-left {
   grid-template-columns: 0 minmax(0, 1fr) var(--right);
