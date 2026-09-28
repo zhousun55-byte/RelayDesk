@@ -43,6 +43,11 @@ export interface LlmAgentResult {
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.venv', 'venv', '__pycache__', '.DS_Store']);
 
+/** 多半放着密钥的文件（.env、私钥、各家包管理器的登录信息）：内置代理不读、不搜；.env.example 这类模板照常。 */
+const SECRET_FILE = /(^|\/)(\.env(\.(?!example$|sample$|template$|dist$)[^/]+)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_(rsa|ed25519|ecdsa|dsa)|[^/]+\.(pem|key|p12|pfx|jks|keystore)|credentials(\.json)?|secrets?\.(json|ya?ml|toml))$/i;
+const SECRET_GLOBS = ['.env', '.env.*', '.npmrc', '.pypirc', '.netrc', '.git-credentials', 'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa', '*.pem', '*.key', '*.p12', '*.pfx', '*.jks', '*.keystore', 'credentials', 'credentials.json', 'secret.*', 'secrets.*'];
+const NO_SECRET_FILE = '这个文件多半放着密钥（.env、私钥这一类），内置代理不读。要用里面的配置，请人把需要的部分写进任务的约定。';
+
 const SYSTEM = [
   '你是一个在本地代码仓库里干活的编程助手，由「接力台」全自动调度：没有人会回答你的问题，也不用等人确认。',
   '你只能通过提供的工具读写当前项目文件夹里的文件。',
@@ -206,6 +211,7 @@ function listFiles(root: string, relDir: string): string {
 function readFile(root: string, args: Record<string, unknown>): string {
   const { abs, rel } = resolveIn(root, args.path);
   if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw new ToolError(`没有这个文件：${rel}`);
+  if (SECRET_FILE.test(rel)) throw new ToolError(NO_SECRET_FILE);
   const buf = fs.readFileSync(abs);
   if (buf.subarray(0, 8000).includes(0)) return `${rel} 是二进制文件（${buf.length} 字节）。`;
   const lines = buf.toString('utf8').split('\n');
@@ -256,7 +262,8 @@ function search(root: string, args: Record<string, unknown>): string {
   const inRepo = git(root, ['rev-parse', '--is-inside-work-tree']).stdout === 'true';
   const mode = inRepo ? ['--untracked'] : ['--no-index', '--exclude-standard'];
   const skip = inRepo ? [] : [...SKIP_DIRS].map((d) => `:(exclude,glob)**/${d}/**`);
-  const r = git(root, ['grep', '-n', '-I', '-E', ...mode, '--no-color', '-e', args.pattern, '--', where, ':(exclude).relay', ...skip]);
+  const secrets = SECRET_GLOBS.map((g) => `:(exclude,glob)**/${g}`);
+  const r = git(root, ['grep', '-n', '-I', '-E', ...mode, '--no-color', '-e', args.pattern, '--', where, ':(exclude).relay', ...skip, ...secrets]);
   if (r.code === 1) return '（没找到）';
   if (r.code !== 0) throw new ToolError(`搜索出错：${r.stderr || r.code}`);
   const lines = r.stdout.split('\n');

@@ -111,6 +111,12 @@ export function readTask(root: string): TaskDoc {
   return parseTask(raw);
 }
 
+/** 任务的版本：标题、正文、每一步（连同打没打勾）、约定都一样就是同一版；空行、缩进不算。 */
+export function taskVersion(t: TaskDoc): string {
+  const body = JSON.stringify([t.title, t.body, t.items.map((i) => [i.text, i.done]), t.rules]);
+  return crypto.createHash('sha1').update(body).digest('hex').slice(0, 12);
+}
+
 /** 任务做完了吗：有清单、全部打勾。 */
 export function taskComplete(t: TaskDoc): boolean {
   return !t.empty && t.items.length > 0 && t.items.every((i) => i.done);

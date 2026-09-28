@@ -323,7 +323,7 @@ function twoStints(name: string): Sandbox {
   return s;
 }
 
-test('退回拿着调度锁：别的进程在调度这个项目时不退回，文件不动', () => {
+test('退回、换任务拿着调度锁：别的进程在调度这个项目时不退回、不换任务，文件和任务都不动', () => {
   const s = twoStints('rollback-lock');
   const lock = path.join(s.repo, '.relay', 'runs', 'lock');
   fs.mkdirSync(path.dirname(lock), { recursive: true });
@@ -331,6 +331,9 @@ test('退回拿着调度锁：别的进程在调度这个项目时不退回，�
   assert.match(s.relay(['rollback', '2'], true), /已经在调度这个项目/);
   assert.equal(s.read('a.txt'), '2\n');
   assert.ok(!s.stints().some((x) => x.rolledBack));
+  const task = s.read('.relay/任务.md');
+  assert.match(s.relay(['task', '换一件事'], true), /已经在调度这个项目/);
+  assert.equal(s.read('.relay/任务.md'), task);
   fs.rmSync(lock);
   s.relay(['rollback', '2']);
   assert.equal(s.read('a.txt'), '1\n');

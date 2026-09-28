@@ -217,6 +217,13 @@ test('验收：清单打勾不等于做完——开着终审却没终审、终�
   assert.match(a.final.text, /有问题，还没修/);
   assert.equal(acceptance({ ...base, ledger: view([work, good, { ...again, who: WEAK }]) }).state, 'accepted');
   assert.equal(acceptance({ ...base, ledger: view([work, good, { ...again, status: 'failed', verdict: undefined }]) }).state, 'accepted');
+  // 终审之后任务改过（加了一步、改了要求）：它审的不是现在的任务；没记版本的旧终审不比
+  const ver = notes.taskVersion(DONE_TASK);
+  assert.equal(acceptance({ ...base, ledger: view([work, { ...good, taskVer: ver }]) }).state, 'accepted');
+  a = acceptance({ ...base, ledger: view([work, { ...good, taskVer: 'old-version' }]) });
+  assert.equal(a.state, 'blocked');
+  assert.match(a.final.text, /^终审之后任务改过$/);
+  assert.equal(notes.taskVersion(notes.parseTask(DONE_TASK.raw.replace(/\n/g, '\n\n'))), ver, '只多了空行：还是同一版');
   // 都对：通过
   a = acceptance({ ...base, ledger: view([work, good]) });
   assert.equal(a.state, 'accepted');
@@ -384,6 +391,59 @@ test('内置小代理的路径：链接指到项目外面、写链接、大小�
   assert.equal(fs.readFileSync(path.join(root, '.git', 'config'), 'utf8'), '[core]\n');
   assert.equal(fs.readFileSync(path.join(root, 'src', 'secret.ts'), 'utf8'), 'export {};\n');
   assert.equal(fs.readFileSync(path.join(root, '.relay', 'journal.jsonl'), 'utf8'), '');
+});
+
+test('内置代理不读、不搜放密钥的文件（.env、私钥）；模板照常；读给模型的密钥抹掉，抹掉的不许原样写回', async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'relay-agent-secret-')));
+  const key = 'sk-' + 'abcdefghijklmnopqrstuvwx';
+  fs.writeFileSync(path.join(root, '.env'), `MARK_X=${key}\n`);
+  fs.writeFileSync(path.join(root, '.env.example'), 'MARK_X=\n');
+  fs.writeFileSync(path.join(root, 'server.pem'), 'MARK_X\n');
+  fs.writeFileSync(path.join(root, 'config.ts'), `// MARK_X\nexport const k = '${key}';\n`);
+  const calls = [
+    { name: 'read_file', args: { path: '.env' } },
+    { name: 'read_file', args: { path: 'server.pem' } },
+    { name: 'read_file', args: { path: '.env.example' } },
+    { name: 'search', args: { pattern: 'MARK_X' } },
+    { name: 'read_file', args: { path: 'config.ts' } },
+    { name: 'write_file', args: { path: 'config.ts', content: "export const k = '[REDACTED]';\n" } },
+  ];
+  const results: string[] = [];
+  class FakeChat {
+    used = { input: 0, output: 0 };
+    n = 0;
+    user(): void {}
+    size(): number {
+      return 0;
+    }
+    prune(): number {
+      return 0;
+    }
+    results(r: { content: string }[]): void {
+      results.push(...r.map((x) => x.content));
+    }
+    async next(): Promise<{ text: string; calls: { id: string; name: string; args: Record<string, unknown> }[] }> {
+      this.n++;
+      if (this.n === 1) return { text: '', calls: calls.map((c, i) => ({ id: `c${i}`, ...c })) };
+      return { text: '', calls: [{ id: 'f', name: 'finish', args: { summary: '好了' } }] };
+    }
+  }
+  const real = llm.ToolChat;
+  llm.ToolChat = FakeChat;
+  try {
+    await agent.runLlmAgent({ spec: { baseUrl: 'http://x', model: 'm', apiKeyEnv: 'X' } as never, cwd: root, brief: '试', level: 'safe', gateCommand: '', protectedPaths: [], log: () => undefined, shouldStop: () => false, deadline: Date.now() + 60_000 });
+  } finally {
+    llm.ToolChat = real;
+  }
+  assert.match(results[0], /^出错：.*多半放着密钥/);
+  assert.match(results[1], /^出错：.*多半放着密钥/);
+  assert.match(results[2], /MARK_X=/);
+  assert.match(results[3], /config\.ts/);
+  assert.doesNotMatch(results[3], /\.env|server\.pem/, '搜索跳过放密钥的文件');
+  assert.ok(!results.join('\n').includes(key), '密钥没交给模型');
+  assert.match(results[4], /\[REDACTED\]/);
+  assert.match(results[5], /^出错：.*REDACTED/);
+  assert.ok(fs.readFileSync(path.join(root, 'config.ts'), 'utf8').includes(key), '原文没被 [REDACTED] 冲掉');
 });
 
 test('网页切换项目：A 的请求晚回来也不会显示在 B 里（状态、对话、文件树、棒的详情、打开的文件都一样）；点棒上的按钮发往当前项目', async () => {

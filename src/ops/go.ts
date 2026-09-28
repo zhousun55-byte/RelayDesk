@@ -20,6 +20,7 @@ import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, us
 import { cause, plain } from '../core/cause';
 import { takeSnapshot } from '../core/snap';
 import { memberTier, sameModel, whoOfMember } from '../core/tier';
+import { acquireLock, runsDir } from './lock';
 import { applyReviews, closeStint, gateStint, projectConfig, projectConfigSafe, refreshBrief, track } from './track';
 
 /**
@@ -82,10 +83,6 @@ type Tier = 'strong' | 'weak' | 'any';
 /** 给人看的名字：它用的模型（GPT-6 Sol），认不出模型写工具名。 */
 const nameOf = (m: MemberInfo) => llmName(m.model) || m.label;
 
-function runsDir(root: string): string {
-  return path.join(root, '.relay', 'runs');
-}
-
 export function goStatePath(root: string): string {
   return path.join(runsDir(root), 'state.json');
 }
@@ -104,60 +101,6 @@ function canonRoot(root: string): string {
   }
 }
 
-// ---- 一个项目同一时间只能有一个调度（网页和命令行各开一个也不行） ----
-
-/** 这个进程拿着的锁（锁文件里写的 token）。 */
-const heldLocks = new Set<string>();
-
-function lockFile(root: string): string {
-  return path.join(runsDir(root), 'lock');
-}
-
-/**
- * 拿项目级的锁：.relay/runs/lock 只能新建（别人建好了就是别人在调度）。
- * 锁的主人进程没了、或者是本进程已经放掉的旧锁，才算过期、可以拿走。返回放锁的函数。
- */
-export function acquireLock(root: string): () => void {
-  fs.mkdirSync(runsDir(root), { recursive: true });
-  const p = lockFile(root);
-  const token = `${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const fd = fs.openSync(p, 'wx');
-      try {
-        fs.writeSync(fd, JSON.stringify({ pid: process.pid, token, at: nowIso() }));
-      } finally {
-        fs.closeSync(fd);
-      }
-      heldLocks.add(token);
-      return () => {
-        heldLocks.delete(token);
-        try {
-          const cur = JSON.parse(fs.readFileSync(p, 'utf8')) as { token?: string };
-          if (cur.token === token) fs.rmSync(p, { force: true });
-        } catch {
-          /* 已经没了 */
-        }
-      };
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-      let holder: { pid?: number; token?: string } = {};
-      let ageMs = Infinity;
-      try {
-        ageMs = Date.now() - fs.statSync(p).mtimeMs;
-        holder = JSON.parse(fs.readFileSync(p, 'utf8')) as typeof holder;
-      } catch {
-        /* 刚建好还没写内容，或者被删了 */
-      }
-      const mine = holder.pid === process.pid;
-      const alive = !!holder.pid && (mine ? !!holder.token && heldLocks.has(holder.token) : pidAlive(holder.pid));
-      // 别的进程刚建好锁、还没来得及写进去：当它在用。
-      if (alive || (!holder.pid && ageMs < 3000)) throw new RelayError('接力台已经在调度这个项目（可能是另一个窗口或命令行）', 'busy');
-      fs.rmSync(p, { force: true });
-    }
-  }
-  throw new RelayError('拿不到这个项目的调度锁', 'busy');
-}
 
 // ---- 你自己在别的工具里干到一半的那一棒 ----
 

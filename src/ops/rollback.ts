@@ -2,7 +2,7 @@ import { RelayError } from '../core/errors';
 import { appendLedger, findStint, loadLedger, requireInit, type RollbackEvent, type Stint } from '../core/ledger';
 import { readTaskCopy, restoreTaskChecks, saveTaskCopy } from '../core/notes';
 import { restoreSnapshot, snapExists } from '../core/snap';
-import { acquireLock } from './go';
+import { withLock } from './lock';
 import { markRollback, recoverRollback, refreshBrief, relayBusy, track } from './track';
 
 /**
@@ -27,13 +27,7 @@ export interface RollbackResult {
 
 /** 拿着调度锁做：先补记上次做到一半的退回。 */
 function locked<T>(root: string, fn: () => T): T {
-  const release = acquireLock(root);
-  try {
-    recoverRollback(root);
-    return fn();
-  } finally {
-    release();
-  }
+  return withLock(root, () => (recoverRollback(root), fn()));
 }
 
 /** 恢复文件：动文件前记一笔；恢复出错就马上按现在的样子补记（之后能撤销），再报错。 */

@@ -9,6 +9,7 @@ import { loadMemory, rememberProject } from '../core/memory';
 import { relayHome } from '../core/paths';
 import { installProtocol, protocolState } from '../core/protocol';
 import { ensureSnapRepo, takeSnapshot } from '../core/snap';
+import { withLock } from './lock';
 import { markBase, refreshBrief } from './track';
 
 /**
@@ -111,13 +112,19 @@ export function liveProjects(): string[] {
 
 // ---- 换任务 ----
 
-/** 写下新任务（旧的存档），记一笔，从这张快照开始算这件事。 */
-/** 写下新任务（旧的存档）。mode = dispatch：在派活页写的，全自动用派活。 */
+/**
+ * 写下新任务（旧的存档），记一笔，从这张快照开始算这件事。mode = dispatch：在派活页写的，全自动用派活。
+ * 拿着调度锁：全自动跑到一半不能把任务换掉。
+ */
 export function newTask(root: string, text: string, items: string[] = [], mode?: 'dispatch'): void {
   const t = text.trim();
   if (!t) throw new RelayError('任务是空的', 'no-task');
   const v = loadLedger(root);
   if (!v.init) throw new RelayError('这个文件夹还没接入接力台。', 'not-init');
+  withLock(root, () => switchTask(root, t, items, mode));
+}
+
+function switchTask(root: string, t: string, items: string[], mode?: 'dispatch'): void {
   const before = readTask(root);
   const doc = setTask(root, t, items);
   const snap = takeSnapshot(root, '换任务').sha;

@@ -123,6 +123,8 @@ export interface Stint {
   /** 这一棒开始前 / 结束时的任务清单（.relay/runs/tasks/ 里的副本编号）：退回时按它恢复打勾。 */
   taskBefore?: string;
   taskAfter?: string;
+  /** 终审：结束时任务的版本（notes.ts 的 taskVersion）。任务后来改过，这次终审就不算现在的任务。 */
+  taskVer?: string;
   /** 自己在工具里干的棒被接力台换人时：你确认过它已经停下（没确认就只是账面上结束）。 */
   stopConfirmed?: boolean;
   /** 这一棒在任务清单里新打的勾（没改文件、只打勾的弱模型也要复核：要确认这几步真做完了）。 */

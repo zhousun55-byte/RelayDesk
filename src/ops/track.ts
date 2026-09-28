@@ -9,6 +9,7 @@ import { errorMessage, RelayError } from '../core/errors';
 import { runGate } from '../core/gate';
 import { appendLedger, countedReviews, loadLedger, nextStintId, reviewStateOf, saveStint, taskBaseline, type Facts, type LedgerView, type ReviewMark, type RollbackEvent, type Stint, type Who } from '../core/ledger';
 import { pidAlive } from '../core/proc';
+import { runsDir } from './lock';
 import { allMembers, type MemberInfo } from '../core/members';
 import {
   BRIEF_REL,
@@ -26,6 +27,7 @@ import {
   reviewFileFor,
   reviewFilled,
   saveTaskCopy,
+  taskVersion,
   type HandoffDoc,
   type ReviewDoc,
 } from '../core/notes';
@@ -299,6 +301,7 @@ export function closeStint(root: string, s: Stint, input: CloseInput, cfg?: Rela
   }
   const task = saveTaskCopy(root);
   if (task) out.taskAfter = task;
+  if (out.kind === 'final') out.taskVer = taskVersion(readTask(root));
   // 任务清单不进快照：只在清单里打勾、一个文件都没改的弱模型，看起来是「没改文件」，其实是在说「这几步做完了」——也要复核。
   const ticked = out.kind === 'work' && !input.noTicks ? newlyChecked(readTaskCopy(root, out.taskBefore), readTaskCopy(root, out.taskAfter)) : [];
   if (ticked.length) out.ticked = ticked;
@@ -584,7 +587,7 @@ export function relayBusy(v: LedgerView): Stint | null {
 
 type RollbackStart = Omit<RollbackEvent, 'type' | 'after'>;
 
-const rollbackMarkPath = (root: string) => path.join(root, '.relay', 'runs', 'rollback.json');
+const rollbackMarkPath = (root: string) => path.join(runsDir(root), 'rollback.json');
 /** 本进程正在做的退回（它们的记号不能当成「做到一半停了」）。 */
 const rollbacksNow = new Set<string>();
 

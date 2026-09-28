@@ -1,6 +1,6 @@
 import { countedReviews, statusWord, verdictWord, type LedgerView, type Stint, type Verdict } from './ledger';
 import { whoName } from './names';
-import { taskProgress, type TaskDoc } from './notes';
+import { taskProgress, taskVersion, type TaskDoc } from './notes';
 import { plain } from './cause';
 
 /**
@@ -8,7 +8,7 @@ import { plain } from './cause';
  *
  * 清单打勾只说明「AI 说做完了」。能收工还要：
  * - 每一棒弱模型的活都有强模型复核过，而且结论是没问题 / 已修好 / 已退回（有问题、证据不足、没写清楚都不算）；
- * - 开着终审时，最后一棒干活之后有一次终审：交接成功、实际是强模型、结论通过、终审之后没人再改文件，而且之后没有算数的终审否决它；
+ * - 开着终审时，最后一棒干活之后有一次终审：交接成功、实际是强模型、结论通过、终审之后没人再改文件、任务也没改过，而且之后没有算数的终审否决它；
  * - 配了检查命令时，最后一次改动之后按现在配的命令跑过检查，而且通过了；
  * - 证据都读得到（配置文件没坏、每一棒的改动都读得到）。读不到就是「没法判断」，不能当成通过；
  * - 文件夹和账本最后记下的样子一致（在接力台之外改过，要等对完账、算进一棒）。
@@ -107,9 +107,12 @@ export function acceptance(input: AcceptInput): Acceptance {
   const lastWork = [...live].reverse().find((s) => s.kind === 'work');
   const finals = closed.filter((s) => s.kind === 'final' && s.id > (lastWork?.id ?? 0));
   const changedAfter = (f: Stint) => live.some((x) => x.id > f.id && changed(x));
+  // 终审之后任务改过（加了步骤、改了要求、勾变了）：它审的不是现在的任务。旧账本没记版本的不比。
+  const tv = taskVersion(input.task);
+  const taskMoved = (f: Stint) => !!f.taskVer && f.taskVer !== tv;
   // 最近一次算数的终审（交接成功、实际强模型、留了结论）说了算：它没通过，更早的通过也不作数。
   const latest = [...finals].reverse().find((f) => f.status === 'handed' && f.who.tier === 'strong' && !!f.verdict);
-  const good = latest && FINAL_PASS.has(latest.verdict!) && !changedAfter(latest) ? latest : undefined;
+  const good = latest && FINAL_PASS.has(latest.verdict!) && !changedAfter(latest) && !taskMoved(latest) ? latest : undefined;
   let final: Acceptance['final'] = { required: input.finalRequired, ok: !input.finalRequired, text: input.finalRequired ? '还没终审' : '没开终审' };
   if (input.finalRequired) {
     if (good) final = { required: true, ok: true, stint: good.id, text: `${whoName(good.who)} 终审过了` };
@@ -125,7 +128,9 @@ export function acceptance(input: AcceptInput): Acceptance {
               ? `终审没留下结论（${whoName(f.who)}）`
               : !FINAL_PASS.has(f.verdict)
                 ? `终审结论「${verdictWord(f.verdict)}」（${whoName(f.who)}）`
-              : '终审之后文件又改过';
+                : changedAfter(f)
+                  ? '终审之后文件又改过'
+                  : '终审之后任务改过';
       final = { required: true, ok: false, ...(f ? { stint: f.id } : {}), text };
       items.push({ kind: 'final', text, ...(f ? { stint: f.id } : {}) });
     }
