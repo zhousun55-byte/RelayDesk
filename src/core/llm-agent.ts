@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { agentEnv, checkEnv } from './env';
-import { redactSecrets } from './redact';
+import { REDACTED, redactSecrets } from './redact';
 import { errorMessage } from './errors';
 import { git } from './git';
 import type { Level } from './harness';
@@ -223,8 +223,6 @@ function readFile(root: string, args: Record<string, unknown>): string {
   return body + more;
 }
 
-/** 读给模型的内容里，密钥换成了这个。 */
-const REDACTED = '[REDACTED]';
 const KEEP_SECRET = `内容里有 ${REDACTED}：那是读给你看时抹掉的密钥，原文不能这样写回去。用 edit_file 只改别的行，带密钥的行不要动。`;
 
 function writeFile(root: string, args: Record<string, unknown>, protectedPaths: string[]): string {

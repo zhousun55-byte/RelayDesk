@@ -369,15 +369,19 @@ test('退回后核对：删不掉的文件报出来、记进账本，不当作�
   }
 });
 
-test('退回做到一半进程没了：下次对账补记进账本，之后的棒算作废，撤销照样能回去', () => {
-  const s = twoStints('rollback-crash');
+/** 模拟退回做到一半进程没了：「退回前」那张存好、a.txt 已经改回去，还没记账本。 */
+function crashedRollback(name: string): { s: Sandbox; head: string; mark: string } {
+  const s = twoStints(name);
   const head = s.git(['--git-dir', path.join(s.repo, '.relay', 'snapshots'), 'rev-parse', 'HEAD']).trim();
-  const first = s.stints()[0];
-  // 模拟：「退回前」那张已经存好、a.txt 已经改回去，还没记账本，进程就没了
   const mark = path.join(s.repo, '.relay', 'runs', 'rollback.json');
   fs.mkdirSync(path.dirname(mark), { recursive: true });
-  fs.writeFileSync(mark, JSON.stringify({ pid: 2147483646, token: 't', ev: { ts: new Date().toISOString(), to: first.to, label: '第 2 棒之前', safety: head, dropped: [2], task: { unchecked: [], checked: [] } } }));
+  fs.writeFileSync(mark, JSON.stringify({ pid: 2147483646, token: 't', ev: { ts: new Date().toISOString(), to: s.stints()[0].to, label: '第 2 棒之前', safety: head, dropped: [2], task: { unchecked: [], checked: [] } } }));
   s.write('a.txt', '1\n');
+  return { s, head, mark };
+}
+
+test('退回做到一半进程没了：下次对账补记进账本，之后的棒算作废，撤销照样能回去', () => {
+  const { s, head, mark } = crashedRollback('rollback-crash');
   s.relay(['snap']);
   assert.ok(!fs.existsSync(mark), '补记完记号删掉');
   const rb = s.journal().filter((e) => e.type === 'rollback').pop()!;
@@ -388,6 +392,14 @@ test('退回做到一半进程没了：下次对账补记进账本，之后的�
   s.relay(['rollback', '--undo']);
   assert.equal(s.read('a.txt'), '2\n');
   assert.equal(s.read('b/c.txt'), '新的\n');
+});
+
+test('退回做到一半停了、没对过账就点撤销：撤销的是中途停了的那次，文件回到退回前', () => {
+  const { s } = crashedRollback('rollback-crash-undo');
+  s.relay(['rollback', '--undo']);
+  assert.equal(s.read('a.txt'), '2\n');
+  assert.equal(s.read('b/c.txt'), '新的\n');
+  assert.deepEqual(s.stints().map((x) => !!x.rolledBack), [false, false]);
 });
 
 for (const git of [true, false]) {

@@ -579,13 +579,10 @@ export function relayBusy(v: LedgerView): Stint | null {
   return o && o.via === 'relay' && o.pid && pidAlive(o.pid) ? o : null;
 }
 
-/**
- * 对一次账。接力台自己在调度的时候什么都不做（那一棒由调度负责记）；
- * 调度中途接力台被关掉了，就把那一棒记成「叫停了」。
- */
 // ---- 退回做到一半：文件已经在动了、账本还没记上 ----
 
-type RollbackStart = Omit<RollbackEvent, 'type' | 'after'>;
+/** 退回动文件前记下的：账本里那一笔除了「退回后」那张快照以外的部分。 */
+export type RollbackStart = Omit<RollbackEvent, 'type' | 'after'>;
 
 const rollbackMarkPath = (root: string) => path.join(runsDir(root), 'rollback.json');
 /** 本进程正在做的退回（它们的记号不能当成「做到一半停了」）。 */
@@ -624,6 +621,10 @@ export function recoverRollback(root: string): boolean {
   return true;
 }
 
+/**
+ * 对一次账。先补记上次做到一半的退回；接力台自己在调度的时候什么都不做（那一棒由调度负责记）；
+ * 调度中途接力台被关掉了，就把那一棒记成「叫停了」。
+ */
 export function track(root: string, opts: TrackOptions = {}): TrackResult {
   const res: TrackResult = { changed: false, closed: [], opened: [], reviewed: [] };
   let v = loadLedger(root);
