@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildBrief } from '../core/brief';
@@ -6,7 +7,7 @@ import { claudeWorkIn, claudeWriterOf } from '../core/claude-log';
 import { defaultRelayConfig, loadRelayConfig } from '../core/config';
 import { errorMessage, RelayError } from '../core/errors';
 import { runGate } from '../core/gate';
-import { appendLedger, countedReviews, loadLedger, nextStintId, reviewStateOf, saveStint, taskBaseline, type Facts, type LedgerView, type ReviewMark, type Stint, type Who } from '../core/ledger';
+import { appendLedger, countedReviews, loadLedger, nextStintId, reviewStateOf, saveStint, taskBaseline, type Facts, type LedgerView, type ReviewMark, type RollbackEvent, type Stint, type Who } from '../core/ledger';
 import { pidAlive } from '../core/proc';
 import { allMembers, type MemberInfo } from '../core/members';
 import {
@@ -579,10 +580,55 @@ export function relayBusy(v: LedgerView): Stint | null {
  * 对一次账。接力台自己在调度的时候什么都不做（那一棒由调度负责记）；
  * 调度中途接力台被关掉了，就把那一棒记成「叫停了」。
  */
+// ---- 退回做到一半：文件已经在动了、账本还没记上 ----
+
+type RollbackStart = Omit<RollbackEvent, 'type' | 'after'>;
+
+const rollbackMarkPath = (root: string) => path.join(root, '.relay', 'runs', 'rollback.json');
+/** 本进程正在做的退回（它们的记号不能当成「做到一半停了」）。 */
+const rollbacksNow = new Set<string>();
+
+/** 退回开始动文件前记一笔；返回的函数在账本记好后调用，记号删掉。 */
+export function markRollback(root: string, ev: RollbackStart): { done: () => void; drop: () => void } {
+  const token = crypto.randomBytes(6).toString('hex');
+  const p = rollbackMarkPath(root);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify({ pid: process.pid, token, ev }));
+  rollbacksNow.add(token);
+  const drop = () => rollbacksNow.delete(token);
+  return { drop, done: () => (drop(), fs.rmSync(p, { force: true })) };
+}
+
+/**
+ * 上次退回做到一半就停了（进程没了、或者恢复时出错）：按文件夹现在的样子存一张，补记进账本。
+ * 之后的棒照样算作废，「撤销」照样能回到退回前；清单的勾没跟着改，留给人看。
+ */
+export function recoverRollback(root: string): boolean {
+  const p = rollbackMarkPath(root);
+  let m: { pid?: number; token?: string; ev?: RollbackStart };
+  try {
+    m = JSON.parse(fs.readFileSync(p, 'utf8')) as typeof m;
+  } catch {
+    return false;
+  }
+  if (m.pid === process.pid ? rollbacksNow.has(m.token ?? '') : pidAlive(m.pid)) return false;
+  const ev = m.ev;
+  if (ev?.safety && !loadLedger(root).events.some((e) => e.type === 'rollback' && e.safety === ev.safety)) {
+    const after = takeSnapshot(root, `退回到${ev.label}（中途停了）`).sha;
+    appendLedger(root, { ...ev, type: 'rollback', after, interrupted: true, task: { ...(ev.task?.before ? { before: ev.task.before } : {}), unchecked: [], checked: [] } });
+  }
+  fs.rmSync(p, { force: true });
+  return true;
+}
+
 export function track(root: string, opts: TrackOptions = {}): TrackResult {
   const res: TrackResult = { changed: false, closed: [], opened: [], reviewed: [] };
   let v = loadLedger(root);
   if (!v.init) return res;
+  if (recoverRollback(root)) {
+    v = loadLedger(root);
+    res.changed = true;
+  }
   if (relayBusy(v)) return res;
   const now = opts.now ?? new Date();
   const snap = opts.snapshot === false ? headSnap(root) : takeSnapshot(root, '接力台看到了改动').sha;

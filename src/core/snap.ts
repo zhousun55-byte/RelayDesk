@@ -272,14 +272,21 @@ export interface RestoreResult {
   /** 退回后的那一张。 */
   after: string;
   files: number;
+  /** 恢复完和目标快照对不上的文件（删不掉、写不回去）；都对上是空的。 */
+  left: string[];
 }
 
-/** 把整个文件夹恢复成某张快照的样子：改过的改回去、删掉的找回来、后来新加的删掉。 */
-export function restoreSnapshot(root: string, sha: string, message = '退回'): RestoreResult {
+/**
+ * 把整个文件夹恢复成某张快照的样子：改过的改回去、删掉的找回来、后来新加的删掉。
+ * onSafety：「退回前」那张存好、还没动文件时叫一次（调用方在这里记下「退回做到一半」）。
+ * 做完拿「退回后」那张和目标比一遍，对不上的文件放进 left，不当作退回成功了事。
+ */
+export function restoreSnapshot(root: string, sha: string, message = '退回', onSafety?: (safety: string) => void): RestoreResult {
   if (!snapExists(root, sha)) throw new RelayError(`找不到这张快照：${sha.slice(0, 9)}`, 'no-snap');
   const safety = takeSnapshot(root, `${message}之前`).sha;
+  onSafety?.(safety);
   const changed = snapChanges(root, sha, safety);
-  // 后来新加的文件（快照里没有）删掉。
+  // 后来新加的文件（快照里没有）删掉；删不掉的留着，最后核对时会报出来。
   const added = sgOk(root, ['diff', ...DIFF_SAFE, '-z', '--name-only', '--no-renames', '--diff-filter=A', sha, safety], '读改动', { raw: true });
   for (const f of added.split('\0').filter(Boolean)) {
     const abs = path.join(root, f);
@@ -288,12 +295,13 @@ export function restoreSnapshot(root: string, sha: string, message = '退回'): 
       fs.rmSync(abs, { force: true });
       removeEmptyDirs(root, f);
     } catch {
-      /* 删不掉的留着，下一张快照会记下来 */
+      /* 见上 */
     }
   }
   if (snapFiles(root, sha).length) sgOk(root, ['checkout', '-f', sha, '--', '.'], '恢复文件');
   const after = takeSnapshot(root, message).sha;
-  return { safety, after, files: changed.length };
+  const left = after === sha ? [] : snapChanges(root, sha, after).map((f) => f.path);
+  return { safety, after, files: changed.length, left };
 }
 
 /** 改动的一句话统计：「3 个文件，+20 −4」。 */

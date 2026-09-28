@@ -160,6 +160,10 @@ export interface RollbackEvent {
   dropped: number[];
   /** 撤销退回：这几棒的改动又回来了。 */
   restored?: number[];
+  /** 恢复完和目标快照对不上的文件（删不掉、写不回去）。 */
+  left?: string[];
+  /** 退回做到一半进程没了：下次打开时按当时的样子补记的（文件可能只退回了一部分，可以撤销）。 */
+  interrupted?: boolean;
   /**
    * 任务清单跟着退回：按「第 N 棒开始前」的清单改回打勾（unchecked 取消的勾、checked 重新勾上的）；
    * before = 退回前清单的副本（撤销退回时恢复）；after = 退回后清单的副本（下一棒打了哪些勾，和它比）；

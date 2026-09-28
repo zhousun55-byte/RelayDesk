@@ -77,7 +77,7 @@ export interface ProjectView {
   go: (GoState & { logTail: string }) | null;
   pending: StintView[];
   stints: StintView[];
-  lastRollback: { ts: string; label: string; dropped: number[]; undone: boolean; task?: { unchecked: string[]; missing?: boolean } } | null;
+  lastRollback: { ts: string; label: string; dropped: number[]; undone: boolean; left?: string[]; interrupted?: boolean; task?: { unchecked: string[]; missing?: boolean } } | null;
   /** error = 配置文件坏了（这时检查和不许改的文件都没法核对）。 */
   config: { gate: string; protectedPaths: string[]; error?: string };
   /** 验收：能不能算做完了（网页顶部、命令行都看它）。 */
@@ -253,7 +253,7 @@ export function projectView(root: string): ProjectView {
     go: go ? { ...go, logTail: goLogTail(root, go) } : null,
     pending: views.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack),
     stints: [...views].reverse(),
-    lastRollback: lr && !lr.restored ? { ts: lr.ts, label: lr.label, dropped: lr.dropped, undone, ...(lr.task ? { task: { unchecked: lr.task.unchecked, ...(lr.task.missing ? { missing: true } : {}) } } : {}) } : null,
+    lastRollback: lr && !lr.restored ? { ts: lr.ts, label: lr.label, dropped: lr.dropped, undone, ...(lr.left?.length ? { left: lr.left } : {}), ...(lr.interrupted ? { interrupted: true } : {}), ...(lr.task ? { task: { unchecked: lr.task.unchecked, ...(lr.task.missing ? { missing: true } : {}) } } : {}) } : null,
     config: { gate: cfg.gate.command, protectedPaths: cfg.protectedPaths, ...(configError ? { error: configError } : {}) },
     acceptance: acceptance({ ledger: v, task: t, gateCommand: cfg.gate.command.trim(), ...(configError ? { configError } : {}), finalRequired }),
     threads: threadsOf(root, v, t),

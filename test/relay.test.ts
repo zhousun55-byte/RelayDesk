@@ -294,6 +294,70 @@ test('退回：整个文件夹恢复成第 N 棒之前，之后的棒作废；�
   );
 });
 
+/** 两棒：第 1 棒写 a=1，第 2 棒改 a=2、加 b/c.txt。 */
+function twoStints(name: string): Sandbox {
+  const s = prepared(name);
+  s.relay(['init']);
+  s.write('a.txt', '1\n');
+  handoff(s, 'x1.md', 'Codex · gpt-6', '已交接', '写了 a');
+  s.relay(['snap']);
+  s.write('a.txt', '2\n');
+  s.write('b/c.txt', '新的\n');
+  handoff(s, 'x2.md', 'Claude Code · deepseek-v4-flash', '已交接', '改了 a，加了 c');
+  s.relay(['snap']);
+  return s;
+}
+
+test('退回拿着调度锁：别的进程在调度这个项目时不退回，文件不动', () => {
+  const s = twoStints('rollback-lock');
+  const lock = path.join(s.repo, '.relay', 'runs', 'lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'other', at: new Date().toISOString() }));
+  assert.match(s.relay(['rollback', '2'], true), /已经在调度这个项目/);
+  assert.equal(s.read('a.txt'), '2\n');
+  assert.ok(!s.stints().some((x) => x.rolledBack));
+  fs.rmSync(lock);
+  s.relay(['rollback', '2']);
+  assert.equal(s.read('a.txt'), '1\n');
+  assert.ok(!fs.existsSync(lock), '退回完锁放掉了');
+});
+
+test('退回后核对：删不掉的文件报出来、记进账本，不当作全退回了', { skip: process.getuid?.() === 0 }, () => {
+  const s = twoStints('rollback-left');
+  const dir = path.join(s.repo, 'b');
+  fs.chmodSync(dir, 0o555);
+  try {
+    const out = s.relay(['rollback', '2']);
+    assert.match(out, /1 个文件没能恢复.*b\/c\.txt/);
+    assert.equal(s.read('a.txt'), '1\n', '别的文件照样退回');
+    const rb = s.journal().filter((e) => e.type === 'rollback').pop()!;
+    assert.deepEqual(rb.left, ['b/c.txt']);
+  } finally {
+    fs.chmodSync(dir, 0o755);
+  }
+});
+
+test('退回做到一半进程没了：下次对账补记进账本，之后的棒算作废，撤销照样能回去', () => {
+  const s = twoStints('rollback-crash');
+  const head = s.git(['--git-dir', path.join(s.repo, '.relay', 'snapshots'), 'rev-parse', 'HEAD']).trim();
+  const first = s.stints()[0];
+  // 模拟：「退回前」那张已经存好、a.txt 已经改回去，还没记账本，进程就没了
+  const mark = path.join(s.repo, '.relay', 'runs', 'rollback.json');
+  fs.mkdirSync(path.dirname(mark), { recursive: true });
+  fs.writeFileSync(mark, JSON.stringify({ pid: 2147483646, token: 't', ev: { ts: new Date().toISOString(), to: first.to, label: '第 2 棒之前', safety: head, dropped: [2], task: { unchecked: [], checked: [] } } }));
+  s.write('a.txt', '1\n');
+  s.relay(['snap']);
+  assert.ok(!fs.existsSync(mark), '补记完记号删掉');
+  const rb = s.journal().filter((e) => e.type === 'rollback').pop()!;
+  assert.equal(rb.interrupted, true);
+  assert.equal(rb.safety, head);
+  assert.deepEqual(s.stints().map((x) => !!x.rolledBack), [false, true]);
+  assert.equal(s.stints().length, 2, '改回去的 a.txt 不算成新的一棒');
+  s.relay(['rollback', '--undo']);
+  assert.equal(s.read('a.txt'), '2\n');
+  assert.equal(s.read('b/c.txt'), '新的\n');
+});
+
 for (const git of [true, false]) {
   test(`只有接口的模型也能接一棒：内置小代理搜代码、写文件、写交接${git ? '' : '（项目不是 git 仓库）'}`, async () => {
     const s = prepared(git ? 'api' : 'api-plain', { MOCK_KEY: 'k-test' }, { git });

@@ -117,7 +117,7 @@ function lockFile(root: string): string {
  * 拿项目级的锁：.relay/runs/lock 只能新建（别人建好了就是别人在调度）。
  * 锁的主人进程没了、或者是本进程已经放掉的旧锁，才算过期、可以拿走。返回放锁的函数。
  */
-function acquireLock(root: string): () => void {
+export function acquireLock(root: string): () => void {
   fs.mkdirSync(runsDir(root), { recursive: true });
   const p = lockFile(root);
   const token = `${process.pid}-${crypto.randomBytes(6).toString('hex')}`;

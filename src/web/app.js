@@ -2848,7 +2848,8 @@ function typingLine(st) {
 }
 
 function rollbackLine(rb) {
-  return h('div', { class: 'sys' }, icon('undo'), `${clock(rb.ts)} 退回到${rb.label} · 第 ${rb.dropped.join('、')} 棒作废`, rb.undone ? '· 已撤销' : h('button', { class: 'link', onclick: (e) => undoRollback(e.currentTarget) }, '撤销'));
+  const note = rb.interrupted ? ' · 中途停了，文件可能只退回了一部分' : rb.left && rb.left.length ? ` · ${rb.left.length} 个文件没退回` : '';
+  return h('div', { class: 'sys', 'data-tip': rb.left && rb.left.length ? rb.left.slice(0, 8).join('\n') : null }, icon('undo'), `${clock(rb.ts)} 退回到${rb.label} · 第 ${rb.dropped.join('、')} 棒作废${note}`, rb.undone ? '· 已撤销' : h('button', { class: 'link', onclick: (e) => undoRollback(e.currentTarget) }, '撤销'));
 }
 
 /**
@@ -3209,7 +3210,8 @@ async function rollbackTo(btn, s) {
   const r = await act(btn, () => api('/api/rollback', { dir: root, stint: s.id }));
   if (r) {
     const tk = r.task && r.task.missing ? ' · 清单没跟着退回（旧账本）' : r.task && r.task.unchecked.length ? ` · 清单去掉 ${r.task.unchecked.length} 个勾` : '';
-    toast(`已退回 · ${r.files} 个文件${tk}`, { action: { label: '撤销', run: () => undoRollback(null) } });
+    const left = r.left && r.left.length ? ` · ${r.left.length} 个文件没退回` : '';
+    toast(`已退回 · ${r.files} 个文件${left}${tk}`, { action: { label: '撤销', run: () => undoRollback(null) } });
     loadTree();
   }
 }

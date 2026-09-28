@@ -255,14 +255,21 @@ export function rollbackCommand(): Command {
       if (opts.undo) {
         const r = undoRollback(root);
         ok(`${r.label}：恢复了 ${r.files} 个文件。`);
+        warnLeft(r.left);
         return;
       }
       if (!n) throw new RelayError('要退回到第几棒之前？例如 relay rollback 7', 'no-stint');
       const r = rollbackBefore(root, Number(n));
       ok(`已退回到${r.label}：${r.files} 个文件恢复了，第 ${r.dropped.join('、')} 棒作废。想撤销：relay rollback --undo`);
+      warnLeft(r.left);
       if (r.task.missing) warn('任务清单没跟着退回（旧账本里没存那时的清单）：对照代码看看哪些步骤其实没做完，把勾去掉。');
       else if (r.task.unchecked.length) info(`任务清单里这几步的勾去掉了：${r.task.unchecked.join('、')}`);
     });
+}
+
+/** 恢复完还和目标对不上的文件（删不掉、写不回去）。 */
+function warnLeft(left: string[]): void {
+  if (left.length) warn(`这 ${left.length} 个文件没能恢复成那时的样子，看看是不是被别的程序占着：${left.slice(0, 8).join('、')}${left.length > 8 ? ' 等' : ''}`);
 }
 
 export function briefCommand(): Command {
