@@ -398,6 +398,15 @@ export interface RunRequest {
   idleMs?: number;
 }
 
+/**
+ * 连着这么久工具说的都是连不上服务器（Codex 断网时每分钟报一次「Reconnecting... waiting for network」，永远等下去）就停掉。
+ * 网络抖一下不到这么久；RELAY_OFFLINE_MS 可以改（测试用）。
+ */
+function offlineMs(): number {
+  const v = Number(process.env.RELAY_OFFLINE_MS);
+  return Number.isFinite(v) && v > 0 ? v : 3 * 60_000;
+}
+
 /** 工具出错的样子像不像网络抖了一下（连接被断开、服务器临时忙）：像的话值得隔几秒原地再试一次。 */
 export function looksLikeNetworkBlip(text: string): boolean {
   return looksOffline(text) || /\b50[234]\b|\b429\b|rate.?limit|overloaded|temporarily unavailable|service unavailable|bad gateway/i.test(text);
@@ -468,8 +477,8 @@ export interface RunResult {
   code: number;
   finalText: string;
   timedOut: boolean;
-  /** 是因为太久没有动静才停的（timedOut 也是 true）。 */
-  idle?: boolean;
+  /** 接力台自己停掉它的原因（太久没动静、超时、一直连不上服务器；timedOut 也是 true）。 */
+  late?: string;
   stopped: boolean;
   /** 起不来的原因。 */
   error?: string;
@@ -548,14 +557,23 @@ export function startRun(req: RunRequest): RunHandle {
     killGroup(child.pid, 'SIGTERM');
     if (!killTimer) killTimer = setTimeout(() => killGroup(child.pid, 'SIGKILL'), 5000);
   };
-  let idle = false;
-  const quiet = req.idleMs
-    ? setTimeout(() => {
-        timedOut = idle = true;
-        write(cause.idle(req.idleMs!));
-        terminate();
-      }, req.idleMs)
-    : null;
+  let late: string | undefined;
+  const giveUp = (why: string) => {
+    if (timedOut) return;
+    timedOut = true;
+    late = why;
+    write(why);
+    terminate();
+  };
+  const quiet = req.idleMs ? setTimeout(() => giveUp(cause.idle(req.idleMs!)), req.idleMs) : null;
+  // 从什么时候起工具说的只剩连不上服务器；说了别的就重新算
+  const offMs = offlineMs();
+  let offlineSince = 0;
+  const saw = (line: string) => {
+    if (!looksOffline(line)) offlineSince = 0;
+    else if (!offlineSince) offlineSince = Date.now();
+  };
+  const offline = setInterval(() => offlineSince && Date.now() - offlineSince >= offMs && giveUp(cause.offline(offMs)), Math.min(5000, offMs / 4));
 
   if (inv.stdin !== undefined && child.stdin) {
     child.stdin.on('error', () => {
@@ -575,7 +593,10 @@ export function startRun(req: RunRequest): RunHandle {
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i);
       buf = buf.slice(i + 1);
-      for (const l of parser.line(line)) write(l);
+      for (const l of parser.line(line)) {
+        saw(l);
+        write(l);
+      }
     }
     if (buf.length > 4_000_000) buf = buf.slice(-1_000_000);
   });
@@ -588,6 +609,7 @@ export function startRun(req: RunRequest): RunHandle {
     while ((i = ebuf.indexOf('\n')) >= 0) {
       const line = ebuf.slice(0, i).replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').trim();
       ebuf = ebuf.slice(i + 1);
+      if (line && !NOISE.test(line)) saw(line);
       if (line && stderrLines < 60 && !NOISE.test(line)) {
         stderrLines++;
         write(`（工具自己的输出）${clip(line, 200)}`);
@@ -595,11 +617,7 @@ export function startRun(req: RunRequest): RunHandle {
     }
   });
 
-  const timer = setTimeout(() => {
-    timedOut = true;
-    write(cause.overtime(req.timeoutMs));
-    terminate();
-  }, req.timeoutMs);
+  const timer = setTimeout(() => giveUp(cause.overtime(req.timeoutMs)), req.timeoutMs);
 
   const done = new Promise<RunResult>((resolve) => {
     let settled = false;
@@ -607,6 +625,7 @@ export function startRun(req: RunRequest): RunHandle {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearInterval(offline);
       if (quiet) clearTimeout(quiet);
       if (killTimer) clearTimeout(killTimer);
       if (buf.trim()) for (const l of parser.line(buf)) write(l);
@@ -623,7 +642,7 @@ export function startRun(req: RunRequest): RunHandle {
       const durationMs = Date.now() - started;
       write(`退出（${error ? error : `代码 ${code}`}，用时 ${Math.round(durationMs / 1000)} 秒）`);
       const limits = parser.limits?.() ?? [];
-      resolve({ code, finalText: finalText.trim(), timedOut, ...(idle ? { idle } : {}), stopped, ...(error ? { error } : {}), stderrTail: stderrTail.trim(), model: parser.model(), ...(limits.length ? { limits } : {}), durationMs });
+      resolve({ code, finalText: finalText.trim(), timedOut, ...(late ? { late } : {}), stopped, ...(error ? { error } : {}), stderrTail: stderrTail.trim(), model: parser.model(), ...(limits.length ? { limits } : {}), durationMs });
     };
     child.on('error', (e) => finish(-1, `起不来：${e.message}`));
     child.on('close', (code, signal) => finish(code ?? (signal ? 128 : -1)));

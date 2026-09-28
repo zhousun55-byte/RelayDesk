@@ -27,6 +27,7 @@ export function looksOffline(text: string): boolean {
 export const cause = {
   idle: (ms: number) => `${span(ms)}没有输出，已停止`,
   overtime: (ms: number) => `超过 ${span(ms)}，已停止`,
+  offline: (ms: number) => `连不上服务器：${span(ms)}都在重连，已停止`,
   quota: (until?: string | null) => {
     const t = until ? untilText(until) : '';
     return t ? `额度用完，${t}` : '额度用完';

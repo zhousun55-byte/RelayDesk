@@ -256,6 +256,22 @@ test('额度用完：记下什么时候恢复，自动换下一位接着做；�
   assert.equal(s.stints().at(-1)!.who.member, 'codex');
 });
 
+test('断网：工具一直在报重连（Codex 断网时永远等下去），连着一阵只剩连不上服务器就停掉、记成出错，换下一位接着做', () => {
+  const s = prepared('offline', { FAKE_CODEX_MODE: 'offline', RELAY_OFFLINE_MS: '1500' });
+  s.relay(['init']);
+  s.relay(['task', '做一件事', '--step', '只有一件']);
+  const t0 = Date.now();
+  const out = s.relay(['auto', '--no-wait']);
+  assert.ok(Date.now() - t0 < 30_000, `${Date.now() - t0} 毫秒：没有一直等下去`);
+  const st = s.stints();
+  assert.deepEqual([st[0].who.member, st[0].status], ['codex', 'failed']);
+  assert.match(st[0].note, /连不上服务器：\d+ 秒都在重连，已停止/);
+  assert.deepEqual([st[1].who.member, st[1].status], ['claude', 'handed'], '换下一位接着做');
+  assert.match(out, /全自动停止/);
+  const q = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'quota.json'), 'utf8'));
+  assert.equal(q.errors.codex.n, 1, '记下它出过错：下一轮先派别人');
+});
+
 test('都没额度了又不等：停下交给你，说清楚原因', () => {
   const s = prepared('noquota', { FAKE_CLAUDE_MODE: 'quota', FAKE_CODEX_MODE: 'quota' });
   s.relay(['init']);

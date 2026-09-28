@@ -463,7 +463,7 @@ test('群聊：一直出声的不按时间掐；一点动静都没有的到点�
   assert.equal(busy.timedOut, false, '说了 1.5 秒，比「没动静」的上限长，但一直在出声');
   assert.match(busy.finalText, /第6句$/);
   const stuck = await run(`console.log('开个头');setTimeout(()=>console.log('太晚了'),8000)`);
-  assert.ok(stuck.timedOut && stuck.idle, JSON.stringify(stuck));
+  assert.ok(stuck.timedOut && stuck.late === '1 秒没有输出，已停止', JSON.stringify(stuck));
   assert.ok(stuck.durationMs < 4000, `${stuck.durationMs} 毫秒`);
   assert.match(fs.readFileSync(path.join(dir, 'run.log'), 'utf8'), /1 秒没有输出，已停止/);
 

@@ -527,7 +527,7 @@ class GoRunner {
         quotaText = `${r.error ?? ''}\n${r.stderrTail}\n${own}\n${r.finalText.slice(-2000)}`;
         if (failed) {
           const hint = explainFailure(m.harness, `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}`);
-          error = r.error ?? (r.timedOut ? cause.overtime(timeoutMs) : hint ?? cause.exit(r.code, clip(lastError(r.stderrTail, own), 200)));
+          error = r.error ?? (r.timedOut ? (r.late ?? cause.overtime(timeoutMs)) : hint ?? cause.exit(r.code, clip(lastError(r.stderrTail, own), 200)));
         }
       } else if (m.kind === 'api' && m.agent.api) {
         log(`（接力台内置小代理：${m.agent.api.baseUrl} · ${m.agent.api.model}）`);

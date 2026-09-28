@@ -324,7 +324,6 @@ function replyOf(raw: string): string {
 
 /** 让一个 AI 回答。接口型用内置小代理，只给读文件的工具；编程工具、自定义命令见下面。 */
 export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, timeoutMs = TALK_MAX_MS, idleMs = TALK_IDLE_MS): Promise<string> {
-  const late = (idle: boolean | undefined) => (idle ? cause.idle(idleMs) : cause.overtime(timeoutMs));
   if (agentKind(agent) === 'api') {
     if (!agent.api) throw new RelayError('没有配置接口', 'no-api');
     // 和编程工具一样能看项目里的文件：不给工具的话，它会把「调用工具」的原文当成回答说出来。
@@ -342,7 +341,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
       maxSteps: 30,
     });
     const text = replyOf(r.finalText);
-    if (!text) throw new RelayError(r.error ? (quotaWhy(r.error) ?? plain(r.error)) : r.timedOut ? late(false) : cause.silent(), 'ask-empty');
+    if (!text) throw new RelayError(r.error ? (quotaWhy(r.error) ?? plain(r.error)) : r.timedOut ? cause.overtime(timeoutMs) : cause.silent(), 'ask-empty');
     return text;
   }
   // 编程工具用它的只读模式回答；自定义命令把提示从标准输入喂进去，回答是它的标准输出（或 {{out}} 文件）。
@@ -379,7 +378,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
   const log = logTail(logPath, 6000);
   fs.rmSync(logPath, { force: true });
   const text = replyOf(r.finalText);
-  if (!text) throw new RelayError(r.error ? plain(r.error) : r.timedOut ? late(r.idle) : silentWhy(harness, log, r), 'ask-empty');
+  if (!text) throw new RelayError(r.error ? plain(r.error) : r.timedOut ? (r.late ?? cause.overtime(timeoutMs)) : silentWhy(harness, log, r), 'ask-empty');
   return text;
 }
 

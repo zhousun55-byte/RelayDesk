@@ -13,7 +13,7 @@ import type { Sandbox } from './helpers';
  * - 拆解（派活）：把任务清单换成 4 步；
  * - 只读（群聊 / 投票）：按提示词回答（投票时不投自己）。
  * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail / slow（先把进程号写进 FAKE_DIR/<名字>.pid，
- * 睡 30 秒再干活），FAKE_<名字>_WHO = 交接里写的身份；FAKE_REVIEW_SAY = 复核完说的那句话。
+ * 睡 30 秒再干活）/ offline（像断网时的 Codex：一直报「Reconnecting... waiting for network」，永远不结束），FAKE_<名字>_WHO = 交接里写的身份；FAKE_REVIEW_SAY = 复核完说的那句话。
  * claude 带 --setting-sources（跳过用户设置）时扮演「官方账号」：FAKE_CLAUDE_OFFICIAL=pro 算登录了，
  * 身份和行为看 FAKE_CLAUDE_OFFICIAL_WHO / FAKE_CLAUDE_OFFICIAL_MODE；这时环境里还带着 ANTHROPIC_* 就报错（说明接力台没去掉）。
  * 额度窗口：官方账号的 claude 发 rate_limit_event，codex 干活时在 CODEX_HOME（没设就是 ~/.codex）的 sessions 里写带 rate_limits 的 rollout；
@@ -141,6 +141,7 @@ function fakeScript(name: 'claude' | 'codex'): string {
     `    printf '{"type":"result","subtype":"success","is_error":true,"result":"%s"}\\n' "$T"`,
     '    exit 1 ;;',
     '  slow) echo $$ > "$FAKE_DIR/$NAME.pid"; sleep 30 ;;',
+    '  offline) while :; do echo "Reconnecting... waiting for network (Connection failed: error sending request)" >&2; sleep 0.3; done ;;',
     '  blip-once)',
     '    if [ ! -f "$FAKE_DIR/$NAME-blipped" ]; then',
     '      touch "$FAKE_DIR/$NAME-blipped"',
