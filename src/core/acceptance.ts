@@ -10,7 +10,8 @@ import { plain } from './cause';
  * - 每一棒弱模型的活都有强模型复核过，而且结论是没问题 / 已修好 / 已退回（有问题、证据不足、没写清楚都不算）；
  * - 开着终审时，最后一棒干活之后有一次终审：交接成功、实际是强模型、结论通过、终审之后没人再改文件，而且之后没有算数的终审否决它；
  * - 配了检查命令时，最后一次改动之后按现在配的命令跑过检查，而且通过了；
- * - 证据都读得到（配置文件没坏、每一棒的改动都读得到）。读不到就是「没法判断」，不能当成通过。
+ * - 证据都读得到（配置文件没坏、每一棒的改动都读得到）。读不到就是「没法判断」，不能当成通过；
+ * - 文件夹和账本最后记下的样子一致（在接力台之外改过，要等对完账、算进一棒）。
  */
 
 export type AcceptState = 'accepted' | 'working' | 'blocked' | 'unknown';
@@ -46,6 +47,8 @@ export interface AcceptInput {
   configError?: string;
   /** 全自动设置里开着终审。 */
   finalRequired: boolean;
+  /** 文件夹里有账本还没记上的改动（在接力台之外改的，对一次账才知道是谁改的）：之前的检查、终审都不算现在的代码。 */
+  unrecorded?: boolean;
 }
 
 function changed(s: Stint): boolean {
@@ -94,6 +97,7 @@ export function acceptance(input: AcceptInput): Acceptance {
   else if (!p.total) items.push({ kind: 'task', text: '任务还没拆成步骤' });
   else if (p.done < p.total) items.push({ kind: 'task', text: `清单 ${p.done}/${p.total}` });
   if (v.open) items.push({ kind: 'open', text: `第 ${v.open.id} 棒还在进行中`, stint: v.open.id });
+  else if (input.unrecorded) items.push({ kind: 'open', text: '文件夹里有还没记上账的改动' });
 
   // 复核
   const pending = closed.filter((s) => s.review === 'needed');

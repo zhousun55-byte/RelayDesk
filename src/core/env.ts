@@ -2,6 +2,7 @@ import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_p
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { looksSecret } from './redact';
 
 /**
  * 环境变量的三个来源：
@@ -131,6 +132,21 @@ export function agentEnv(extra: Record<string, string> = {}, drop?: RegExp): Nod
   delete env.RELAY_AT_LOGIN;
   env.PATH = mergedPath();
   return { ...env, NO_COLOR: '1', FORCE_COLOR: '0', ...extra };
+}
+
+/** 名字像密钥的环境变量：…KEY、…TOKEN、…SECRET、…PASSWORD、各家模型和云的凭据。 */
+const SECRET_NAME = /(^|_)(API_?KEY|KEY|KEYS|TOKEN|TOKENS|SECRET|SECRETS|PASSWORD|PASSWD|PASS|CREDENTIALS?|AUTH|COOKIE|SESSION|PRIVATE)(_|$)|^(ANTHROPIC|OPENAI|ZHIPU|DEEPSEEK|MOONSHOT|KIMI|DASHSCOPE|QWEN|GEMINI|GOOGLE|AWS|AZURE|GH|GITHUB|GITLAB|NPM|HF|HUGGINGFACE|OPENROUTER|XAI|GROQ|MISTRAL|CLAUDE|CODEX)_/i;
+
+/**
+ * 给项目检查命令用的环境：和 AI 工具一样的底子，再去掉名字或值像密钥的变量。
+ * 检查命令是项目里写的，谁都能改；它不该拿到各家模型的密钥。不是隔离：文件和网络照样能碰。
+ */
+export function checkEnv(): NodeJS.ProcessEnv {
+  const env = agentEnv();
+  for (const [k, v] of Object.entries(env)) {
+    if (SECRET_NAME.test(k) || (v && looksSecret(v))) delete env[k];
+  }
+  return env;
 }
 
 /** 在合并后的 PATH 里找可执行文件（只认真的文件，不认 shell 别名 / 函数）。 */

@@ -1,6 +1,6 @@
 /**
  * 送去外部模型之前抹掉密钥。快照和给复核准备的改动留在本机，不抹；
- * 只有出网的材料（群聊、投票）才换成 [REDACTED]。
+ * 出网的材料（群聊、投票、内置小代理读到的文件和命令输出）换成 [REDACTED]。
  */
 const PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
@@ -17,4 +17,9 @@ export function redactSecrets(text: string): string {
   let out = text;
   for (const re of PATTERNS) out = out.replace(re, '[REDACTED]');
   return out;
+}
+
+/** 一个值本身像不像密钥（私钥、sk-…、ghp_… 这类有固定样子的）。 */
+export function looksSecret(value: string): boolean {
+  return PATTERNS.slice(0, 6).some((re) => new RegExp(re.source, re.flags.replace('g', '')).test(value));
 }

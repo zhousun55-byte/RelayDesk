@@ -612,3 +612,57 @@ test('DeepSeek Harness 的 token 用量从它自己记的会话里读：这个�
     else process.env.DSH_HOME = keep;
   }
 });
+
+test('内置小代理读到的文件发给模型前抹掉密钥；抹掉的内容不许原样写回文件', async () => {
+  const dir = tmpDir('api-redact');
+  const key = 'sk-' + 'abcdefghijklmnopqrstuvwx';
+  fs.writeFileSync(path.join(dir, 'README.md'), `demo\nOPENAI_API_KEY=${key}\n`);
+  const mock = await mockLlm();
+  try {
+    const reply = await talk.askAgent({ name: 'mimo', kind: 'api', tier: 'weak', api: { baseUrl: mock.url, model: 'mock-coder', apiKeyEnv: '' } }, '大家看看 README', dir);
+    assert.ok(!mock.toolResults.join('\n').includes(key), '密钥没出网');
+    assert.ok(!reply.includes(key));
+    assert.match(mock.toolResults[1], /\[REDACTED\]/);
+  } finally {
+    mock.close();
+  }
+});
+
+test('检查命令拿不到密钥：名字像密钥、值像密钥的环境变量都去掉，别的照常', async () => {
+  const { runGate } = require('../src/core/gate') as typeof import('../src/core/gate');
+  const keep = { ...process.env };
+  Object.assign(process.env, { ZHIPU_CODING_KEY: 'x1', MY_SERVICE_TOKEN: 'x2', PLAIN_THING: 'sk-' + 'abcdefghijklmnopqrstuvwx', RELAY_TEST_NORMAL: 'hello' });
+  try {
+    const r = await runGate(tmpDir('gate-env'), { gate: { command: 'echo "n=$RELAY_TEST_NORMAL k=$ZHIPU_CODING_KEY t=$MY_SERVICE_TOKEN p=$PLAIN_THING"' }, protectedPaths: [] } as never);
+    assert.equal(r.status, 'pass');
+    assert.equal(r.detail, 'n=hello k= t= p=');
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in keep)) delete process.env[k];
+    Object.assign(process.env, keep);
+  }
+});
+
+test('验收对指纹：文件夹和账本最后记下的不一样（在接力台之外改了），不算通过；生成出来的缓存不算改动', () => {
+  const snap = require('../src/core/snap') as typeof import('../src/core/snap');
+  const dir = tmpDir('print');
+  fs.writeFileSync(path.join(dir, 'a.txt'), '1\n');
+  const sha = snap.takeSnapshot(dir, '测试').sha;
+  assert.equal(snap.changedSince(dir, sha), false);
+  fs.mkdirSync(path.join(dir, '.pytest_cache'));
+  fs.writeFileSync(path.join(dir, '.pytest_cache', 'x'), 'cache');
+  assert.equal(snap.changedSince(dir, sha), false, '缓存不算');
+  fs.writeFileSync(path.join(dir, 'a.txt'), '2\n');
+  assert.equal(snap.changedSince(dir, sha), true);
+  fs.writeFileSync(path.join(dir, 'a.txt'), '1\n');
+  fs.writeFileSync(path.join(dir, 'new.txt'), 'n\n');
+  assert.equal(snap.changedSince(dir, sha), true, '新文件也算');
+  const later = snap.takeSnapshot(dir, '又一张').sha;
+  assert.equal(snap.changedSince(dir, sha), true, '快照往前走了、账本还停在旧的：也算');
+  assert.equal(snap.changedSince(dir, later), false);
+
+  const input = { ledger: ledger.viewLedger([]), task: notes.parseTask('# 任务\n\n做\n\n## 进度\n\n- [x] 一步\n'), gateCommand: '', finalRequired: false };
+  assert.equal(acceptance(input).state, 'accepted');
+  const acc = acceptance({ ...input, unrecorded: true });
+  assert.equal(acc.state, 'working');
+  assert.deepEqual(acc.items.map((i) => i.text), ['文件夹里有还没记上账的改动']);
+});

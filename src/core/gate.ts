@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { checkEnv } from './env';
 import type { RelayConfig } from './types';
 
 export interface GateResult {
@@ -13,12 +14,13 @@ export const GATE_NONE = '(未配置)';
 /**
  * 跑项目的检查命令（门禁）。异步执行，不会卡住接力台。
  * 没配置 = 通过（并写明没配置）。超时算失败。
+ * 环境里去掉像密钥的变量（checkEnv）：检查命令是项目里写的，拿不到各家模型的密钥。
  */
 export function runGate(worktree: string, cfg: RelayConfig, timeoutMs = 10 * 60_000): Promise<GateResult> {
   const cmd = cfg.gate.command.trim();
   if (!cmd) return Promise.resolve({ status: 'pass', command: GATE_NONE, detail: '没有配置检查命令，按通过处理。' });
   return new Promise((resolve) => {
-    const child = spawn('sh', ['-c', cmd], { cwd: worktree, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const child = spawn('sh', ['-c', cmd], { cwd: worktree, env: checkEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let out = '';
     const keep = (c: string) => {
       out = (out + c).slice(-8000);

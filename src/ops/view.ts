@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { acceptance, pendingWhy, type Acceptance } from '../core/acceptance';
+import { acceptance, pendingWhy, type Acceptance, type AcceptInput } from '../core/acceptance';
 import { loadAutoSettings } from '../core/auto-settings';
 import { countedReviews, KIND_WORD, loadLedger, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
 import { archivedTaskTitles, handoffFilled, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
 import { whoName } from '../core/names';
 import { protocolState } from '../core/protocol';
 import { untilText } from '../core/quota';
+import { changedSince } from '../core/snap';
 import { goLogTail, loadGoState, type GoState } from './go';
 import { projectConfigSafe, relayBusy } from './track';
 
@@ -218,6 +219,18 @@ export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadVie
   return out;
 }
 
+/** 上一次对指纹的结果（网页一秒问好几次，git status 不用每次都跑）。 */
+const printCache = new Map<string, { base: string; at: number; changed: boolean | null }>();
+
+/** 验收：算出来是通过时，再看文件夹有没有账本还没记上的改动（在接力台之外改的）；有就不算通过。 */
+function accepted(root: string, v: LedgerView, input: AcceptInput): Acceptance {
+  const acc = acceptance(input);
+  if (acc.state !== 'accepted' || !v.base) return acc;
+  let c = printCache.get(root);
+  if (!c || c.base !== v.base || Date.now() - c.at > 3000) printCache.set(root, (c = { base: v.base, at: Date.now(), changed: changedSince(root, v.base) }));
+  return c.changed ? acceptance({ ...input, unrecorded: true }) : acc;
+}
+
 export function projectView(root: string): ProjectView {
   const v = loadLedger(root);
   const t = readTask(root);
@@ -255,7 +268,7 @@ export function projectView(root: string): ProjectView {
     stints: [...views].reverse(),
     lastRollback: lr && !lr.restored ? { ts: lr.ts, label: lr.label, dropped: lr.dropped, undone, ...(lr.left?.length ? { left: lr.left } : {}), ...(lr.interrupted ? { interrupted: true } : {}), ...(lr.task ? { task: { unchecked: lr.task.unchecked, ...(lr.task.missing ? { missing: true } : {}) } } : {}) } : null,
     config: { gate: cfg.gate.command, protectedPaths: cfg.protectedPaths, ...(configError ? { error: configError } : {}) },
-    acceptance: acceptance({ ledger: v, task: t, gateCommand: cfg.gate.command.trim(), ...(configError ? { configError } : {}), finalRequired }),
+    acceptance: accepted(root, v, { ledger: v, task: t, gateCommand: cfg.gate.command.trim(), ...(configError ? { configError } : {}), finalRequired }),
     threads: threadsOf(root, v, t),
   };
 }

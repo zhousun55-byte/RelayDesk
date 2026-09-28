@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { agentEnv } from './env';
+import { agentEnv, checkEnv } from './env';
+import { redactSecrets } from './redact';
 import { errorMessage } from './errors';
 import { git } from './git';
 import type { Level } from './harness';
@@ -216,10 +217,15 @@ function readFile(root: string, args: Record<string, unknown>): string {
   return body + more;
 }
 
+/** 读给模型的内容里，密钥换成了这个。 */
+const REDACTED = '[REDACTED]';
+const KEEP_SECRET = `内容里有 ${REDACTED}：那是读给你看时抹掉的密钥，原文不能这样写回去。用 edit_file 只改别的行，带密钥的行不要动。`;
+
 function writeFile(root: string, args: Record<string, unknown>, protectedPaths: string[]): string {
   const { abs, rel } = resolveIn(root, args.path, true);
   assertWritable(rel, protectedPaths);
   if (typeof args.content !== 'string') throw new ToolError('缺少 content。');
+  if (args.content.includes(REDACTED) && fs.existsSync(abs) && !fs.readFileSync(abs, 'utf8').includes(REDACTED)) throw new ToolError(KEEP_SECRET);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const existed = fs.existsSync(abs);
   fs.writeFileSync(abs, args.content);
@@ -234,9 +240,10 @@ function editFile(root: string, args: Record<string, unknown>, protectedPaths: s
   const newS = args.new_string;
   if (typeof oldS !== 'string' || !oldS) throw new ToolError('缺少 old_string。');
   if (typeof newS !== 'string') throw new ToolError('缺少 new_string。');
+  if (newS.includes(REDACTED) && !oldS.includes(REDACTED)) throw new ToolError(KEEP_SECRET);
   const text = fs.readFileSync(abs, 'utf8');
   const count = text.split(oldS).length - 1;
-  if (count === 0) throw new ToolError('文件里找不到 old_string（要和原文一字不差，包括空格和换行）。先 read_file 看准再改。');
+  if (count === 0) throw new ToolError(oldS.includes(REDACTED) ? KEEP_SECRET : '文件里找不到 old_string（要和原文一字不差，包括空格和换行）。先 read_file 看准再改。');
   if (count > 1 && args.replace_all !== true) throw new ToolError(`old_string 出现了 ${count} 次。多带几行上下文让它唯一，或者 replace_all=true。`);
   fs.writeFileSync(abs, args.replace_all === true ? text.split(oldS).join(newS) : text.replace(oldS, () => newS));
   return `改好了 ${rel}${count > 1 ? `（替换了 ${count} 处）` : ''}。`;
@@ -256,9 +263,9 @@ function search(root: string, args: Record<string, unknown>): string {
   return lines.slice(0, 200).map((l) => (l.length > 300 ? `${l.slice(0, 300)}…` : l)).join('\n') + (lines.length > 200 ? `\n…（共 ${lines.length} 条，只列前 200）` : '');
 }
 
-function shell(root: string, cmd: string, timeoutMs: number, shouldStop: () => boolean): Promise<string> {
+function shell(root: string, cmd: string, timeoutMs: number, shouldStop: () => boolean, env = agentEnv()): Promise<string> {
   return new Promise((resolve) => {
-    const child = spawn('sh', ['-c', cmd], { cwd: root, env: agentEnv(), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('sh', ['-c', cmd], { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     const keep = (c: string) => {
       out = (out + c).slice(-12_000);
@@ -294,7 +301,7 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
   const hasGate = !!input.gateCommand.trim();
   const ro = !!input.readOnly;
   const chat = new ToolChat(input.spec, ro ? TALK_SYSTEM : SYSTEM, tools(input.level, hasGate).filter((t) => !ro || READ_TOOLS.has(t.name)));
-  chat.user(ro ? input.brief : `${input.brief}\n\n---\n现在开始工作。记住：做完调用 finish。`);
+  chat.user(redactSecrets(ro ? input.brief : `${input.brief}\n\n---\n现在开始工作。记住：做完调用 finish。`));
   const maxSteps = input.maxSteps ?? 60;
   let finalText = '';
   let steps = 0;
@@ -316,7 +323,7 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
         return search(root, c.args);
       case 'run_check':
         if (!hasGate) throw new ToolError('这个项目没有配置检查命令。');
-        return shell(root, input.gateCommand, 10 * 60_000, input.shouldStop);
+        return shell(root, input.gateCommand, 10 * 60_000, input.shouldStop, checkEnv());
       case 'run_command':
         if (input.level !== 'full') throw new ToolError('安全档不能执行任意命令。');
         if (typeof c.args.command !== 'string' || !c.args.command.trim()) throw new ToolError('缺少 command。');
@@ -355,6 +362,8 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
           content = `出错：${errorMessage(e)}`;
           input.log(`工具出错：${clip(errorMessage(e), 200)}`);
         }
+        // 读到的文件、命令输出都要发给模型：密钥先抹掉。
+        content = redactSecrets(content);
         results.push({ id: c.id, content: content.length > 12_000 ? `${content.slice(0, 12_000)}\n…（太长，截断了）` : content });
       }
       chat.results(results);

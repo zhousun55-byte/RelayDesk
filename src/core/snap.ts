@@ -304,6 +304,23 @@ export function restoreSnapshot(root: string, sha: string, message = '退回', o
   return { safety, after, files: changed.length, left };
 }
 
+/**
+ * 文件夹现在和某张快照比有没有改动（按快照的规则，生成出来的缓存、报告不算）。读不了返回 null。
+ * 不存快照、不动索引（--no-optional-locks）：给验收结果对指纹——在接力台之外改了文件，旧的通过就不能再算。
+ */
+export function changedSince(root: string, sha: string): boolean | null {
+  const head = headSnap(root);
+  if (!head) return null;
+  if (head !== sha) {
+    const d = sg(root, ['diff', '--quiet', ...DIFF_SAFE, sha, head]);
+    if (d.code === 1) return true;
+    if (d.code !== 0) return null;
+  }
+  const st = sg(root, ['--no-optional-locks', 'status', '--porcelain', '-z', '--untracked-files=all'], { raw: true });
+  if (st.code !== 0) return null;
+  return st.stdout.split('\0').some((l) => l.length > 3 && !l.slice(3).startsWith('.relay/') && !generatedPath(l.slice(3)));
+}
+
 /** 改动的一句话统计：「3 个文件，+20 −4」。 */
 export function changeLine(files: FileChange[]): string {
   if (!files.length) return '没有改动';
