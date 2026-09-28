@@ -59,7 +59,15 @@ if [[ "${1:-}" == "--remove" ]]; then
   exit 0
 fi
 
-DEST="${1:-$HOME/Applications}"
+# 默认放进系统的「应用程序」文件夹（/Applications，没有写权限才放 ~/Applications）。
+# 新版 macOS 的启动台按程序的位置缓存图标，同一个位置换了图标也一直显示旧的；9-29 起从 ~/Applications 挪到 /Applications。
+if [[ -n "${1:-}" ]]; then
+  DEST="$1"
+elif [[ -w /Applications ]]; then
+  DEST=/Applications
+else
+  DEST="$HOME/Applications"
+fi
 APP="$DEST/接力台.app"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -77,23 +85,29 @@ fi
 print "编译……"
 (cd "$DIR" && npm run build >/dev/null) || { print -u2 "编译失败：在 $DIR 里执行 npm run build 看看原因。"; exit 1; }
 
-# 0. 旧的先退出；以前放在桌面上的挪进废纸篓。
+# 0. 旧的先退出；放在别处的旧副本（桌面上的、另一个「应用程序」文件夹里的）挪进废纸篓，并注销登记。
 quit_app
-if [[ "$OLD_APP" != "$APP" ]] && ours "$OLD_APP"; then
-  trash "$OLD_APP"
-  print "桌面上以前的「接力台」挪进废纸篓了。"
-fi
+LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+for other in "$OLD_APP" "$HOME/Applications/接力台.app" "/Applications/接力台.app"; do
+  if [[ "$other" != "$APP" ]] && ours "$other"; then
+    "$LSR" -u "$other" >/dev/null 2>&1 || true
+    trash "$other"
+    print "以前放在 ${other:h} 的「接力台」挪进废纸篓了。"
+  fi
+done
 
 # 1. 小程序本体：一小段一直在后台开着的 AppleScript，调用启动脚本；手动打开时出错会弹窗说原因。
 #    RELAY_AT_LOGIN=1（登录时由系统带起来）：只在后台启动接力台，不打开网页。
 #    每 10 秒看一眼：接力台没了就在后台重新拉起（拉不起来就过 5 分钟再试）；你在网页上点了「关闭」，它也退出。
 # 记下旧图标，装完对比：换了图标才去刷新程序坞的图标缓存
 icon_sig() { cat "$APP/Contents/Resources/relay.icns" "$APP/Contents/Resources/Assets.car" 2>/dev/null | shasum | cut -d' ' -f1; /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist" 2>/dev/null; }
-OLD_ICON="$([[ -d "$APP" ]] && icon_sig)"
+OLD_ICON="$( [[ -d "$APP" ]] && icon_sig || true)"
 esc="${LAUNCHER//\\/\\\\}"
 esc="${esc//\"/\\\"}"
-rm -rf "$APP"
-osacompile -s -o "$APP" \
+# 先在临时文件夹里把整个程序做好（图标、签名都弄完），最后一下子放进「应用程序」：
+# 启动台第一次看到一个位置的程序时就把图标记下、以后不再换，放进去的那一刻必须已经是最终的样子。
+BUILD="$TMP/接力台.app"
+osacompile -s -o "$BUILD" \
   -e 'on launcherPath()' \
   -e "  return \"$esc\"" \
   -e 'end launcherPath' \
@@ -145,7 +159,7 @@ osacompile -s -o "$APP" \
   -e '  continue quit' \
   -e 'end quit' 2> >(grep -v 'replacing existing signature' >&2)
 
-PLIST="$APP/Contents/Info.plist"
+PLIST="$BUILD/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName 接力台" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleName string 接力台" "$PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST"
 # 不在程序坞里挂图标、没有菜单栏：它只是在后台看着接力台。
@@ -160,8 +174,8 @@ if [[ -f "$DIR/scripts/icon.png" ]]; then
     sips -z $s $s "$DIR/scripts/icon.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
     sips -z $((s * 2)) $((s * 2)) "$DIR/scripts/icon.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
   done
-  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/relay.icns"
-  rm -f "$APP/Contents/Resources/Assets.car" "$APP/Contents/Resources/applet.icns"
+  iconutil -c icns "$ICONSET" -o "$BUILD/Contents/Resources/relay.icns"
+  rm -f "$BUILD/Contents/Resources/Assets.car" "$BUILD/Contents/Resources/applet.icns"
   /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST" >/dev/null 2>&1 || true
   /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile relay" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string relay" "$PLIST"
   # 新版 macOS（26 起）的图标：scripts/AppIcon.icon（纸一层、点和圈一层，圆角、玻璃边、阴影由系统加）编成 Assets.car。
@@ -171,7 +185,7 @@ if [[ -f "$DIR/scripts/icon.png" ]]; then
     CAR="$TMP/Assets.car"
   fi
   if [[ -f "$CAR" ]]; then
-    cp "$CAR" "$APP/Contents/Resources/Assets.car"
+    cp "$CAR" "$BUILD/Contents/Resources/Assets.car"
     /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$PLIST"
   fi
 else
@@ -182,7 +196,9 @@ fi
 V="$(date +%Y%m%d%H%M%S)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $V" "$PLIST"
 # 改过里面的文件，重新做一次本机签名；再让系统重新登记它、刷新图标。
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
+codesign --force --deep --sign - "$BUILD" >/dev/null 2>&1 || true
+rm -rf "$APP"
+mv "$BUILD" "$APP"
 touch "$APP"
 LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 # 系统里还登记着同一个包标识的别的副本（废纸篓里的、试装的）时，启动台可能拿到它的旧图标：先注销这些登记，文件不动。

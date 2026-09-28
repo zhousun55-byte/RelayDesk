@@ -26,7 +26,7 @@ macOS, one command:
 git clone <repo url> agent-relay && cd agent-relay && zsh scripts/make-desktop-app.sh
 ```
 
-This installs dependencies, builds, puts a **Relay** app in `~/Applications` that starts in the background at login, and opens the web page. No Dock or desktop icon, no terminal window. Open it later from Launchpad or Spotlight, or at http://127.0.0.1:7388. To remove it: `zsh scripts/make-desktop-app.sh --remove`.
+This installs dependencies, builds, puts a **Relay** app in `/Applications` (or `~/Applications` without write access) that starts in the background at login, and opens the web page. No Dock or desktop icon, no terminal window. Open it later from Launchpad or Spotlight, or at http://127.0.0.1:7388. To remove it: `zsh scripts/make-desktop-app.sh --remove`.
 
 Linux and Windows (or if you don't want it running in the background):
 
