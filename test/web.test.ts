@@ -288,3 +288,20 @@ result = { dispatch, relay: pageThreads().map((t) => t.id), page: pageOf({ mode:
   );
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.result)), { dispatch: ['t1'], relay: ['t0', 't2'], page: 'dispatch', split: '强模型 3.2 万，弱模型 15.9 万 token（1 棒没报用量）', small: '860' });
 });
+
+test('成员名单的额度：第二行写「5 小时 5% · 一周 72%」，悬停写几点恢复；没报过额度就什么都不写', () => {
+  const code = ['pad', 'clock', 'sameDay', 'when', 'dayClock', 'LIMIT_WORD', 'limitsText', 'limitsTip'].map(pick).join('\n\n');
+  const ctx: Record<string, unknown> = {};
+  vm.runInNewContext(`${code}\nresult = { limitsText, limitsTip };`, ctx);
+  const { limitsText, limitsTip } = ctx.result as { limitsText: (m: object) => string; limitsTip: (m: object) => string | null };
+  const soon = new Date();
+  soon.setMinutes(soon.getMinutes() + 30, 0, 0);
+  const at = `${String(soon.getHours()).padStart(2, '0')}:${String(soon.getMinutes()).padStart(2, '0')}`;
+  const m = { limits: [{ kind: '5h', used: 5.4, resetsAt: soon.toISOString() }, { kind: '7d', used: 72 }] };
+  assert.equal(limitsText(m), '5 小时 5% · 一周 72%');
+  assert.ok(limitsTip(m)!.startsWith('5 小时 '), limitsTip(m)!);
+  assert.ok(limitsTip(m)!.includes(`${at} 恢复`), limitsTip(m)!);
+  assert.ok(!limitsTip(m)!.includes('一周'), '没给恢复时间的窗口不写');
+  assert.equal(limitsText({}), '');
+  assert.equal(limitsTip({}), null);
+});

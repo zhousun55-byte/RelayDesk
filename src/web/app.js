@@ -1449,7 +1449,7 @@ function renderLeft() {
     chat
       ? [talkTitle(S.talk), talkAt(S.talk), S.talk.sessions, talkLive()]
       : [ts.map((t) => [t.id, t.title, t.stints, t.pending, lastActive(t), blank(t)]), p.stints.filter((s) => s.status === 'working').map((s) => s.id), S.draft || blank(ts[ts.length - 1])],
-    members().map((m) => [m.name, m.llm, m.cooling, m.canWork, m.tier]),
+    members().map((m) => [m.name, m.llm, m.cooling, m.canWork, m.tier, limitsText(m)]),
     busyMember(),
     looks.key,
   ]);
@@ -1561,7 +1561,7 @@ function drawLeft() {
               [
                 ...team.map((m) => ({
                   label: memberName(m),
-                  sub: [m.tool, m.name === busy ? '干活中' : m.cooling ? `额度用完 · ${m.coolingText}` : !m.canWork && m.kind !== 'app' ? '不可调度' : ''].filter(Boolean).join(' · '),
+                  sub: [m.tool, m.name === busy ? '干活中' : m.cooling ? `额度用完 · ${m.coolingText}` : !m.canWork && m.kind !== 'app' ? '不可调度' : limitsText(m)].filter(Boolean).join(' · '),
                   tile: tile(m, 's20', look(m)),
                   right: m.tier === 'strong' ? '强' : '弱',
                   run: () => openSettings('members'),
@@ -5133,7 +5133,7 @@ function membersPane(redraw) {
       },
       h('span', { class: `handle${canDrag ? '' : ' off'}`, 'aria-hidden': 'true' }, icon('grip')),
       look,
-      h('div', { class: 'mn' }, h('b', null, name), note ? h('small', { 'data-tip': m.update || (!m.canWork && m.why ? m.why : null) }, note) : null),
+      h('div', { class: 'mn' }, h('b', null, name), note ? h('small', { 'data-tip': m.update || (!m.canWork && m.why ? m.why : null) || limitsTip(m) }, note) : null),
       seg,
       h('button', { class: 'icon-btn del', 'aria-label': `删除 ${name}`, 'data-tip': '删除', onclick: () => removeMember(m, row) }, icon('trash'))
     );
@@ -5209,8 +5209,20 @@ function membersPane(redraw) {
 function memberNote(m) {
   const name = memberName(m);
   const tool = m.kind === 'app' ? (m.tool && m.tool !== name ? `${m.tool} 桌面版` : '桌面程序') : m.tool && m.tool !== name ? m.tool : '';
-  const state = m.cooling ? `额度用完 · ${m.coolingText}` : !m.canWork && m.kind !== 'app' ? '不可调度' : '';
+  const state = m.cooling ? `额度用完 · ${m.coolingText}` : !m.canWork && m.kind !== 'app' ? '不可调度' : limitsText(m);
   return [tool, state, m.update ? '命令行需要更新' : ''].filter(Boolean).join(' · ');
+}
+
+const LIMIT_WORD = { '5h': '5 小时', '7d': '一周', '7d-opus': '一周 Opus' };
+
+/** 工具自己报的额度：「5 小时 5% · 一周 72%」；没报过就是空的。 */
+function limitsText(m) {
+  return (m.limits || []).map((w) => `${LIMIT_WORD[w.kind] || w.kind} ${Math.round(w.used)}%`).join(' · ');
+}
+
+/** 悬停看几点恢复：「5 小时 21:40 恢复 · 一周 10月2日 09:00 恢复」。 */
+function limitsTip(m) {
+  return (m.limits || []).filter((w) => w.resetsAt).map((w) => `${LIMIT_WORD[w.kind] || w.kind} ${dayClock(w.resetsAt)} 恢复`).join(' · ') || null;
 }
 
 /** 删掉一位：它那一行淡出，下面的行滑上来补位。 */
