@@ -164,3 +164,11 @@ test('一棒跑完、群聊答完记下工具报的额度（Codex 读它的会�
   assert.equal(q().members.codex.until, last.quotaUntil);
   assert.deepEqual(kinds(q().limits.codex.windows), [['5h', 100], ['7d', 41]]);
 });
+
+test('Claude 额度：Claude Code 2.1.282 官方账号真跑一次报的 rate_limit_event（2026-09-28 录下的原样）读得出两个窗口', () => {
+  const info = { status: 'allowed', resetsAt: 1790623800, rateLimitType: 'five_hour', overageStatus: 'rejected', overageDisabledReason: 'org_level_disabled', isUsingOverage: false, unifiedWindows: { five_hour: { utilization: 0, resetsAt: 1790623800 }, seven_day: { utilization: 0.72, resetsAt: 1790892000 } } };
+  assert.deepEqual(claudeLimits(info), [
+    { kind: '5h', used: 0, resetsAt: '2026-09-28T19:30:00.000Z' },
+    { kind: '7d', used: 72, resetsAt: '2026-10-01T22:00:00.000Z' },
+  ]);
+});
