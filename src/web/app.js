@@ -1714,11 +1714,50 @@ function renderCenter() {
     CE.chat.style.setProperty('--compose-h', '0px');
   }
   document.title = S.st.project.name && !S.st.project.pick ? `${S.st.project.name} · 接力台` : '接力台';
-  // 切页时扫过去的点用这一页的走向（见 flowSweep）
+  // 切页时扫过去的点用这一页的走向和笔画；纸也换成这一页的（旧的记下来，flowSweep 让它顺着前沿退掉）
   FLOW.kind = mode === 'pick' ? 'pick' : S.view;
+  const center = CE.flow.parentNode;
+  if (center.dataset.paper !== S.view) {
+    FLOW.was = center.dataset.paper || '';
+    center.dataset.paper = S.view;
+  }
 }
 
 // ----- 空闲：小标题、要人看的一行、输入框 -----
+
+/**
+ * 标题上面的一小段线路图（像地铁图）：三页各一种走法，一眼分得清，走向和切页时扫过去的点一样。
+ * 接力：一条线，经过两个换乘站换人接着走（实线是强的、点线是弱的）；
+ * 派活：一条线拆成三股，每股一个方格（清单里的一步），做完合回一条去终审；
+ * 群聊：三条线（每位一条，不分强弱）汇进一个换乘站，出来是一条。
+ */
+const ROUTES = {
+  relay:
+    '<path class="ln" d="M6 20H60M172 20H222"/><path class="dt" d="M86 20H146"/>' +
+    '<rect class="cap" x="60" y="14" width="26" height="12" rx="6"/><rect class="cap" x="146" y="14" width="26" height="12" rx="6"/>' +
+    '<circle class="sm" cx="67" cy="20" r="2"/><circle class="sm" cx="79" cy="20" r="2"/><circle class="sm" cx="153" cy="20" r="2"/><circle class="sm" cx="165" cy="20" r="2"/>' +
+    '<circle class="fs" cx="6" cy="20" r="3.5"/><circle class="st" cx="226" cy="20" r="4"/>',
+  dispatch:
+    '<path class="ln" d="M6 20H40M170 20H222"/><path class="dt" d="M40 20L56 4H154L170 20M40 20H170M40 20L56 36H154L170 20"/>' +
+    '<rect class="sq" x="101.5" y="0.5" width="7" height="7"/><rect class="sq" x="101.5" y="16.5" width="7" height="7"/><rect class="sq" x="101.5" y="32.5" width="7" height="7"/>' +
+    '<circle class="fs" cx="6" cy="20" r="3.5"/><circle class="st" cx="226" cy="20" r="4"/><circle class="fs" cx="226" cy="20" r="1.5"/>',
+  chat:
+    '<path class="ln" d="M10 8H100M10 32H100M114 20H222"/><path class="dt" d="M10 20H100"/>' +
+    '<rect class="cap" x="100" y="2" width="14" height="36" rx="7"/>' +
+    '<circle class="sm" cx="107" cy="8" r="2"/><circle class="sm" cx="107" cy="20" r="2"/><circle class="sm" cx="107" cy="32" r="2"/>' +
+    '<circle class="st" cx="6" cy="8" r="3.5"/><circle class="st" cx="6" cy="20" r="3.5"/><circle class="st" cx="6" cy="32" r="3.5"/><circle class="st" cx="226" cy="20" r="4"/>',
+};
+
+/** 这一页的线路图；刚切过来（dir 是切的方向）就顺着方向一格一格画出来。 */
+function routeMap(view, dir) {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('viewBox', '-2 -2 236 44');
+  s.setAttribute('class', dir ? 'route in' : 'route');
+  s.setAttribute('aria-hidden', 'true');
+  if (dir) s.dataset.dir = String(dir);
+  s.innerHTML = ROUTES[view] || '';
+  return s;
+}
 
 function renderHero(mode) {
   const p = S.st.project;
@@ -1776,7 +1815,7 @@ function renderHero(mode) {
           )
         )
       : h('div', { class: 'under', hidden: true });
-    CE.hero.replaceChildren(h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null), h('div', { class: 'hero-in' }, head, notice, C.wrap, under));
+    CE.hero.replaceChildren(h('div', { class: 'hero-bar' }, UI.noLeft || narrow() ? sideBtn('left') : null, h('span', { class: 'sp' }), UI.noRight || narrow() ? sideBtn('right') : null), h('div', { class: 'hero-in' }, routeMap(S.view, S.swap), head, notice, C.wrap, under));
   } else if (C.wrap.parentNode !== CE.hero.querySelector('.hero-in')) {
     const inner = CE.hero.querySelector('.hero-in');
     inner.insertBefore(C.wrap, inner.querySelector('.under'));
@@ -1816,9 +1855,9 @@ const FLOW_LINES = {
   },
 };
 const FLOW_STEP = 10;
-/** 前沿走完这一栏要多久（略先快后慢）；每个点分三档变大、停一下、再分三档变小（一格一格地变，不是连续地缩放）。点亮得短，看到的是一道往前走的点，不是铺满再褪。 */
+/** 前沿走完这一栏要多久（匀速，和换纸的边对得上）；每个点分三档变大、停一下、再分三档变小（一格一格地变，不是连续地缩放）。点亮得短，看到的是一道往前走的点，不是铺满再褪。 */
 const SWEEP = { front: 600, grow: 45, hold: 40, fade: 150 };
-const FLOW = { kind: 'relay', w: 0, h: 0, dpr: 1, marks: [], t0: 0, raf: 0, ink: '#151515' };
+const FLOW = { kind: 'relay', was: '', w: 0, h: 0, dpr: 1, marks: [], t0: 0, raf: 0, ink: '#151515' };
 
 const smooth = (a, b, x) => {
   const t = clamp((x - a) / (b - a), 0, 1);
@@ -1927,7 +1966,7 @@ function flowMarks(keep, dir) {
         ry: paper ? 1.05 + 0.75 * q : 0.8 + 0.6 * q,
         al: paper ? 0.09 + 0.26 * q : 0.07 + 0.26 * q,
         ring: I > 0.55 && r < 240 && at > knee,
-        on: SWEEP.front * (1 - (1 - u) ** 0.8) + r * 0.07,
+        on: SWEEP.front * u + r * 0.07,
         hold: SWEEP.hold * (0.5 + r / 1000),
       });
     }
@@ -1935,10 +1974,22 @@ function flowMarks(keep, dir) {
   return marks;
 }
 
+/** 一个点：接力是椭圆点（有几颗是空心的），派活是一竖，群聊是一横，和各自的纸一样的笔画。 */
 function flowMark(ctx, m, k) {
   ctx.globalAlpha = m.al;
   ctx.beginPath();
-  if (m.ring) {
+  if (FLOW.kind === 'dispatch' || FLOW.kind === 'chat') {
+    const r = 1.2 * m.rx * k;
+    ctx.lineWidth = 0.6 + 0.6 * m.ry * k;
+    if (FLOW.kind === 'dispatch') {
+      ctx.moveTo(m.x, m.y - r);
+      ctx.lineTo(m.x, m.y + r);
+    } else {
+      ctx.moveTo(m.x - r, m.y);
+      ctx.lineTo(m.x + r, m.y);
+    }
+    ctx.stroke();
+  } else if (m.ring) {
     ctx.lineWidth = 0.9;
     ctx.ellipse(m.x, m.y, m.rx * 1.3 * k, m.ry * 1.3 * k, m.a, 0, 6.2832);
     ctx.stroke();
@@ -1963,6 +2014,7 @@ function flowFrame(now) {
   ctx.setTransform(FLOW.dpr, 0, 0, FLOW.dpr, 0, 0);
   ctx.clearRect(0, 0, FLOW.w, FLOW.h);
   ctx.fillStyle = ctx.strokeStyle = FLOW.ink;
+  ctx.lineCap = 'round';
   let live = false;
   for (const m of FLOW.marks) {
     const k = t < m.on ? 0 : sweepK(t - m.on, m.hold);
@@ -1976,14 +2028,24 @@ function flowFrame(now) {
 
 /** 切了页（新的一页已经放好）：点从 dir 那一边扫过来，扫完画布就收起来，平时纸上只有原来的点。 */
 function flowSweep(dir) {
+  const was = FLOW.was;
+  FLOW.was = '';
   cancelAnimationFrame(FLOW.raf);
   FLOW.raf = 0;
   CE.flow.hidden = true;
+  const center = CE.flow.parentNode;
+  center.querySelector(':scope > .paper-old')?.remove();
   if (still()) return;
-  const box = CE.flow.parentNode.getBoundingClientRect();
+  const box = center.getBoundingClientRect();
   const W = Math.round(box.width);
   const H = Math.round(box.height);
   if (!W || !H) return;
+  // 旧的纸盖在上面，跟着前沿退掉：扫到哪儿，纸就换到哪儿
+  if (was && was !== center.dataset.paper) {
+    const old = h('div', { class: 'paper-old', 'data-paper': was, 'data-dir': String(dir) });
+    CE.flow.before(old);
+    old.animate([{ '--wipe': '-60px' }, { '--wipe': '100%' }], { duration: SWEEP.front, easing: 'linear', fill: 'forwards' }).onfinish = () => old.remove();
+  }
   const inner = !CE.hero.hidden && CE.hero.querySelector('.hero-in');
   const ib = inner && inner.getBoundingClientRect();
   const keep = ib && ib.width ? [ib.left - box.left - 24, ib.top - box.top - 20, ib.right - box.left + 24, ib.bottom - box.top + 20] : null;

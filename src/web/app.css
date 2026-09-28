@@ -3,7 +3,8 @@
    只有黑白灰，外加一颗小红点：只有要人管的地方是红的。全站一种字（Albert Sans 配苹方），等宽字只给代码。
    动画只动 transform 和 opacity（点阵流画在画布上、网点进场动遮罩，都只在一小块上）；进来、出去都有过渡，减少动态效果时全部关掉。
    2026-09-28 按两张海报加的细节：连续的东西拆成一格一格的点（点阵流、点线、网点进场），瑞士版式的对准标记和裁切角。
-   点只在切换的那一下冒出来：切页时顺着方向扫一遍，分段按钮的滑块身后留一串，开关一颗颗铺满或散掉；平时纸上只有原来的点。 */
+   点只在切换的那一下冒出来：切页时顺着方向扫一遍，分段按钮的滑块身后留一串，开关一颗颗铺满或散掉；平时纸上只有原来的点。
+   三页三种纸、各一段线路图：接力是点、派活是竖、群聊是横，切页时扫到哪儿纸换到哪儿。 */
 
 @font-face {
   font-family: 'Albert Sans';
@@ -1093,10 +1094,39 @@ button.busy::after {
   display: flex;
   flex-direction: column;
   position: relative;
+}
+/* 三页三种纸（同一套 20px 的格子，每格一个记号，只是笔画不同）：接力是点，派活是竖（拆成几列并排做），群聊是横（一行行对话） */
+.center,
+.paper-old {
+  --mark: radial-gradient(var(--dot) 0.85px, transparent 1.3px);
   background-color: var(--paper);
-  background-image: radial-gradient(var(--dot) 0.85px, transparent 1.3px), radial-gradient(120% 60% at 50% -10%, var(--slip), transparent 70%);
+  background-image: var(--mark), radial-gradient(120% 60% at 50% -10%, var(--slip), transparent 70%);
   background-size: 20px 20px, 100% 100%;
   background-position: 10px 12px, 0 0;
+}
+[data-paper='dispatch'] {
+  --mark: radial-gradient(0.6px 3px, var(--dot) 70%, transparent);
+}
+[data-paper='chat'] {
+  --mark: radial-gradient(3px 0.6px, var(--dot) 70%, transparent);
+}
+/* 切页时旧的纸留在前沿前面，前沿扫到哪儿换到哪儿（app.js 的 flowSweep） */
+@property --wipe {
+  syntax: '<length-percentage>';
+  inherits: false;
+  initial-value: 0%;
+}
+.paper-old {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  -webkit-mask: linear-gradient(to right, transparent var(--wipe), #000 calc(var(--wipe) + 60px));
+  mask: linear-gradient(to right, transparent var(--wipe), #000 calc(var(--wipe) + 60px));
+}
+.paper-old[data-dir='-1'] {
+  -webkit-mask: linear-gradient(to left, transparent var(--wipe), #000 calc(var(--wipe) + 60px));
+  mask: linear-gradient(to left, transparent var(--wipe), #000 calc(var(--wipe) + 60px));
 }
 .offline {
   position: relative;
@@ -2558,6 +2588,62 @@ button.busy::after {
   flex-direction: column;
   gap: 14px;
   animation: rise 0.36s var(--ease) backwards;
+}
+/* 标题上面的线路图：三页各一种走法（见 app.js 的 ROUTES）。细线、点线、圆圈、换乘站，和纸上的点、连线同一套 */
+.route {
+  display: block;
+  width: 236px;
+  height: 44px;
+  margin: 0 0 6px 2px;
+  color: var(--ink-3);
+}
+.route .ln,
+.route .dt,
+.route .st,
+.route .sq,
+.route .cap {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.25;
+}
+.route .dt {
+  stroke-width: 2;
+  stroke-dasharray: 0 5;
+  stroke-linecap: round;
+}
+.route .st,
+.route .sq,
+.route .cap {
+  fill: var(--paper);
+}
+.route .fs {
+  fill: var(--ink);
+}
+.route .sm {
+  fill: currentColor;
+}
+/* 刚切过来：顺着切的方向一格一格画出来 */
+.route.in {
+  animation: route-in 0.48s steps(12, end) 0.06s both;
+}
+.route.in[data-dir='-1'] {
+  animation-name: route-in-l;
+}
+@keyframes route-in {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0);
+  }
+}
+@keyframes route-in-l {
+  from {
+    clip-path: inset(0 0 0 100%);
+  }
+  to {
+    clip-path: inset(0);
+  }
 }
 .hero-head {
   display: flex;
