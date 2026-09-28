@@ -196,23 +196,38 @@ export async function stopAllGo(timeoutMs = 10_000): Promise<void> {
 }
 
 /** 这个进程是不是当时派出去的那个工具（进程号可能已经被别的程序用了：命令对不上就不动它）。 */
-function sameTool(pid: number, exe: string | undefined): boolean {
-  if (!exe) return false;
-  const r = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
-  return r.status === 0 && (r.stdout ?? '').includes(exe);
+/**
+ * 工具那一组里还活着的进程（工具是 detached 起的，自成一组，组号就是它的进程号）。
+ * 只看组长不够：Codex 记下的是外层的 node 启动器，干活的是它起的子进程，启动器没了子进程还在接着改文件（2026-09-28 实测）。
+ * 组里得有这个工具的命令（完整路径，或者可执行文件同名），防止组号被别的程序重用。
+ */
+function toolGroup(pgid: number, exe: string | undefined): number[] {
+  if (!exe) return [];
+  const r = spawnSync('ps', ['-axo', 'pid=,pgid=,command='], { encoding: 'utf8' });
+  if (r.status !== 0) return [];
+  const group = (r.stdout ?? '').split('\n').flatMap((l) => {
+    const m = l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+    return m && Number(m[2]) === pgid ? [{ pid: Number(m[1]), cmd: m[3] }] : [];
+  });
+  const name = `/${path.basename(exe)}`;
+  return group.some((x) => x.cmd.includes(exe) || (x.cmd.split(/\s+/)[0] ?? '').endsWith(name)) ? group.map((x) => x.pid) : [];
 }
 
-/** 上次接力台被关掉时留下、还在跑的工具进程：结束掉（不然两个 AI 同时改一个文件夹）。返回结束了没有。 */
+/** 上次接力台被关掉时留下、还在跑的工具（连同它起的子进程）：结束掉（不然两个 AI 同时改一个文件夹）。返回结束了没有。 */
 function killLeftover(prev: GoState | null): boolean {
   const pid = prev?.current?.toolPid;
-  if (!pid || !prev || pidAlive(prev.pid) || !pidAlive(pid) || !sameTool(pid, prev.current?.toolExe)) return false;
+  if (!pid || !prev || pidAlive(prev.pid)) return false;
+  const group = toolGroup(pid, prev.current?.toolExe);
+  if (!group.length) return false;
   try {
     process.kill(-pid, 'SIGKILL');
   } catch {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      return false;
+    for (const p of group) {
+      try {
+        process.kill(p, 'SIGKILL');
+      } catch {
+        /* 已经结束 */
+      }
     }
   }
   return true;
@@ -551,7 +566,7 @@ class GoRunner {
         });
         finalText = r.finalText;
         stopped = r.stopped;
-        error = r.error ?? (r.timedOut ? cause.overtime(timeoutMs) : undefined);
+        error = r.error ? plain(r.error) : r.timedOut ? cause.overtime(timeoutMs) : undefined;
         quotaText = `${r.error ?? ''}`;
         log(`结束（${r.steps} 步${error ? `，${error}` : ''}）`);
       } else {

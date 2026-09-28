@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { setOrder, withFakeDesktopClaude, withFakeDsh, withFakes } from './fakes';
@@ -206,6 +206,33 @@ test('复核棒正常做完、说的话里讲到 rate limit、quota：不算额�
   assert.equal(st[0].review, 'done');
   const quota = path.join(s.home, '.relay', 'quota.json');
   assert.ok(!fs.existsSync(quota) || !JSON.parse(fs.readFileSync(quota, 'utf8')).members?.codex, 'Codex 没被记成额度用完');
+});
+
+test('接力台被强行结束（kill -9）、工具的外层启动器也没了、干活的子进程还在：下次开工先把它结束掉', async () => {
+  const s = prepared('kill9', { FAKE_CODEX_MODE: 'slow' });
+  s.relay(['init']);
+  s.relay(['task', '做一件事', '--step', '第一件']);
+  const child = spawn(process.execPath, [CLI, 'go', 'codex'], { cwd: s.repo, env: s.env });
+  const exited = new Promise((r) => child.on('exit', r));
+  const pidFile = path.join(s.base, 'codex.pid');
+  await until(15_000, () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', '工具开始干活');
+  const leader = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  child.kill('SIGKILL');
+  await exited;
+  process.kill(leader, 'SIGKILL'); // 外层启动器没了，它起的 sleep 还在同一组里
+  const inGroup = () =>
+    spawnSync('ps', ['-axo', 'pid=,pgid='], { encoding: 'utf8' })
+      .stdout.split('\n')
+      .map((l: string) => l.trim().split(/\s+/).map(Number))
+      .filter(([p, g]) => g === leader && p !== leader)
+      .map(([p]) => p);
+  await until(5_000, () => inGroup().length > 0, '子进程还在');
+  s.env.FAKE_CODEX_MODE = 'work';
+  s.relay(['go', 'claude']);
+  const left = inGroup();
+  for (const p of left) process.kill(p, 'SIGKILL');
+  assert.deepEqual(left, [], '开工前结束了上次留下的子进程');
+  assert.deepEqual(s.stints().map((x) => x.status), ['stopped', 'handed']);
 });
 
 test('关掉终端窗口（SIGHUP）：接力台先结束正在干活的工具、把这一棒记成「叫停了」再退，不会把工具留在后台接着改文件', async () => {

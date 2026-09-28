@@ -140,7 +140,8 @@ function fakeScript(name: 'claude' | 'codex'): string {
     `    printf '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"%s"}]}}\\n' "$T"`,
     `    printf '{"type":"result","subtype":"success","is_error":true,"result":"%s"}\\n' "$T"`,
     '    exit 1 ;;',
-    '  slow) echo $$ > "$FAKE_DIR/$NAME.pid"; sleep 30 ;;',
+    // 像 Codex：外层启动器起一个带着自己路径的子进程干活（外层没了子进程还在）
+    '  slow) echo $$ > "$FAKE_DIR/$NAME.pid"; sh -c "sleep 30; :" "$0" ;;',
     '  offline) while :; do echo "Reconnecting... waiting for network (Connection failed: error sending request)" >&2; sleep 0.3; done ;;',
     '  blip-once)',
     '    if [ ! -f "$FAKE_DIR/$NAME-blipped" ]; then',
