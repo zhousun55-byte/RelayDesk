@@ -16,17 +16,21 @@ import { markBase, refreshBrief } from './track';
  * 不需要 git；不碰你自己的 git（快照在 .relay/snapshots，.relay 里自带 .gitignore）。
  */
 
+/**
+ * .relay 默认整个不进你的 git：任务、交接、复核、账本里有 AI 的原话、改动摘要和文件名。
+ * 只留配置（检查命令、不许改的文件），同伴拉下来能用同一套规矩。
+ */
 const RELAY_GITIGNORE = [
-  '# 接力台自己的数据，不进你的 git（任务、交接、复核、账本想提交就提交）',
-  'snapshots/',
-  'runs/',
-  '接力本.md',
-  '复核/*.diff',
-  'talk*.jsonl',
-  '*.tmp',
-  '*.lock',
+  '# 接力台自己的数据，默认都不进你的 git（任务、交接、复核、账本里有 AI 的原话和改动摘要）',
+  '# 想提交哪样，在最后加一行，比如：!任务.md，或者 !交接/ 和 !交接/**',
+  '*',
+  '!.gitignore',
+  '!config.json',
   '',
 ].join('\n');
+
+/** 以前版本写的默认内容（没被人改过的，接入时换成现在的）。 */
+const OLD_GITIGNORE = ['# 接力台自己的数据，不进你的 git（任务、交接、复核、账本想提交就提交）', 'snapshots/', 'runs/', '接力本.md', '复核/*.diff', 'talk*.jsonl', '*.tmp', '*.lock', ''].join('\n');
 
 export interface InitResult {
   root: string;
@@ -62,7 +66,7 @@ export function initProject(dir: string, opts: InitOptions = {}): InitResult {
 
   fs.mkdirSync(relayDir, { recursive: true });
   const gi = path.join(relayDir, '.gitignore');
-  if (!fs.existsSync(gi)) {
+  if (!fs.existsSync(gi) || fs.readFileSync(gi, 'utf8') === OLD_GITIGNORE) {
     fs.writeFileSync(gi, RELAY_GITIGNORE);
   }
   for (const d of [HANDOFF_DIR, REVIEW_DIR]) fs.mkdirSync(path.join(root, d), { recursive: true });

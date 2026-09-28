@@ -37,6 +37,21 @@ test('自动识别：Claude Code 接的是 DeepSeek 算弱，Codex 是强；桌�
   assert.match(out, /弱 Claude Code（deepseek-v4-flash）/);
 });
 
+test('接入：.relay 默认只有配置进 git，任务、交接、账本不进；旧版本没改过的默认规则换成新的，改过的不动', () => {
+  const s = sandbox('init-git');
+  s.relay(['init', '做一个']);
+  handoff(s, 'x1.md', 'Codex · gpt-6', '已交接', '写了 a');
+  const tracked = s.git(['status', '--porcelain', '--untracked-files=all']).split('\n').map((l) => l.slice(3)).filter((f) => f.startsWith('.relay/'));
+  assert.deepEqual(tracked.sort(), ['.relay/.gitignore', '.relay/config.json']);
+  const old = ['# 接力台自己的数据，不进你的 git（任务、交接、复核、账本想提交就提交）', 'snapshots/', 'runs/', '接力本.md', '复核/*.diff', 'talk*.jsonl', '*.tmp', '*.lock', ''].join('\n');
+  s.write('.relay/.gitignore', old);
+  s.relay(['init']);
+  assert.match(s.read('.relay/.gitignore'), /^\*$/m, '没改过的旧规则换掉');
+  s.write('.relay/.gitignore', old + '!交接/\n');
+  s.relay(['init']);
+  assert.match(s.read('.relay/.gitignore'), /!交接\//, '改过的不动');
+});
+
 test('接入：建好 .relay、写规矩、存第一张快照；不需要 git；重复接入不重复', () => {
   const s = sandbox('init', { git: false });
   const out = s.relay(['init', '做一个', '滤镜']);
