@@ -37,6 +37,20 @@ test('自动识别：Claude Code 接的是 DeepSeek 算弱，Codex 是强；桌�
   assert.match(out, /弱 Claude Code（deepseek-v4-flash）/);
 });
 
+test('脱敏导出：任务、交接、账本、配置复制到空文件夹，密钥抹掉；不往有东西的文件夹、.relay 里面导', () => {
+  const s = twoStints('export');
+  const key = 'sk-' + 'abcdefghijklmnopqrstuvwx';
+  handoff(s, 'x3.md', 'Codex · gpt-6', '已交接', `用了 ${key} 调接口`);
+  const dest = path.join(s.base, '导出');
+  assert.match(s.relay(['export', dest]), /导出了 \d+ 个文件/);
+  for (const f of ['任务.md', 'config.json', 'journal.jsonl', '交接/x1.md', '交接/x3.md']) assert.ok(fs.existsSync(path.join(dest, f)), f);
+  assert.ok(!fs.existsSync(path.join(dest, 'snapshots')), '快照不导');
+  const x3 = fs.readFileSync(path.join(dest, '交接', 'x3.md'), 'utf8');
+  assert.ok(!x3.includes(key) && x3.includes('[REDACTED]'));
+  assert.match(s.relay(['export', dest], true), /已经有东西了/);
+  assert.match(s.relay(['export', path.join(s.repo, '.relay', 'out')], true), /不能导出到 \.relay 里面/);
+});
+
 test('接入：.relay 默认只有配置进 git，任务、交接、账本不进；旧版本没改过的默认规则换成新的，改过的不动', () => {
   const s = sandbox('init-git');
   s.relay(['init', '做一个']);

@@ -15,7 +15,7 @@ import { allMembers, orderMembers, readyMembers, spareFirst, type MemberInfo } f
 import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
 import { finalPrompt, planPrompt, reviewPrompt, stepPrompt, workPrompt } from '../core/prompts';
-import { clearQuota, detectQuota, fullUntil, markQuota, noteLimits, untilText, type Limit } from '../core/quota';
+import { detectQuota, fullUntil, markOk, markQuota, noteError, noteLimits, recentErrors, untilText, type Limit } from '../core/quota';
 import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, usageTotal, type RunHandle, type RunResult } from '../core/runner';
 import { cause, plain } from '../core/cause';
 import { takeSnapshot } from '../core/snap';
@@ -589,8 +589,9 @@ class GoRunner {
     } else if (error) {
       status = 'failed';
       note = error;
+      noteError(m.name);
     } else {
-      clearQuota(m.name);
+      markOk(m.name);
     }
     const ran = actualModel && !(who.model && who.model === actualModel) ? { ...who, model: actualModel, label: `${m.label} · ${actualModel}`, tier: who.model && sameModel(who.model, actualModel) ? who.tier : memberTier(m.agent, actualModel) } : who;
     let logText = '';
@@ -623,7 +624,7 @@ class GoRunner {
   }
 
   private members(): MemberInfo[] {
-    return spareFirst(orderMembers(allMembers(this.settings.level), this.settings.order));
+    return spareFirst(orderMembers(allMembers(this.settings.level), this.settings.order), recentErrors());
   }
 
   /** 挑一位：能调度、没在等额度、这次没出过错。tier = 只要强的 / 只要弱的 / 都行。 */

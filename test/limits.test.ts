@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { codexSessionLimits } from '../src/core/harness';
 import { spareFirst, type MemberInfo } from '../src/core/members';
-import { claudeLimits, clearQuota, codexLimits, fullUntil, limitsOf, loadQuotaFile, markQuota, noteLimits, quotaPath, type Limit } from '../src/core/quota';
+import { claudeLimits, codexLimits, errorBackoffMs, fullUntil, limitsOf, loadQuotaFile, markOk, markQuota, noteError, noteLimits, quotaPath, recentErrors, type Limit } from '../src/core/quota';
 import { makeParser } from '../src/core/runner';
 import type { AgentConfig } from '../src/core/types';
 import { setOrder, withFakes } from './fakes';
@@ -83,7 +83,7 @@ test('额度窗口和额度用完记在同一个 quota.json，互不冲掉；过
     noteLimits('codex', [{ kind: '7d', used: 72, resetsAt: later }, { kind: '5h', used: 5, resetsAt: '2026-09-28T11:00:00.000Z' }], now);
     noteLimits('codex', [], now);
     assert.equal(loadQuotaFile().members['claude-official'].until, '2026-09-28T15:00:00.000Z', '记额度窗口没冲掉额度用完');
-    clearQuota('claude-official');
+    markOk('claude-official');
     assert.deepEqual(loadQuotaFile().limits.codex, { at: now.toISOString(), windows: [{ kind: '5h', used: 5, resetsAt: '2026-09-28T11:00:00.000Z' }, { kind: '7d', used: 72, resetsAt: later }] }, '按 5 小时、一周的顺序存；这次没报就留着上一次的；清掉额度用完没冲掉额度窗口');
     assert.deepEqual(limitsOf('codex', now)!.windows, [{ kind: '5h', used: 0 }, { kind: '7d', used: 72, resetsAt: later }], '5 小时窗口过了恢复时间');
     assert.equal(limitsOf('cursor-agent', now), null);
@@ -95,7 +95,17 @@ test('额度窗口和额度用完记在同一个 quota.json，互不冲掉；过
     assert.equal(fullUntil(full), later, '两个都用满了，等晚的那个');
     assert.equal(fullUntil(full.slice(2)), undefined);
     fs.writeFileSync(quotaPath(), JSON.stringify({ members: { x: { until: later, note: '', at: later } } }));
-    assert.deepEqual(loadQuotaFile(), { members: { x: { until: later, note: '', at: later } }, limits: {} }, '旧的 quota.json 照样读');
+    assert.deepEqual(loadQuotaFile(), { members: { x: { until: later, note: '', at: later } }, limits: {}, errors: {} }, '旧的 quota.json 照样读');
+    // 出过错：第 1 次歇 1 分钟，连着错翻倍，最多 10 分钟；做成一棒就清掉
+    assert.deepEqual([1, 2, 3, 4, 5, 9].map((n) => errorBackoffMs(n) / 60_000), [1, 2, 4, 8, 10, 10]);
+    noteError('codex', now);
+    noteError('codex', now);
+    assert.equal(loadQuotaFile().errors.codex.n, 2);
+    assert.deepEqual([...recentErrors(new Date(now.getTime() + 90_000))], ['codex'], '错了两次：1.5 分钟后还在歇');
+    assert.deepEqual([...recentErrors(new Date(now.getTime() + 3 * 60_000))], [], '3 分钟后不歇了');
+    markOk('codex');
+    assert.equal(loadQuotaFile().errors.codex, undefined);
+    assert.equal(loadQuotaFile().members.x.until, later, '清出错记号没冲掉别人的额度用完');
   } finally {
     if (prev === undefined) delete process.env.RELAY_HOME;
     else process.env.RELAY_HOME = prev;
@@ -115,6 +125,7 @@ test('全自动挑人：同一档里报了额度的几位，一周额度先恢�
   const tight = m('claude-official', 'strong', [{ kind: '5h', used: 93, resetsAt: at(1) }, { kind: '7d', used: 40, resetsAt: at(30) }]);
   assert.deepEqual(names(spareFirst([tight, dsh, cursor, codex])), ['cursor-agent', 'deepseek-harness', 'codex', 'claude-official'], '5 小时用了 93%：排到强的最后，没报额度的 Cursor 也在它前面');
   assert.deepEqual(names(spareFirst([cursor, dsh])), ['cursor-agent', 'deepseek-harness'], '都没报：照原样');
+  assert.deepEqual(names(spareFirst([cursor, dsh, codex], new Set(['cursor-agent']))), ['codex', 'deepseek-harness', 'cursor-agent'], '刚出过错的：排到这一档最后');
 });
 
 test('一棒跑完、群聊答完记下工具报的额度（Codex 读它的会话记录，官方账号的 Claude 读输出），全自动挑人时用上；额度用完的恢复时间以工具报的为准', () => {

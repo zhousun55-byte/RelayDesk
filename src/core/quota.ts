@@ -196,6 +196,8 @@ export interface QuotaFile {
   members: Record<string, QuotaEntry>;
   /** 各家工具自己报的额度窗口：at 是什么时候读到的。 */
   limits: Record<string, { at: string; windows: Limit[] }>;
+  /** 调度时出过错的成员：最近一次在什么时候、连着错了几次（做成一棒就清掉）。 */
+  errors: Record<string, { at: string; n: number }>;
 }
 
 export function quotaPath(): string {
@@ -207,9 +209,9 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object'
 export function loadQuotaFile(): QuotaFile {
   try {
     const j = obj(JSON.parse(fs.readFileSync(quotaPath(), 'utf8')));
-    return { members: obj(j.members) as QuotaFile['members'], limits: obj(j.limits) as QuotaFile['limits'] };
+    return { members: obj(j.members) as QuotaFile['members'], limits: obj(j.limits) as QuotaFile['limits'], errors: obj(j.errors) as QuotaFile['errors'] };
   } catch {
-    return { members: {}, limits: {} };
+    return { members: {}, limits: {}, errors: {} };
   }
 }
 
@@ -236,11 +238,31 @@ export function markQuota(member: string, hit: QuotaHit, now = new Date()): Quot
   return e;
 }
 
-export function clearQuota(member: string): void {
+/** 这一位好好做完了一棒：额度用完、出过错的记号都清掉。 */
+export function markOk(member: string): void {
   const f = loadQuotaFile();
-  if (!(member in f.members)) return;
+  if (!(member in f.members) && !(member in f.errors)) return;
   delete f.members[member];
+  delete f.errors[member];
   saveQuota(f);
+}
+
+// ---- 出过错的成员：下一轮全自动也先放到后面（借 magpie：代理节点不通时，不用每轮都先等它错一次） ----
+
+/** 出错后多久内往后放：第 1 次 1 分钟，每多错一次翻倍，最多 10 分钟。 */
+export function errorBackoffMs(n: number): number {
+  return Math.min(10, 2 ** Math.max(0, n - 1)) * 60_000;
+}
+
+export function noteError(member: string, now = new Date()): void {
+  const f = loadQuotaFile();
+  f.errors[member] = { at: now.toISOString(), n: (f.errors[member]?.n ?? 0) + 1 };
+  saveQuota(f);
+}
+
+/** 现在还在「出错后歇一会」里的成员。 */
+export function recentErrors(now = new Date(), all = loadQuotaFile().errors): Set<string> {
+  return new Set(Object.entries(all).flatMap(([name, e]) => (now.getTime() - Date.parse(e.at) < errorBackoffMs(e.n) ? [name] : [])));
 }
 
 // ---- 各家工具自己报的额度窗口 ----

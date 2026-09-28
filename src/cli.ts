@@ -9,6 +9,7 @@ import {
   autoCommand,
   briefCommand,
   diffCommand,
+  exportCommand,
   goCommand,
   initCommand,
   logCommand,
@@ -57,6 +58,7 @@ program.addCommand(stopCommand());
 program.addCommand(logCommand());
 program.addCommand(diffCommand());
 program.addCommand(rollbackCommand());
+program.addCommand(exportCommand());
 program.addCommand(snapCommand());
 program.addCommand(briefCommand());
 program.addCommand(talkCommand());

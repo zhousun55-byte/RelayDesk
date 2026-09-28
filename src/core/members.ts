@@ -79,15 +79,15 @@ export function byStrength(list: MemberInfo[]): MemberInfo[] {
 
 /**
  * 同一档强弱里，报了额度的几位按一周额度哪天恢复重排：先恢复的先上（它剩下的额度不用就作废了），
- * 位置还是它们原来占的那几个，没报额度的不动；有哪个窗口用了九成以上的，挪到这一档最后。
+ * 位置还是它们原来占的那几个，没报额度的不动；有哪个窗口用了九成以上的、刚出过错的（erred），挪到这一档最后。
  */
-export function spareFirst(list: MemberInfo[]): MemberInfo[] {
+export function spareFirst(list: MemberInfo[], erred: ReadonlySet<string> = new Set()): MemberInfo[] {
   const out = [...list];
   const weekEnd = (m: MemberInfo) => Date.parse(m.limits?.find((w) => w.kind === '7d')?.resetsAt ?? '') || Infinity;
   for (const tier of new Set(out.map((m) => m.tier))) {
     const slots = out.flatMap((m, i) => (m.tier === tier ? [i] : []));
     const mine = slots.map((i) => out[i]);
-    const tight = mine.filter((m) => m.limits?.some((w) => w.used >= 90));
+    const tight = mine.filter((m) => erred.has(m.name) || m.limits?.some((w) => w.used >= 90));
     const rest = mine.filter((m) => !tight.includes(m));
     const spare = rest.filter((m) => m.limits?.length).sort((a, b) => weekEnd(a) - weekEnd(b));
     let k = 0;

@@ -9,6 +9,7 @@ import { untilText } from '../core/quota';
 import { snapDiff, takeSnapshot } from '../core/snap';
 import { goLogTail, loadGoState, startGo, stopAllGo, stopGo, type GoState } from '../ops/go';
 import { initProject, newTask } from '../ops/init';
+import { exportRecords } from '../ops/export';
 import { rollbackBefore, undoRollback } from '../ops/rollback';
 import { refreshBrief, track } from '../ops/track';
 import { statusLines } from '../ops/view';
@@ -270,6 +271,16 @@ export function rollbackCommand(): Command {
 /** 恢复完还和目标对不上的文件（删不掉、写不回去）。 */
 function warnLeft(left: string[]): void {
   if (left.length) warn(`这 ${left.length} 个文件没能恢复成那时的样子，看看是不是被别的程序占着：${left.slice(0, 8).join('、')}${left.length > 8 ? ' 等' : ''}`);
+}
+
+export function exportCommand(): Command {
+  return new Command('export')
+    .description('脱敏导出：任务、交接、复核结论、账本、配置复制到一个空文件夹，像密钥的都抹掉（.relay 默认不进 git，想给别人看用它）')
+    .argument('<目录>', '导出到哪（不存在就新建；要是空的）')
+    .action((dest: string) => {
+      const r = exportRecords(requireRoot(), dest);
+      ok(`导出了 ${r.files.length} 个文件到 ${r.dir}（像密钥的都换成了 [REDACTED]）`);
+    });
 }
 
 export function briefCommand(): Command {
