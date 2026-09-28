@@ -685,6 +685,8 @@ class GoRunner {
         m = all.find((x) => x.name === this.opts.who) ?? null;
         if (!m) throw new RelayError(`名单里没有「${this.opts.who}」`, 'no-agent');
         if (!m.canWork) throw new RelayError(`${nameOf(m)} 不能派活：${plain(m.why ?? '不能用')}`, 'cannot-drive');
+        // 网页上在等额度的点不了；命令行指名也一样先拦下（它其实已经恢复了就加 --force）
+        if (m.cooling && !this.opts.force) throw new RelayError(`${nameOf(m)} ${cause.quota(m.cooling)}；确定已经恢复了就加 --force`, 'cooling');
       } else {
         m = this.pick(kind === 'review' ? 'strong' : 'any');
         if (!m) throw new RelayError(kind === 'review' ? '没有能复核的强模型：都没额度或没登录' : '没有能派活的成员：都没额度或没登录', 'nobody');

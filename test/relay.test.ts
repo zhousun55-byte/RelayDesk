@@ -250,10 +250,16 @@ test('额度用完：记下什么时候恢复，自动换下一位接着做；�
   const q = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'quota.json'), 'utf8'));
   assert.ok(q.members.claude.until);
   assert.match(s.relay(['detect', '--offline']), /额度用完/);
-  // 再调度一棒：跳过还在等额度的 claude
+  // 再调度一棒：跳过还在等额度的 claude；指名它也先拦下，写清几点恢复；加 --force 照派
   s.relay(['task', '再做一件', '--step', 'x']);
   s.relay(['go']);
   assert.equal(s.stints().at(-1)!.who.member, 'codex');
+  const n = s.stints().length;
+  assert.match(s.relay(['go', 'claude'], true), /额度用完.*恢复；确定已经恢复了就加 --force/);
+  assert.equal(s.stints().length, n, '没开新的一棒');
+  s.env.FAKE_CLAUDE_MODE = 'work';
+  s.relay(['go', 'claude', '--force']);
+  assert.equal(s.stints().at(-1)!.who.member, 'claude');
 });
 
 test('断网：工具一直在报重连（Codex 断网时永远等下去），连着一阵只剩连不上服务器就停掉、记成出错，换下一位接着做', () => {

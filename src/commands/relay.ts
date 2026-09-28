@@ -121,7 +121,7 @@ export function goCommand(): Command {
     .description('让一个 AI 接着做一棒（接力台替你调度）。不指定人就按顺序挑第一个有额度的')
     .argument('[谁]', '成员名，如 codex、claude、deepseek')
     .option('--full', '完全放开（工具不再拦任何操作；默认是安全档）')
-    .option('--force', '在别的工具里干到一半的那一位已经停下了（额度用完、关掉了），直接换人')
+    .option('--force', '在别的工具里干到一半的那一位已经停下了（额度用完、关掉了），直接换人；指名的那位在等额度也照派（它其实已经恢复了）')
     .action(async (who: string | undefined, opts: { full?: boolean; force?: boolean }) => {
       const root = requireRoot();
       await runAndWait(root, { mode: 'once', ...(who ? { who } : {}), ...(opts.full ? { settings: { level: 'full' } } : {}), ...(opts.force ? { force: true } : {}) });
