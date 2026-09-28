@@ -500,6 +500,8 @@ svg.i {
 /* ---------- 左栏 ---------- */
 
 .left-in {
+  /* 栏拖窄时，顶上几样按这一栏的宽度收（见下面的 @container） */
+  container: left / inline-size;
   width: var(--left);
   height: 100%;
   display: flex;
@@ -523,10 +525,13 @@ svg.i {
   box-shadow: none;
 }
 .seg.view button {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   height: 28px;
+  padding: 0 8px;
   font-size: 13px;
   font-weight: 550;
+  white-space: nowrap;
 }
 .seg.view::before {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.07), inset 0 0 0 1px var(--hair);
@@ -566,6 +571,24 @@ svg.i {
 .find .i {
   width: 14px;
   height: 14px;
+}
+.find {
+  white-space: nowrap;
+}
+/* 栏拖窄了：先藏快捷键，再只留放大镜；页签的字挤一挤，不折行 */
+@container left (max-width: 250px) {
+  .find kbd {
+    display: none;
+  }
+  .seg.view button {
+    padding: 0 5px;
+    font-size: 12.5px;
+  }
+}
+@container left (max-width: 222px) {
+  .find .fl {
+    display: none;
+  }
 }
 .nav {
   flex: 1;

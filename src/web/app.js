@@ -1190,6 +1190,8 @@ function applyLayout() {
   app.style.setProperty('--right', `${UI.right}px`);
   app.classList.toggle('no-left', UI.noLeft);
   app.classList.toggle('no-right', UI.noRight);
+  // 栏宽变了，页签底下的滑块按新的宽度量一次
+  syncSegs();
 }
 
 function closeDrawers() {
@@ -1662,7 +1664,7 @@ function drawLeft() {
       chat
         ? h('button', { class: 'btn line', onclick: newChat, disabled: !!p.pick }, icon('plus'), T`新群聊`)
         : h('button', { class: 'btn line', onclick: newThread, disabled: !!p.pick || (!p.init && !st.projects.length) }, icon('plus'), T`新任务`),
-      h('button', { class: 'find', onclick: () => openPalette() }, icon('search'), T`搜索`, h('kbd', null, keys('⌘K')))
+      h('button', { class: 'find', 'aria-label': T`搜索`, onclick: () => openPalette() }, icon('search'), h('span', { class: 'fl' }, T`搜索`), h('kbd', null, keys('⌘K')))
     ),
     h('nav', { class: 'nav', 'aria-label': T`项目` }, h('div', { class: 'nav-label' }, h('span', { class: 'cap' }, T`项目`), iconBtn(T`打开文件夹`, 'plus', chooseFolder)), projects),
     h(
