@@ -330,7 +330,7 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
         if (!hasGate) throw new ToolError('这个项目没有配置检查命令。');
         return shell(root, input.gateCommand, 10 * 60_000, input.shouldStop, checkEnv());
       case 'run_command':
-        if (input.level !== 'full') throw new ToolError('安全档不能执行任意命令。');
+        if (input.level !== 'full') throw new ToolError('权限是「只在项目里」，不能执行任意命令。');
         if (typeof c.args.command !== 'string' || !c.args.command.trim()) throw new ToolError('缺少 command。');
         return shell(root, c.args.command, 5 * 60_000, input.shouldStop);
       default:

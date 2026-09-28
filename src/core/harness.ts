@@ -13,7 +13,7 @@ import { codexLimits, type Limit } from './quota';
  * 全自动流水线只通过这里调用工具；新增一个工具 = 在 HARNESSES 里加一项。
  */
 
-/** safe：只能改项目文件夹里的文件，命令在工具自己的沙箱里跑；full：完全放开（工具不再拦任何操作）。 */
+/** 权限。safe（只在项目里）：只能改项目文件夹里的文件，命令在工具自己的沙箱里跑；full（不限制）：工具不再拦任何操作。 */
 export type Level = 'safe' | 'full';
 
 /** 工具标准输出的格式（决定怎么解析进度和最后一句话）。 */
@@ -902,7 +902,7 @@ const antigravity: HarnessSpec = {
   // （出沙箱、写项目外、工具执行不是 proceed-in-sandbox 时没放行过的命令）无界面模式下直接拒绝，这一棒停在那儿。1.1.12 起 -p 才认 --mode。
   workLevels: ['safe', 'full'],
   // 写文件的工具不经过沙箱：它设置里允许读写项目外的文件时，项目外也照写不误（1.2.11 实测）
-  unsafe: () => (agySettings()?.allowNonWorkspaceAccess === true ? '设置允许读写项目外的文件，安全档不派活' : undefined),
+  unsafe: () => (agySettings()?.allowNonWorkspaceAccess === true ? '设置允许读写项目外的文件，权限「只在项目里」时不派活' : undefined),
   canReview: true,
   tested: 'partial',
   loginHint: '在终端运行 agy，按提示用 Google 账号登录。',

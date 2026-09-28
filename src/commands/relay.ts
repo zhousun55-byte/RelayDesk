@@ -120,7 +120,7 @@ export function goCommand(): Command {
   return new Command('go')
     .description('让一个 AI 接着做一棒（接力台替你调度）。不指定人就按顺序挑第一个有额度的')
     .argument('[谁]', '成员名，如 codex、claude、deepseek')
-    .option('--full', '完全放开（工具不再拦任何操作；默认是安全档）')
+    .option('--full', '权限不限制（工具不再拦任何操作；默认只在项目里）')
     .option('--force', '在别的工具里干到一半的那一位已经停下了（额度用完、关掉了），直接换人；指名的那位在等额度也照派（它其实已经恢复了）')
     .action(async (who: string | undefined, opts: { full?: boolean; force?: boolean }) => {
       const root = requireRoot();
@@ -179,7 +179,7 @@ export function autoCommand(): Command {
   return new Command('auto')
     .description('全自动：一直接力到任务清单全部打勾。额度用完换人，弱模型的活先请强模型复核，最后强模型终审')
     .argument('[要做什么...]', '顺手写下新任务（不写就接着做当前任务）')
-    .option('--full', '完全放开（工具不再拦任何操作；默认是安全档）')
+    .option('--full', '权限不限制（工具不再拦任何操作；默认只在项目里）')
     .option('--max <棒数>', '最多接力几棒')
     .option('--no-wait', '都没额度了就停下，不等')
     .option('--no-final', '这一次清单打完不终审')

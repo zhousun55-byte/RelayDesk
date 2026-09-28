@@ -411,7 +411,7 @@ export function listMembers(level: Level, report: DetectReport | null = loadDete
     if (!hr && !locateCached(spec)) why = '这台电脑上没找到';
     else if (hr?.login.state === 'no') why = '没登录';
     // 档位不够，或者你给它的设置让安全档守不住：列出来，但不派活
-    const held = !spec.workLevels.includes(level) ? '安全档不能无人值守地干活' : level === 'safe' ? spec.unsafe?.() : undefined;
+    const held = !spec.workLevels.includes(level) ? '权限「只在项目里」时不能无人值守地干活' : level === 'safe' ? spec.unsafe?.() : undefined;
     out.push({
       ...base,
       kind: 'harness',

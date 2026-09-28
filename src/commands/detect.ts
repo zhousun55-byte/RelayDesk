@@ -20,7 +20,7 @@ export function printReport(r: DetectReport): void {
     if (h.model.effort) bits.push(`思考 ${h.model.effort}${h.model.efforts?.length ? `（可选 ${h.model.efforts.join('/')}）` : ''}`);
     bits.push(h.login.detail);
     if (h.tested !== 'yes') bits.push(h.tested === 'partial' ? '部分实测' : '没实测');
-    if (!h.workLevels.includes('safe')) bits.push('只能在「完全放开」档干活');
+    if (!h.workLevels.includes('safe')) bits.push('权限「不限制」时才能干活');
     console.log(`  ${mark(h.login.state)} ${bits.join(' · ')}`);
     if (h.note) info(c.dim(`    ${h.note}`));
     if (h.login.state === 'no') info(c.dim(`    ${h.loginHint}`));
@@ -43,7 +43,7 @@ export function printTeam(): void {
   const s = loadAutoSettings();
   const list = orderMembers(allMembers(s.level), s.order);
   const fmt = (m: MemberInfo) => `${m.label}${m.model ? `（${m.model}）` : ''}`;
-  console.log(c.bold(`成员（${s.level === 'full' ? '完全放开' : '安全档'}；派活按这个顺序，额度用完的跳过）`));
+  console.log(c.bold(`成员（权限：${s.level === 'full' ? '不限制' : '只在项目里'}；派活按这个顺序，额度用完的跳过）`));
   for (const m of list) {
     const tag = m.tier === 'strong' ? c.green('强') : c.yellow('弱');
     const can = m.canWork ? (m.cooling ? c.yellow(`额度用完，${untilText(m.cooling)}`) : '接力台能调度') : c.dim(m.why ?? '不能调度');

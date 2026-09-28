@@ -8,7 +8,7 @@ import { relayHome } from './paths';
 export interface AutoSettings {
   /** 派活的顺序（工人名）。空 = 强的在前、编程工具在前。额度用完的自动跳过。 */
   order: string[];
-  /** safe：改文件只限项目文件夹、命令进工具自己的沙箱；full：完全放开。 */
+  /** 权限。safe（只在项目里）：改文件只限项目文件夹、命令进工具自己的沙箱；full（不限制）：工具不再拦任何操作。 */
   level: Level;
   /** 干活一棒最长多少分钟。 */
   stintTimeoutMin: number;
@@ -52,7 +52,7 @@ export function normalizeAutoSettings(raw: unknown): AutoSettings {
   const d = defaultAutoSettings();
   const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const level = o.level === undefined ? d.level : o.level;
-  if (level !== 'safe' && level !== 'full') throw new RelayError('权限档位只能是 safe（安全）或 full（完全放开）。', 'bad-auto');
+  if (level !== 'safe' && level !== 'full') throw new RelayError('权限只能是 safe（只在项目里）或 full（不限制）。', 'bad-auto');
   // 1.x 的设置：干活的人 workers 当成派活顺序。
   const order = o.order !== undefined ? names(o.order, '派活顺序') : names(o.workers, '派活顺序');
   return {
