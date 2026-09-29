@@ -755,6 +755,35 @@ test('Cursor 一时拿不到模型列表（「Cannot use this model: …. Availa
   }
 });
 
+test('删掉的对话里待复核的棒不再算待复核：项目红点、「第 N 棒待复核」、全自动先复核、验收、接力本都不算；撤销删除就回来', () => {
+  registry([CODEX, DSH]);
+  const { root, write } = project('del-pending', '评估一件事', ['一']);
+  write('.relay/交接/第1棒-0925-1000-dsh.md', handoff('DeepSeek Harness · deepseek-flash', 'DeepSeek Harness', 'deepseek-flash'));
+  write('a.txt', '1\n');
+  track.track(root);
+  const pending = () => ({
+    ledger: ledger.pendingReviews(ledger.loadLedger(root)).map((s) => s.id),
+    view: view.projectView(root).pending.map((s) => s.id),
+    accept: view.projectView(root).acceptance.pending,
+    brief: /## 先复核/.test(fs.readFileSync(path.join(root, '.relay', '接力本.md'), 'utf8')),
+  });
+  assert.deepEqual(pending(), { ledger: [1], view: [1], accept: [1], brief: true }, '弱模型干的一棒待复核');
+  // 删掉正在做的任务（截图里的情形：删完红点、「第 1 棒待复核（共 3 棒）」都还在）
+  const id = init.deleteTask(root);
+  assert.deepEqual(pending(), { ledger: [], view: [], accept: [], brief: false });
+  init.restoreTask(root, id);
+  assert.deepEqual(pending(), { ledger: [1], view: [1], accept: [1], brief: true }, '撤销删除：又算待复核');
+  // 换了新任务、把旧的那段从左边删掉：一样不算
+  init.newTask(root, '下一件事');
+  const old = view.projectView(root).threads[0];
+  const hidden = require('../src/ops/hidden') as typeof import('../src/ops/hidden');
+  hidden.setThreadHidden(root, old.key, true);
+  assert.deepEqual(pending().ledger, []);
+  assert.deepEqual(view.projectView(root).pending, []);
+  hidden.setThreadHidden(root, old.key, false);
+  assert.deepEqual(pending().ledger, [1]);
+});
+
 test('右键删除：群聊挪进 .relay/已删除的群聊/、左边不再列出，撤销能找回；还有 AI 在说的不删。对话（任务）只是不列出，正在做的那段删不掉', () => {
   const { root } = project('ctx-delete', '第一个任务');
   // 群聊：正在用的一段、存档的一段

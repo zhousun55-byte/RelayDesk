@@ -105,7 +105,8 @@ export function acceptance(input: AcceptInput): Acceptance {
   else if (input.unrecorded) items.push({ kind: 'open', text: '文件夹里有还没记上账的改动' });
 
   // 复核
-  const pending = closed.filter((s) => s.review === 'needed');
+  // 删掉的对话里的棒不算（见 ledger.ts 的 deletedStintIds）
+  const pending = closed.filter((s) => s.review === 'needed' && !v.deleted?.has(s.id));
   for (const s of pending) items.push({ kind: 'review', text: pendingReason(s, dropped), stint: s.id });
 
   // 终审

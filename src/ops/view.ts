@@ -273,7 +273,7 @@ export function projectView(root: string): ProjectView {
     task: { title: t.title, body: t.body, items: t.items, rules: t.rules, empty: t.empty, done: p.done, total: p.total, complete: taskComplete(t) },
     now,
     go: go ? { ...go, logTail: goLogTail(root, go) } : null,
-    pending: views.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack),
+    pending: views.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack && !v.deleted?.has(s.id)),
     stints: [...views].reverse(),
     lastRollback: lr && !lr.restored ? { ts: lr.ts, label: lr.label, dropped: lr.dropped, undone, ...(lr.left?.length ? { left: lr.left } : {}), ...(lr.interrupted ? { interrupted: true } : {}), ...(lr.task ? { task: { unchecked: lr.task.unchecked, ...(lr.task.missing ? { missing: true } : {}) } } : {}) } : null,
     config: { gate: cfg.gate.command, protectedPaths: cfg.protectedPaths, ...(configError ? { error: configError } : {}) },

@@ -126,7 +126,7 @@ export function buildBrief(input: BriefInput): string {
   else if (open && open.via === 'native') s.push(`> 现在：第 ${open.id} 棒还没交接（${open.who.label}，${when(open.startedAt)} 开始有改动）。如果那就是你，接着写你的交接就行。`, '');
 
   // 待复核
-  const pending = live.filter((x) => x.review === 'needed' && x.status !== 'working');
+  const pending = live.filter((x) => x.review === 'needed' && x.status !== 'working' && !ledger.deleted?.has(x.id));
   // 派活的终审一起复核：只写一份结论（接力台记到每一棒上），不用逐棒看。
   const merged = open?.kind === 'final' && open.targets?.length && open.reviewFile ? open : null;
   if (pending.length && merged) {

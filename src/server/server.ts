@@ -11,7 +11,7 @@ import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
 import { findHarness } from '../core/harness';
 import { copyToClipboard, fillTemplate, reveal, runOpener, chooseFolder } from '../core/launch';
-import { loadLedger, markReview } from '../core/ledger';
+import { loadLedger, markReview, pendingReviews } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
 import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
 import { appNameOf, llmName, toolName } from '../core/names';
@@ -174,7 +174,7 @@ function projectList(current: string | null) {
     try {
       const v = loadLedger(abs);
       init = !!v.init;
-      pending = v.stints.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack).length;
+      pending = pendingReviews(v).length;
       live = !!v.open;
     } catch {
       /* 读不了当没接入 */
@@ -564,6 +564,8 @@ export function createServer(opts: ServerOptions): http.Server {
       const key = str(b.key) ?? '';
       if (!key) throw new RelayError('不知道是哪一段对话。', 'bad-thread');
       setThreadHidden(root, key, b.hidden !== false);
+      // 删掉的对话里的棒不再算待复核：接力本里「先复核」那一节跟着变
+      refreshBrief(root);
       return {};
     },
     '/api/talk/resume': (q, b) => {

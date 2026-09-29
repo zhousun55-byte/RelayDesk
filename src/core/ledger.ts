@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { RelayError } from './errors';
+import { hiddenThreads } from './hidden';
 
 /**
  * 账本 .relay/journal.jsonl：每一棒、每次退回、每次换任务，只追加不改写。
@@ -289,6 +290,8 @@ export interface LedgerView {
   task: TaskEvent | null;
   /** 读不出来的行（有就没法验收）。 */
   bad?: BadLine[];
+  /** 删掉的对话（左边不再列出的那几段）里的棒：不再算待复核。只有按项目读账本（loadLedger）时才有。 */
+  deleted?: Set<number>;
 }
 
 /** 把账本折成现在的样子。 */
@@ -354,7 +357,30 @@ export function countedReviews(s: Pick<Stint, 'reviews'>, rolledBack: ReadonlySe
 
 export function loadLedger(root: string): LedgerView {
   const { events, bad } = readLedgerFull(root);
-  return viewLedger(events, bad);
+  const v = viewLedger(events, bad);
+  const deleted = deletedStintIds(v, hiddenThreads(root));
+  return deleted.size ? { ...v, deleted } : v;
+}
+
+/**
+ * 删掉的对话里的棒（按换任务切段，和网页左边的对话一一对应；按这段开始的时间认，见 hidden.ts）。
+ * 它们不再算待复核：项目的红点、「第 N 棒待复核」、全自动先复核、验收、接力本都不算。账本不动，撤销删除就又算了。
+ * 最后一段是正在做的任务，不按这个算（删它走删除任务，删完它就不是最后一段了）。
+ */
+export function deletedStintIds(v: LedgerView, hidden: ReadonlySet<string>): Set<number> {
+  const out = new Set<number>();
+  if (!v.init || !hidden.size) return out;
+  const starts = [v.init.ts, ...taskChanges(v.events).map((e) => e.ts)];
+  for (let i = 0; i < starts.length - 1; i++) {
+    if (!hidden.has(starts[i])) continue;
+    const lo = i === 0 ? -Infinity : Date.parse(starts[i]);
+    const hi = Date.parse(starts[i + 1]);
+    for (const s of v.stints) {
+      const at = Date.parse(s.startedAt);
+      if (at >= lo && at < hi) out.add(s.id);
+    }
+  }
+  return out;
 }
 
 export function requireInit(root: string): LedgerView {
@@ -381,9 +407,9 @@ export function nextStintId(v: LedgerView): number {
   return (v.stints.at(-1)?.id ?? 0) + 1;
 }
 
-/** 待复核的棒（没作废、已经结束的）。 */
+/** 待复核的棒（没作废、已经结束的；删掉的对话里的不算）。 */
 export function pendingReviews(v: LedgerView): Stint[] {
-  return v.stints.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack);
+  return v.stints.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack && !v.deleted?.has(s.id));
 }
 
 export function findStint(v: LedgerView, id: number): Stint | null {
