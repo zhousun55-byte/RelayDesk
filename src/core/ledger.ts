@@ -188,6 +188,16 @@ export interface TaskEvent {
   taskCopy?: string;
   /** 在「派活」页写的任务：全自动用派活（强模型拆、弱模型做）。 */
   mode?: 'dispatch';
+  /** 删除正在做的任务（清单清空）：删掉的那份清单的副本编号，撤销时写回去。 */
+  deleted?: string;
+  /** 撤销删除任务：撤销的是哪一笔（那一笔的时间）。这一删一撤两笔都不算换任务。 */
+  undo?: string;
+}
+
+/** 账上算数的换任务：删除任务又撤销了的，那两笔都不算（像没删过一样）。 */
+export function taskChanges(events: LedgerEvent[]): TaskEvent[] {
+  const undone = new Set(events.flatMap((e) => (e.type === 'task' && e.undo ? [e.undo] : [])));
+  return events.filter((e): e is TaskEvent => e.type === 'task' && !e.undo && !undone.has(e.ts));
 }
 
 /** 接力台自己改了项目里的文件（比如更新 AGENTS.md 里的规矩）：从这里重新算，不算到哪一棒头上。 */
@@ -287,7 +297,6 @@ export function viewLedger(events: LedgerEvent[], bad: BadLine[] = []): LedgerVi
   let init: InitEvent | null = null;
   let base: string | null = null;
   let lastRollback: RollbackEvent | null = null;
-  let task: TaskEvent | null = null;
   for (const ev of events) {
     if (ev.type === 'init') {
       if (!init) init = ev;
@@ -311,8 +320,6 @@ export function viewLedger(events: LedgerEvent[], bad: BadLine[] = []): LedgerVi
         const s = byId.get(id);
         if (s) delete s.rolledBack;
       }
-    } else if (ev.type === 'task') {
-      task = ev;
     } else if (ev.type === 'base') {
       base = ev.snap;
     }
@@ -321,6 +328,7 @@ export function viewLedger(events: LedgerEvent[], bad: BadLine[] = []): LedgerVi
   const dropped = new Set(stints.filter((s) => s.rolledBack).map((s) => s.id));
   for (const s of stints) s.review = reviewStateOf(s, dropped);
   const open = [...stints].reverse().find((s) => s.status === 'working') ?? null;
+  const task = taskChanges(events).at(-1) ?? null;
   return { events, init, stints, open, base, lastRollback, task, bad };
 }
 
@@ -406,7 +414,7 @@ export function markReview(root: string, id: number, review: 'skip' | 'needed', 
 
 /** 当前任务是在哪一页写的：派活页写的用派活，别的都是接力。 */
 export function taskMode(v: LedgerView): 'dispatch' | 'relay' {
-  return [...v.events].reverse().find((e): e is TaskEvent => e.type === 'task')?.mode === 'dispatch' ? 'dispatch' : 'relay';
+  return taskChanges(v.events).at(-1)?.mode === 'dispatch' ? 'dispatch' : 'relay';
 }
 
 /** 一棒在做什么：干活、复核、终审、拆解。 */

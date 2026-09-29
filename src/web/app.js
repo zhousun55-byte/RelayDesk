@@ -1747,9 +1747,10 @@ function threadEl(t) {
   );
 }
 
-/** 左边一段对话（一个任务）的右键菜单。正在做的那一段删不掉（写新任务就换下去了）。 */
+/** 左边一段对话（一个任务）的右键菜单。正在做的那一段也能删（清单清空），全自动在跑、有一棒还没交接时删不了。 */
 function threadMenuItems(t) {
   const run = runState();
+  const busy = t.current && (run.running || run.waiting || run.native);
   const word = pageOf(t) === 'dispatch' ? T`派活` : T`全自动`;
   return [
     { label: T`打开`, icon: 'route', run: () => selectThread(t) },
@@ -1758,7 +1759,7 @@ function threadMenuItems(t) {
     t.current && S.st.project.pending.length ? { label: T`复核`, icon: 'review', disabled: !reviewer() || run.running, run: reviewNow } : null,
     { label: T`复制标题`, icon: 'copy', run: () => copyToast(t.title) },
     '-',
-    { label: T`删除对话`, sub: t.current ? T`正在做的任务` : '', icon: 'trash', disabled: t.current, run: () => hideThread(t) },
+    { label: T`删除对话`, sub: busy ? T`AI 还在做` : '', icon: 'trash', disabled: busy || (t.current && S.st.project.task.empty), run: () => (t.current ? deleteTask(t) : hideThread(t)) },
   ];
 }
 
@@ -1777,6 +1778,28 @@ async function hideThread(t) {
   if (S.thread === t.id) S.thread = null;
   leave(el);
   if (!still()) await new Promise((r) => setTimeout(r, 160));
+  await refresh(true);
+  toast(T`已删除对话`, { action: undo });
+}
+
+/**
+ * 删除正在做的任务：任务清单清空、左边不再列出（每一棒的记录、交接、快照都留着），回到写新任务的样子；
+ * 提示里能撤销（还没写新任务时，原来的清单写回去，接着做）。
+ */
+async function deleteTask(t) {
+  const el = LE.body.querySelector(`.thread[data-id="${t.id}"]`);
+  const p = pin();
+  let r;
+  try {
+    r = await p.api('/api/task/delete', {});
+  } catch (e) {
+    return fail(T`删除对话`, e);
+  }
+  const undo = { label: T`撤销`, run: () => act(null, () => api('/api/task/restore', { dir: p.dir || undefined, id: r.id })).then(() => loadTalk()) };
+  if (p.moved()) return toast(T`已删除对话`, { action: undo });
+  S.thread = null;
+  leave(el);
+  if (!still()) await new Promise((res) => setTimeout(res, 160));
   await refresh(true);
   toast(T`已删除对话`, { action: undo });
 }

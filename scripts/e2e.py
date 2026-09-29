@@ -166,11 +166,16 @@ def main():
 
             page.get_by_label('页面').get_by_role('tab', name='接力').click()
             page.wait_for_timeout(400)
-            # 右键：正在做的任务删不掉；旧的那段「删除对话」→ 不见了，撤销 → 回来；中间空白处有常用操作
+            # 右键：正在做的任务也能删（清单清空，回到写新任务），撤销 → 原样回来；旧的那段「删除对话」→ 不见了，撤销 → 回来；中间空白处有常用操作
             threads = page.locator('.left-body .thread:not(.draft)')
+            cur_id = threads.first.get_attribute('data-id')
             threads.first.click(button='right')
-            check(menu.get_by_role('menuitem', name='删除对话').is_disabled(), '右键正在做的任务：「删除对话」点不了')
-            page.keyboard.press('Escape')
+            menu.get_by_role('menuitem', name='删除对话').click()
+            page.wait_for_function('() => S.st.project.task.empty && document.querySelector(".left-body .thread.draft")', timeout=5000)
+            page.locator('.toast').get_by_role('button', name='撤销').click()
+            page.wait_for_function('() => S.st.project.task.title === "再加一个导入"', timeout=5000)
+            page.locator(f'.thread[data-id="{cur_id}"]').wait_for(timeout=5000)
+            check(True, '右键删除正在做的任务：清单清空、回到写新任务，撤销后原样回来')
             old = threads.nth(1)
             old_id = old.get_attribute('data-id')
             old.click(button='right')

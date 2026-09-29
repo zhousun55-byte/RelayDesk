@@ -789,4 +789,27 @@ test('右键删除：群聊挪进 .relay/已删除的群聊/、左边不再列�
   assert.deepEqual(ts.map((t) => !!t.hidden), [true, false], '正在做的那段删不掉');
   hidden.setThreadHidden(root, ts[0].key, false);
   assert.equal(view.projectView(root).threads[0].hidden, undefined);
+
+  // 删除正在做的任务：清单清空、左边不再列出，账本里每一棒不动；还没写新任务时能撤销，像没删过一样
+  const shape = () => view.projectView(root).threads.map((t) => [t.title, t.current, !!t.hidden]);
+  const raw = notes.readTask(root).raw;
+  const id = init.deleteTask(root);
+  assert.ok(notes.readTask(root).empty);
+  assert.deepEqual(shape(), [['第一个任务', false, false], ['第二个任务', false, true], ['', true, false]]);
+  assert.throws(() => init.deleteTask(root), /还没有任务/);
+  init.restoreTask(root, id);
+  assert.equal(notes.readTask(root).raw, raw, '清单原样写回（连同打的勾）');
+  assert.deepEqual(shape(), [['第一个任务', false, false], ['第二个任务', true, false]]);
+  assert.equal(ledger.loadLedger(root).task?.title, '第二个任务');
+  assert.throws(() => init.restoreTask(root, id), /撤销不了/, '已经撤销过了');
+  // 全自动在跑（调度锁在它手里）：删不了
+  const lock = require('../src/ops/lock') as typeof import('../src/ops/lock');
+  const release = lock.acquireLock(root);
+  assert.throws(() => init.deleteTask(root), /全自动还在跑，先停止再删/);
+  release();
+  // 删了以后又写了新任务：撤销不了，删掉的那段还是不列出
+  const id2 = init.deleteTask(root);
+  init.newTask(root, '第三个任务');
+  assert.throws(() => init.restoreTask(root, id2), /撤销不了/);
+  assert.deepEqual(shape(), [['第一个任务', false, false], ['第二个任务', false, true], ['第三个任务', true, false]]);
 });

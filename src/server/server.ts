@@ -24,7 +24,7 @@ import { archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, talkFi
 import { adoptOption, castHumanVote, readVotes, startVote } from '../core/vote';
 import { goActive, startGo, stopGo } from '../ops/go';
 import { setThreadHidden } from '../ops/hidden';
-import { checkRoot, initProject, liveProjects, newTask } from '../ops/init';
+import { checkRoot, deleteTask, initProject, liveProjects, newTask, restoreTask } from '../ops/init';
 import { buildStamp, keeperMode } from '../ops/keeper';
 import { rollbackBefore, undoRollback } from '../ops/rollback';
 import { refreshBrief, relayBusy, trackAndGate } from '../ops/track';
@@ -525,6 +525,17 @@ export function createServer(opts: ServerOptions): http.Server {
       return {};
     },
     // 左边删掉一段对话（任务）/ 撤销：只是不再列出。
+    '/api/task/delete': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      return { id: deleteTask(root) };
+    },
+    '/api/task/restore': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      restoreTask(root, str(b.id) ?? '');
+      return {};
+    },
     '/api/thread/hide': (q, b) => {
       const root = dirOf(q, b);
       requireProject(root);

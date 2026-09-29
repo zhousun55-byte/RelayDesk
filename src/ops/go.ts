@@ -8,7 +8,7 @@ import { loadAutoSettings, normalizeAutoSettings, type AutoSettings, langNote } 
 import { errorMessage, RelayError } from '../core/errors';
 import { refreshHarnessModel } from '../core/detect';
 import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from '../core/harness';
-import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, taskMode, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
+import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, taskChanges, taskMode, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { killTree, pidAlive } from '../core/proc';
 import { allMembers, orderMembers, readyMembers, spareFirst, type MemberInfo } from '../core/members';
@@ -272,7 +272,7 @@ function nextStep(task: TaskDoc): Step | undefined {
 
 /** 这个任务是什么时候写下的（没有就是接入的时候）。 */
 function taskSince(v: LedgerView): number {
-  return Date.parse([...v.events].reverse().find((e) => e.type === 'task')?.ts ?? v.init?.ts ?? '');
+  return Date.parse(taskChanges(v.events).at(-1)?.ts ?? v.init?.ts ?? '');
 }
 
 /** 这个任务派活时拆过没有：任务写下之后有一棒拆解交接了。 */

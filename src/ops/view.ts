@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { acceptance, pendingWhy, type Acceptance, type AcceptInput } from '../core/acceptance';
 import { loadAutoSettings } from '../core/auto-settings';
-import { countedReviews, KIND_WORD, loadLedger, statusWord, stintTitle, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
+import { countedReviews, KIND_WORD, loadLedger, statusWord, stintTitle, taskChanges, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
 import { archivedTaskTitles, handoffFilled, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
 import { whoName } from '../core/names';
 import { protocolState } from '../core/protocol';
@@ -176,7 +176,7 @@ function toView(s: Stint, rolledBack: ReadonlySet<number>, summary = s.summary ?
 /** 按「换任务」把账本切成一段一段；没标题、没棒的空段并进下一段。 */
 export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadView[] {
   if (!v.init) return [];
-  const changes = v.events.filter((e): e is TaskEvent => e.type === 'task');
+  const changes = taskChanges(v.events);
   const last = changes.length;
   // 第一段的标题：换任务时记下的旧任务；旧版账本没记，就从存档里对（存档按换任务的先后追加，从后往前对齐；
   // 存档比换任务的次数少，说明第一段是空任务，换的时候没存档）。
@@ -221,7 +221,7 @@ export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadVie
       current,
       ...(sp.mode ? { mode: sp.mode } : {}),
       key: sp.from,
-      // 正在做的那一段删不掉
+      // 正在做的那一段不按这个藏（删它走 init.ts 的 deleteTask：清单一起清空，它就不是正在做的了）
       ...(!current && hidden.has(sp.from) ? { hidden: true } : {}),
     });
   });
