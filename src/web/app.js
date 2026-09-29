@@ -1061,7 +1061,14 @@ document.addEventListener(
   true
 );
 
+/** 右键时照常出浏览器自己的菜单（复制、粘贴、存图）：选中了字，或者点在输入框、链接上。 */
+function nativeWanted(e) {
+  return !!String(getSelection() || '').trim() || !!e.target.closest?.('input, textarea, [contenteditable="true"], a[href]');
+}
+
+/** 右键菜单：和「更多」按钮是同一套菜单，从点的地方弹出来。菜单里一项都没有就不拦浏览器自己的。 */
 function ctx(e, items) {
+  if (e.defaultPrevented || nativeWanted(e) || !items.some((it) => it && it !== '-' && !it.head)) return;
   e.preventDefault();
   openMenu({ x: e.clientX, y: e.clientY }, items);
 }
@@ -1384,7 +1391,7 @@ function threads() {
 /** 这一页的任务：派活页只列在派活页写的，接力页列别的（线路还是按全部任务切，见 rangeOf）。 */
 function pageThreads() {
   const dispatch = S.view === 'dispatch';
-  return threads().filter((t) => (t.mode === 'dispatch') === dispatch);
+  return threads().filter((t) => !t.hidden && (t.mode === 'dispatch') === dispatch);
 }
 
 /** 这个任务在哪一页。 */
@@ -1718,10 +1725,40 @@ function threadEl(t) {
   const live = threadStints(t).some((s) => s.status === 'working');
   return h(
     'button',
-    { class: 'thread', 'data-id': String(t.id), onclick: () => selectThread(t) },
+    { class: 'thread', 'data-id': String(t.id), onclick: () => selectThread(t), oncontextmenu: (e) => ctx(e, threadMenuItems(t)) },
     h('span', { class: 't' }, t.title || T`未命名`),
     h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : t.pending ? [h('span', { class: 'rd' }), T`待复核 ${t.pending}`] : when(lastActive(t)))
   );
+}
+
+/** 左边一段对话（一个任务）的右键菜单。正在做的那一段删不掉（写新任务就换下去了）。 */
+function threadMenuItems(t) {
+  const run = runState();
+  const word = pageOf(t) === 'dispatch' ? T`派活` : T`全自动`;
+  return [
+    { label: T`打开`, icon: 'route', run: () => selectThread(t) },
+    t.current && (run.running || run.waiting) ? { label: T`停止`, icon: 'stop', run: stopNow } : null,
+    t.current && !run.running && !run.waiting ? { label: word, icon: 'bolt', disabled: !ready().length || accepted() || S.st.project.task.empty, run: () => act(null, () => startWork('/api/auto', {}), T`已开始${word}`) } : null,
+    t.current && S.st.project.pending.length ? { label: T`复核`, icon: 'review', disabled: !reviewer() || run.running, run: reviewNow } : null,
+    { label: T`复制标题`, icon: 'copy', run: () => copyToast(t.title) },
+    '-',
+    { label: T`删除对话`, sub: t.current ? T`正在做的任务` : '', icon: 'trash', disabled: t.current, run: () => hideThread(t) },
+  ];
+}
+
+/** 删除一段对话：左边不再列出（每一棒的记录、交接、快照都留着），提示里能撤销。 */
+async function hideThread(t) {
+  const el = LE.body.querySelector(`.thread[data-id="${t.id}"]`);
+  try {
+    await api('/api/thread/hide', { key: t.key, hidden: true });
+  } catch (e) {
+    return fail(T`删除对话`, e);
+  }
+  if (S.thread === t.id) S.thread = null;
+  leave(el);
+  if (!still()) await new Promise((r) => setTimeout(r, 160));
+  await refresh(true);
+  toast(T`已删除对话`, { action: { label: T`撤销`, run: () => act(null, () => api('/api/thread/hide', { key: t.key, hidden: false })) } });
 }
 
 function projMenuItems(pr) {
@@ -1852,7 +1889,38 @@ function buildCenter() {
   CE.hero = h('section', { class: 'hero', hidden: true });
   CE.paper = h('canvas', { class: 'paper', 'aria-hidden': 'true' });
   $('#center').addEventListener('pointermove', paperPointer, { passive: true });
+  // 中间没有自己菜单的地方（空白处、顶栏、任务标题）右键：这一页常用的操作；看文件时是这个页签的菜单
+  $('#center').addEventListener('contextmenu', (e) => {
+    if (!S.st || e.target.closest('.composer-wrap, .tabs')) return;
+    if (S.tab > 0 && !CE.doc.hidden && CE.doc.contains(e.target)) return ctx(e, tabMenuItems(S.tabs[S.tab - 1], S.tab - 1));
+    ctx(e, centerMenuItems());
+  });
   $('#center').append(CE.paper, CE.offline, CE.cfgBad, CE.bar, CE.tabs, CE.chat, CE.doc, CE.hero);
+}
+
+/** 中间空白处的右键菜单：接力、派活页是全自动 / 停止、复核、新任务和「更多」里的几项；群聊页是新群聊、删除这段。 */
+function centerMenuItems() {
+  const p = S.st.project;
+  if (p.pick || !p.init) return [];
+  if (S.view === 'chat') {
+    const x = S.chat ? (S.talk.sessions || []).find((s) => s.id === S.chat) || { id: S.chat, title: '' } : { id: '', title: talkTitle(S.talk) };
+    return [...sessionMenuItems(x, true), '-', { label: REVEAL, icon: 'folder', run: () => reveal('') }];
+  }
+  const run = runState();
+  const word = pageOf(threads().at(-1)) === 'dispatch' ? T`派活` : T`全自动`;
+  return [
+    run.running || run.waiting
+      ? { label: T`停止`, icon: 'stop', run: stopNow }
+      : { label: word, icon: 'bolt', disabled: !ready().length || accepted() || p.task.empty, run: () => act(null, () => startWork('/api/auto', {}), T`已开始${word}`) },
+    p.pending.length ? { label: T`复核`, sub: reviewer() ? memberName(reviewer()) : T`没有可用的强模型`, icon: 'review', disabled: !reviewer() || run.running, run: reviewNow } : null,
+    { label: T`新任务`, icon: 'plus', run: newThread },
+    '-',
+    { label: T`编辑任务`, icon: 'pencil', run: editTaskRaw },
+    { label: T`接力本`, sub: SUB.brief, icon: 'book', run: openBrief },
+    { label: T`对账`, sub: SUB.snap, icon: 'sync', run: snapNow },
+    { label: T`复制开场白`, sub: SUB.hint, icon: 'copy', run: copyHint },
+    { label: REVEAL, icon: 'folder', run: () => reveal('') },
+  ];
 }
 
 function onScroll() {
@@ -2983,9 +3051,17 @@ function checklist(task) {
     task.items.map((it, i) => {
       const next = !it.done && !marked;
       if (next) marked = true;
+      const toggle = () => {
+        const cur = S.st.project.task.items[i];
+        editStep({ op: 'toggle', index: i, done: !cur.done }, () => (cur.done = !cur.done));
+      };
+      const remove = () => editStep({ op: 'remove', index: i }, () => S.st.project.task.items.splice(i, 1));
       return h(
         'li',
-        { class: it.done ? 'done' : next ? 'next' : null },
+        {
+          class: it.done ? 'done' : next ? 'next' : null,
+          oncontextmenu: (e) => ctx(e, [{ label: it.done ? T`去掉勾` : T`打勾`, icon: 'check', run: toggle }, { label: T`复制`, icon: 'copy', run: () => copyToast(it.text) }, '-', { label: T`删除这一步`, icon: 'trash', run: remove }]),
+        },
         h(
           'button',
           {
@@ -2993,15 +3069,12 @@ function checklist(task) {
             role: 'checkbox',
             'aria-checked': String(it.done),
             'aria-label': it.text,
-            onclick: () => {
-              const cur = S.st.project.task.items[i];
-              editStep({ op: 'toggle', index: i, done: !cur.done }, () => (cur.done = !cur.done));
-            },
+            onclick: toggle,
           },
           icon('check')
         ),
         h('span', { class: 'step' }, h('span', { html: inline(esc(it.text)) }), !it.done && it.note ? h('small', { html: inline(esc(it.note)) }) : null),
-        h('button', { class: 'x', 'aria-label': T`删除这一步`, 'data-tip': T`删除`, onclick: () => editStep({ op: 'remove', index: i }, () => S.st.project.task.items.splice(i, 1)) }, icon('x'))
+        h('button', { class: 'x', 'aria-label': T`删除这一步`, 'data-tip': T`删除`, onclick: remove }, icon('x'))
       );
     }),
     h(
@@ -3028,7 +3101,7 @@ function talkRow(r) {
     const { body, files } = splitFiles(r.text);
     return h(
       'div',
-      { class: 'me' },
+      { class: 'me', oncontextmenu: (e) => ctx(e, msgMenuItems(body)) },
       h('span', { class: 'cap' }, [r.mode === 'solo' ? T`对比` : '', clock(r.ts)].filter(Boolean).join(' · ')),
       ...(body ? foldable(h('div', { class: 'note', html: inline(esc(body)) }), body) : []),
       files.length ? h('div', { class: 'att' }, files.map(fileEl)) : null
@@ -3059,11 +3132,31 @@ function foldable(box, text) {
   return [box, btn];
 }
 
+/** 群聊里一句话的右键菜单：复制、引用到输入框（问下一句时带上它）。 */
+function msgMenuItems(text) {
+  if (!text) return [];
+  return [
+    { label: T`复制`, icon: 'copy', run: () => copyToast(text) },
+    { label: T`引用`, icon: 'insert', run: () => quoteInto(text) },
+  ];
+}
+
+/** 把一段话引用进输入框（每行前面加「> 」，太长的截短）。 */
+function quoteInto(text) {
+  const t = text.length > 1500 ? `${text.slice(0, 1500)}…` : text;
+  const q = t.split('\n').map((l) => `> ${l}`).join('\n');
+  if (!C.wrap.isConnected) setView('chat');
+  C.ta.value = `${C.ta.value.trim() ? `${C.ta.value.trimEnd()}\n\n` : ''}${q}\n\n`;
+  onComposerInput();
+  C.ta.focus();
+  C.ta.setSelectionRange(C.ta.value.length, C.ta.value.length);
+}
+
 function aiRow(r, compact) {
   const name = nameOf(r.who, r.model);
   return h(
     'div',
-    { class: 'ai' },
+    { class: 'ai', oncontextmenu: (e) => ctx(e, msgMenuItems(r.text)) },
     h('span', { class: 'who-tile', 'data-tip': memberByName(r.agent) ? memberTip(memberByName(r.agent)) : name }, tile({ agent: r.agent, label: r.who, model: r.model })),
     h('div', null, h('div', { class: 'who' }, h('b', null, name), compact ? null : h('span', { class: 'time' }, clock(r.ts))), ...foldable(h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) }), r.text)),
     compact ? null : h('div', { class: 'hover-acts' }, iconBtn(T`复制`, 'copy', () => copyToast(r.text)))
@@ -3513,7 +3606,41 @@ function talkNews() {
 
 function sessionEl(x) {
   const live = x.id ? !!x.busy : talkLive();
-  return h('button', { class: 'thread', 'data-id': `chat:${x.id}`, onclick: () => selectChat(x.id || null) }, h('span', { class: 't' }, x.title), h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : x.at ? when(x.at) : T`现在`));
+  return h('button', { class: 'thread', 'data-id': `chat:${x.id}`, onclick: () => selectChat(x.id || null), oncontextmenu: (e) => ctx(e, sessionMenuItems(x)) }, h('span', { class: 't' }, x.title), h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : x.at ? when(x.at) : T`现在`));
+}
+
+/** 一段群聊的右键菜单（inside：在这段群聊里面点的，不用「打开」）。还有 AI 在说、在投票的删不了。 */
+function sessionMenuItems(x, inside = false) {
+  const live = x.id ? !!x.busy : talkLive();
+  const empty = !x.id && !talkHas(S.talk);
+  return [
+    inside ? null : { label: T`打开`, icon: 'chat', run: () => selectChat(x.id || null) },
+    { label: T`新群聊`, icon: 'plus', run: newChat },
+    x.title && !empty ? { label: T`复制标题`, icon: 'copy', run: () => copyToast(x.title) } : null,
+    '-',
+    { label: T`删除群聊`, sub: live ? T`AI 还在说` : '', icon: 'trash', disabled: live || empty, run: () => deleteChat(x) },
+  ];
+}
+
+/** 删除一段群聊：挪进 .relay/已删除的群聊/，提示里能撤销（撤销后是一段存档的群聊）。 */
+async function deleteChat(x) {
+  const el = LE.body.querySelector(`.thread[data-id="chat:${x.id}"]`);
+  let r;
+  try {
+    r = await api('/api/talk/delete', { id: x.id || '' });
+  } catch (e) {
+    return fail(T`删除群聊`, e);
+  }
+  if ((S.chat || '') === (x.id || '')) {
+    S.chat = null;
+    S.archive = null;
+  }
+  if (x.id) leave(el);
+  if (!still()) await new Promise((res) => setTimeout(res, 160));
+  streamThread = null;
+  await loadTalk();
+  renderAll();
+  if (r.id) toast(T`已删除群聊`, { action: { label: T`撤销`, run: () => act(null, () => api('/api/talk/restore', { id: r.id })).then(() => loadTalk()) } });
 }
 
 function selectChat(id) {
@@ -3749,6 +3876,27 @@ function openTab(tab) {
   renderCenter();
 }
 
+/** 页签的右键菜单。 */
+function tabMenuItems(t, i) {
+  const file = t.type === 'file' ? t.path : '';
+  return [
+    { label: T`关闭`, icon: 'x', run: () => closeTab(i) },
+    S.tabs.length > 1 ? { label: T`关闭其他`, icon: 'x', run: () => closeOtherTabs(i) } : null,
+    file ? '-' : null,
+    file ? { label: T`引用`, icon: 'insert', run: () => addFile(file) } : null,
+    file ? { label: T`复制路径`, icon: 'copy', run: () => copyToast(file) } : null,
+    file ? { label: REVEAL, icon: 'folder', run: () => reveal(file) } : null,
+  ];
+}
+
+function closeOtherTabs(i) {
+  const keep = S.tabs[i];
+  for (const t of S.tabs) if (t !== keep) S.docs.delete(tabKey(t));
+  S.tabs = [keep];
+  S.tab = 1;
+  renderCenter();
+}
+
 function closeTab(i) {
   const [t] = S.tabs.splice(i, 1);
   if (t) S.docs.delete(tabKey(t));
@@ -3794,6 +3942,7 @@ function renderTabs() {
             renderRight();
           },
           onauxclick: (e) => e.button === 1 && closeTab(i),
+          oncontextmenu: (e) => ctx(e, tabMenuItems(t, i)),
           onkeydown: (e) => e.key === 'Enter' && e.currentTarget.click(),
         },
         icon(t.type === 'file' ? 'file' : t.type === 'diff' ? 'diff' : t.type === 'log' ? 'log' : 'book'),

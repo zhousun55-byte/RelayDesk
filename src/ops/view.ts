@@ -9,6 +9,7 @@ import { protocolState } from '../core/protocol';
 import { untilText } from '../core/quota';
 import { changedSince } from '../core/snap';
 import { goLogTail, loadGoState, type GoState } from './go';
+import { hiddenThreads } from './hidden';
 import { projectConfigSafe, relayBusy } from './track';
 
 /**
@@ -65,6 +66,10 @@ export interface ThreadView {
   current: boolean;
   /** 在「派活」页写的任务。 */
   mode?: 'dispatch';
+  /** 这段对话从什么时候开始（换任务那一刻，第一段是接入的时候）：删除对话时按它认。 */
+  key: string;
+  /** 在左边删掉了（只是不列出，棒和账本都还在）。 */
+  hidden?: boolean;
 }
 
 export interface ProjectView {
@@ -189,6 +194,7 @@ export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadVie
     ...changes.map((e, i) => ({ from: e.ts, title: i === last - 1 ? task.title || e.title : changes[i + 1].prev || e.title, ...(e.mode ? { mode: e.mode } : {}) })),
   ];
   const out: ThreadView[] = [];
+  const hidden = hiddenThreads(root);
   let carry: string | null = null;
   spans.forEach((sp, i) => {
     const from = carry ?? sp.from;
@@ -214,6 +220,9 @@ export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadVie
       pending: mine.filter((s) => s.review === 'needed' && s.status !== 'working' && !s.rolledBack).length,
       current,
       ...(sp.mode ? { mode: sp.mode } : {}),
+      key: sp.from,
+      // 正在做的那一段删不掉
+      ...(!current && hidden.has(sp.from) ? { hidden: true } : {}),
     });
   });
   return out;

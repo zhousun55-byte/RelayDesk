@@ -59,6 +59,7 @@ def main():
         'RELAY_TERMINAL': 'off',
     }
     subprocess.run(['node', CLI, 'init', '加一个导出'], cwd=repo, env=env, check=True, capture_output=True)
+    subprocess.run(['node', CLI, 'task', '再加一个导入'], cwd=repo, env=env, check=True, capture_output=True)
     # 群聊里一句很长的话（之前发的）：网页上先收起
     with open(os.path.join(repo, '.relay', 'talk.jsonl'), 'a') as f:
         f.write(json.dumps({'ts': '2026-09-29T08:00:00.000Z', 'kind': 'human', 'who': '我', 'text': '\n'.join(f'第 {i} 行需求说明' for i in range(1, 31))}, ensure_ascii=False) + '\n')
@@ -153,7 +154,34 @@ def main():
             page.wait_for_function('() => document.body.innerText.includes("日志第 60 行")', timeout=5000)
             check(True, '点那个小条：在页签里看到粘进来的全文')
             page.locator('#center').get_by_role('tab', name='群聊').click()
+
+            # 右键：左边这段群聊「删除群聊」→ 不见了，点提示里的「撤销」→ 回来（成了一段存档的群聊）
+            menu = page.locator('.menu:not(.leave)')
+            page.locator('.thread[data-id="chat:"]').click(button='right')
+            menu.get_by_role('menuitem', name='删除群聊').click()
+            page.wait_for_function('() => !document.querySelector(".thread[data-id^=\\"chat:talk-\\"]") && S.talk.rows.length === 0', timeout=5000)
+            page.locator('.toast').get_by_role('button', name='撤销').click()
+            page.locator('.thread[data-id^="chat:talk-"]').wait_for(timeout=5000)
+            check(True, '右键删除群聊：左边不见了，撤销后回来')
+
             page.get_by_label('页面').get_by_role('tab', name='接力').click()
+            page.wait_for_timeout(400)
+            # 右键：正在做的任务删不掉；旧的那段「删除对话」→ 不见了，撤销 → 回来；中间空白处有常用操作
+            threads = page.locator('.left-body .thread:not(.draft)')
+            threads.first.click(button='right')
+            check(menu.get_by_role('menuitem', name='删除对话').is_disabled(), '右键正在做的任务：「删除对话」点不了')
+            page.keyboard.press('Escape')
+            old = threads.nth(1)
+            old_id = old.get_attribute('data-id')
+            old.click(button='right')
+            menu.get_by_role('menuitem', name='删除对话').click()
+            page.wait_for_function(f'() => !document.querySelector(\'.thread[data-id="{old_id}"]\')', timeout=5000)
+            page.locator('.toast').get_by_role('button', name='撤销').click()
+            page.locator(f'.thread[data-id="{old_id}"]').wait_for(timeout=5000)
+            check(True, '右键删除旧的对话：左边不见了，撤销后回来')
+            page.locator('.stream').click(button='right', position={'x': 8, 'y': 8})
+            check(menu.get_by_role('menuitem', name='新任务').count() == 1 and menu.get_by_role('menuitem', name='接力本').count() == 1, '中间空白处右键：新任务、接力本这些常用操作')
+            page.keyboard.press('Escape')
 
             # 窗口窄于 1180px：右栏自己收起；宽回来自己打开（没改你记下的）
             no_right = '() => document.querySelector(".app").classList.contains("no-right")'

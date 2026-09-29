@@ -20,9 +20,10 @@ import { isInside } from '../core/paths';
 import { untilText } from '../core/quota';
 import { agentKind, findAgent, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
-import { archiveTalk, readTalk, resumeTalk, say, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
+import { archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
 import { adoptOption, castHumanVote, readVotes, startVote } from '../core/vote';
 import { goActive, startGo, stopGo } from '../ops/go';
+import { setThreadHidden } from '../ops/hidden';
 import { checkRoot, initProject, liveProjects, newTask } from '../ops/init';
 import { buildStamp, keeperMode } from '../ops/keeper';
 import { rollbackBefore, undoRollback } from '../ops/rollback';
@@ -515,6 +516,21 @@ export function createServer(opts: ServerOptions): http.Server {
     // 新群聊：正在用的存档（左栏里还看得到）。还有人在说、在投也行：他们接着写进存档的那段。
     '/api/talk/clear': (q, b) => ({ archived: archiveTalk(dirOf(q, b)) }),
     // 接着一个存档的群聊：它换成正在用的，原来正在用的存档。
+    // 删除一段群聊（挪进 .relay/已删除的群聊/）；找回。
+    '/api/talk/delete': (q, b) => ({ id: deleteTalk(dirOf(q, b), str(b.id) || null) }),
+    '/api/talk/restore': (q, b) => {
+      restoreTalk(dirOf(q, b), str(b.id) ?? '');
+      return {};
+    },
+    // 左边删掉一段对话（任务）/ 撤销：只是不再列出。
+    '/api/thread/hide': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      const key = str(b.key) ?? '';
+      if (!key) throw new RelayError('不知道是哪一段对话。', 'bad-thread');
+      setThreadHidden(root, key, b.hidden !== false);
+      return {};
+    },
     '/api/talk/resume': (q, b) => {
       resumeTalk(dirOf(q, b), str(b.id) ?? '');
       return {};

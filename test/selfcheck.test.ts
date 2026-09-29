@@ -754,3 +754,39 @@ test('Cursor 一时拿不到模型列表（「Cannot use this model: …. Availa
     else process.env.RELAY_RETRY_MS = was;
   }
 });
+
+test('右键删除：群聊挪进 .relay/已删除的群聊/、左边不再列出，撤销能找回；还有 AI 在说的不删。对话（任务）只是不列出，正在做的那段删不掉', () => {
+  const { root } = project('ctx-delete', '第一个任务');
+  // 群聊：正在用的一段、存档的一段
+  talk.appendTalk(root, { kind: 'human', who: '我', text: '旧的问题' });
+  const old = talk.archiveTalk(root)!;
+  talk.appendTalk(root, { kind: 'human', who: '我', text: '新的问题' });
+  assert.equal(talk.deleteTalk(root, old), old);
+  assert.ok(fs.existsSync(path.join(root, '.relay', '已删除的群聊', `${old}.jsonl`)), '没真删');
+  assert.deepEqual(talk.talkSessions(root).map((x) => x.id), []);
+  talk.restoreTalk(root, old);
+  assert.deepEqual(talk.talkSessions(root).map((x) => x.id), [old]);
+  // 正在用的那段：先存档再挪走，正在用的变成空的
+  const cur = talk.deleteTalk(root, null)!;
+  assert.ok(cur && cur !== old);
+  assert.equal(talk.readTalk(root).length, 0);
+  assert.equal(talk.deleteTalk(root, null), null, '空的就什么都不做');
+  // 有 AI 在说：不删
+  const th = talk.threadOf(talk.talkFile(root, old));
+  th.votes++;
+  assert.throws(() => talk.deleteTalk(root, old), /还有 AI 在说/);
+  th.votes--;
+  talk.releaseThread(th);
+
+  // 对话（任务）
+  init.newTask(root, '第二个任务');
+  const hidden = require('../src/ops/hidden') as typeof import('../src/ops/hidden');
+  let ts = view.projectView(root).threads;
+  assert.deepEqual(ts.map((t) => [t.title, t.current]), [['第一个任务', false], ['第二个任务', true]]);
+  hidden.setThreadHidden(root, ts[0].key, true);
+  hidden.setThreadHidden(root, ts[1].key, true);
+  ts = view.projectView(root).threads;
+  assert.deepEqual(ts.map((t) => !!t.hidden), [true, false], '正在做的那段删不掉');
+  hidden.setThreadHidden(root, ts[0].key, false);
+  assert.equal(view.projectView(root).threads[0].hidden, undefined);
+});
