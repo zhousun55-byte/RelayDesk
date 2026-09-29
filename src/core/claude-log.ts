@@ -134,13 +134,15 @@ interface Edit {
  * visit 返回 false：这个会话不用再往前看了。
  */
 function scanEdits(fromMs: number, needles: string[], visit: (e: Edit) => boolean | void): void {
+  // 记录是 JSON：Windows 路径里的反斜杠写成两个（C:\\Users\\…），两种写法都找
+  const keys = [...new Set(needles.flatMap((n) => [n, JSON.stringify(n).slice(1, -1)]))];
   for (const file of recentLogs(fromMs - SLACK)) {
     eachLineFromEnd(file, (line) => {
       // 一行里最后一个 timestamp 才是这一条的时间（前面的可能在工具参数里）。
       const ts = [...line.matchAll(/"timestamp":"([^"]+)"/g)].at(-1)?.[1];
       const at = ts ? Date.parse(ts) : NaN;
       if (Number.isFinite(at) && at < fromMs - SLACK) return false;
-      if (!Number.isFinite(at) || !line.includes('"assistant"') || !needles.some((n) => line.includes(n))) return true;
+      if (!Number.isFinite(at) || !line.includes('"assistant"') || !keys.some((n) => line.includes(n))) return true;
       let j: { type?: string; isSidechain?: boolean; entrypoint?: string; message?: { model?: unknown; content?: unknown } };
       try {
         j = JSON.parse(line);

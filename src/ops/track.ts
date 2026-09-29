@@ -32,7 +32,7 @@ import {
   type ReviewDoc,
 } from '../core/notes';
 import { matchProtected } from '../core/protected';
-import { changeLine, generatedPath, headSnap, snapChanges, snapDiff, takeSnapshot } from '../core/snap';
+import { changeLine, generatedPath, headSnap, snapChanges, snapDiff, sumChanges, takeSnapshot } from '../core/snap';
 import { stampLocal } from '../core/time';
 import { needsReview, resolveWho, sameModel, UNKNOWN_WHO } from '../core/tier';
 import type { RelayConfig } from '../core/types';
@@ -92,13 +92,7 @@ function joinNote(...parts: (string | undefined)[]): string | undefined {
 
 export function factsOf(root: string, from: string, to: string): Facts {
   const files = snapChanges(root, from, to);
-  let added = 0;
-  let removed = 0;
-  for (const f of files) {
-    added += f.added ?? 0;
-    removed += f.removed ?? 0;
-  }
-  return { files: files.length, added, removed, paths: files.slice(0, 200).map((f) => f.path) };
+  return { ...sumChanges(files), paths: files.slice(0, 200).map((f) => f.path) };
 }
 
 function nowIso(d = new Date()): string {
@@ -324,10 +318,6 @@ export interface GateOptions {
   absorb?: 'all' | 'generated';
 }
 
-/**
- * 跑检查命令，把结果记到这一棒上（没配检查命令就什么都不做）。
- * 配置文件坏了、检查根本跑不起来：记成「没跑成」，不能当成没配检查。
- */
 let gatesRunning = 0;
 
 /** 这个接力台进程里有没有检查命令在跑。 */
@@ -335,6 +325,10 @@ export function gateBusy(): boolean {
   return gatesRunning > 0;
 }
 
+/**
+ * 跑检查命令，把结果记到这一棒上（没配检查命令就什么都不做）。
+ * 配置文件坏了、检查根本跑不起来：记成「没跑成」，不能当成没配检查。
+ */
 export async function gateStint(root: string, id: number, cfg?: RelayConfig, opts: GateOptions = {}): Promise<void> {
   const record = (gate: Stint['gate'], note?: string) => {
     const s = loadLedger(root).stints.find((x) => x.id === id);

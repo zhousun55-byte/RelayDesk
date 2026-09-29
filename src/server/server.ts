@@ -56,7 +56,7 @@ let detecting: Promise<unknown> | null = null;
 function detectInChild(offline: boolean): Promise<{ report: DetectReport | null; changes: string[] }> {
   return new Promise((resolve, reject) => {
     const cli = path.join(__dirname, '..', 'cli.js');
-    const child = spawn(process.execPath, [cli, 'detect', '--json', ...(offline ? ['--offline'] : [])], { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [cli, 'detect', '--json', ...(offline ? ['--offline'] : [])], { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let out = '';
     let err = '';
     child.stdout.setEncoding('utf8');
@@ -138,12 +138,21 @@ function pickFolder(root: string, init: boolean): boolean {
 
 function projectList(current: string | null) {
   const roots = [...(current ? [current] : []), ...(loadMemory().recents ?? [])];
+  // 同一个文件夹的两种写法（经过链接的 /var 和 /private/var、Windows 上大小写不同）只列一次
+  const real = (r: string) => {
+    try {
+      return fs.realpathSync.native(path.resolve(r));
+    } catch {
+      return path.resolve(r);
+    }
+  };
   const seen = new Set<string>();
   const out: { root: string; name: string; init: boolean; current: boolean; pending: number; live: boolean }[] = [];
   for (const r of roots) {
     const abs = path.resolve(r);
-    if (seen.has(abs) || !fs.existsSync(abs)) continue;
-    seen.add(abs);
+    const key = real(abs);
+    if (seen.has(key) || !fs.existsSync(abs)) continue;
+    seen.add(key);
     let init = false;
     let pending = 0;
     let live = false;
@@ -155,7 +164,7 @@ function projectList(current: string | null) {
     } catch {
       /* 读不了当没接入 */
     }
-    out.push({ root: abs, name: path.basename(abs), init, current: abs === current, pending, live });
+    out.push({ root: abs, name: path.basename(abs), init, current: !!current && key === real(current), pending, live });
     if (out.length >= 15) break;
   }
   return out;

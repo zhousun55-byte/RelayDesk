@@ -195,7 +195,6 @@ export async function stopAllGo(timeoutMs = 10_000): Promise<void> {
   if (timer) clearTimeout(timer);
 }
 
-/** 这个进程是不是当时派出去的那个工具（进程号可能已经被别的程序用了：命令对不上就不动它）。 */
 /**
  * 工具那一组里还活着的进程（工具是 detached 起的，自成一组，组号就是它的进程号）。
  * 只看组长不够：Codex 记下的是外层的 node 启动器，干活的是它起的子进程，启动器没了子进程还在接着改文件（2026-09-28 实测）。

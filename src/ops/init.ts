@@ -46,8 +46,14 @@ export function checkRoot(dir: string): string {
   const root = path.resolve(dir);
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new RelayError(`找不到文件夹：${root}`, 'no-dir');
   const home = os.homedir();
-  const bad = new Set(['/', home, path.join(home, 'Desktop'), path.join(home, 'Documents'), path.join(home, 'Downloads'), '/Users', '/Applications', '/System', '/usr', '/etc', '/private', '/tmp', '/var']);
-  if (bad.has(root)) throw new RelayError(`「${root}」太大了，不像是一个项目。选具体的项目文件夹。`, 'bad-root');
+  // Windows 上路径不分大小写，盘符根目录（C:\）、Windows、Program Files、Users 也不行
+  const win = process.platform === 'win32';
+  const key = (p: string) => (win ? path.resolve(p).toLowerCase() : p);
+  const sys = win
+    ? [process.env.SystemRoot, process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramData, path.dirname(home)].filter((x): x is string => !!x)
+    : ['/Users', '/Applications', '/System', '/usr', '/etc', '/private', '/tmp', '/var'];
+  const bad = new Set([home, path.join(home, 'Desktop'), path.join(home, 'Documents'), path.join(home, 'Downloads'), ...sys].map(key));
+  if (path.parse(root).root === root || bad.has(key(root))) throw new RelayError(`「${root}」太大了，不像是一个项目。选具体的项目文件夹。`, 'bad-root');
   if (root === path.resolve(relayHome()) || root.startsWith(path.resolve(relayHome()) + path.sep)) throw new RelayError('不能接入接力台自己的数据文件夹。', 'bad-root');
   return root;
 }

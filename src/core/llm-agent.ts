@@ -240,12 +240,17 @@ function editFile(root: string, args: Record<string, unknown>, protectedPaths: s
   const { abs, rel } = resolveIn(root, args.path, true);
   assertWritable(rel, protectedPaths);
   if (!fs.existsSync(abs)) throw new ToolError(`没有这个文件：${rel}（新文件用 write_file）`);
-  const oldS = args.old_string;
-  const newS = args.new_string;
-  if (typeof oldS !== 'string' || !oldS) throw new ToolError('缺少 old_string。');
-  if (typeof newS !== 'string') throw new ToolError('缺少 new_string。');
+  if (typeof args.old_string !== 'string' || !args.old_string) throw new ToolError('缺少 old_string。');
+  if (typeof args.new_string !== 'string') throw new ToolError('缺少 new_string。');
+  let oldS: string = args.old_string;
+  let newS: string = args.new_string;
   if (newS.includes(REDACTED) && !oldS.includes(REDACTED)) throw new ToolError(KEEP_SECRET);
   const text = fs.readFileSync(abs, 'utf8');
+  // 文件是 \r\n 换行的（Windows 上写的），模型给的是 \n：按文件的换行来比、来写
+  if (oldS.includes('\n') && !text.includes(oldS) && text.includes('\r\n')) {
+    oldS = oldS.replace(/\r?\n/g, '\r\n');
+    newS = newS.replace(/\r?\n/g, '\r\n');
+  }
   const count = text.split(oldS).length - 1;
   if (count === 0) throw new ToolError(oldS.includes(REDACTED) ? KEEP_SECRET : '文件里找不到 old_string（要和原文一字不差，包括空格和换行）。先 read_file 看准再改。');
   if (count > 1 && args.replace_all !== true) throw new ToolError(`old_string 出现了 ${count} 次。多带几行上下文让它唯一，或者 replace_all=true。`);

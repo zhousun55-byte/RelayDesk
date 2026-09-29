@@ -28,12 +28,13 @@ export function exportRecords(root: string, dest: string): { dir: string; files:
       return [];
     }
   };
-  const picks = [TASK_REL, path.relative(root, relayConfigPath(root)), path.relative(root, ledgerPath(root)), ...md(HANDOFF_DIR), ...md(REVIEW_DIR)];
+  const rel = (abs: string) => path.relative(root, abs).split(path.sep).join('/');
+  const picks = [TASK_REL, rel(relayConfigPath(root)), rel(ledgerPath(root)), ...md(HANDOFF_DIR), ...md(REVIEW_DIR)];
   const files: string[] = [];
-  for (const rel of picks) {
-    const src = path.join(root, rel);
+  for (const p of picks) {
+    const src = path.join(root, p);
     if (!fs.existsSync(src)) continue;
-    const out = rel.replace(/^\.relay\//, '');
+    const out = p.replace(/^\.relay\//, '');
     fs.mkdirSync(path.dirname(path.join(dir, out)), { recursive: true });
     fs.writeFileSync(path.join(dir, out), redactSecrets(fs.readFileSync(src, 'utf8')));
     files.push(out);
