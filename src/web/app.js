@@ -3029,7 +3029,7 @@ function talkRow(r) {
       'div',
       { class: 'me' },
       h('span', { class: 'cap' }, [r.mode === 'solo' ? T`对比` : '', clock(r.ts)].filter(Boolean).join(' · ')),
-      body ? h('div', { class: 'note', html: inline(esc(body)) }) : null,
+      ...(body ? foldable(h('div', { class: 'note', html: inline(esc(body)) }), body) : []),
       files.length ? h('div', { class: 'att' }, files.map(fileEl)) : null
     );
   }
@@ -3759,7 +3759,7 @@ function closeTab(i) {
 }
 
 function tabLabel(t) {
-  if (t.type === 'file') return basename(t.path);
+  if (t.type === 'file') return fileLabel(t.path);
   if (t.type === 'diff') return t.path ? T`${basename(t.path)} · 第 ${t.id} 棒` : T`第 ${t.id} 棒 · 改动`;
   if (t.type === 'log') return T`第 ${t.id} 棒 · 日志`;
   return T`接力本`;
@@ -4206,7 +4206,7 @@ function updateComposer() {
             },
           },
           isShot(f) ? h('img', { class: 'thumb', src: rawUrl(f), alt: '' }) : icon('file'),
-          h('span', { class: 'ell' }, fileLabel(f)),
+          h('span', { class: 'ell', onclick: () => (isShot(f) ? window.open(rawUrl(f), '_blank', 'noopener') : viewFile(f)) }, fileLabel(f)),
           h(
             'button',
             {
@@ -4346,12 +4346,22 @@ async function uploadFiles(files) {
   C.ta.focus();
 }
 
-/** 粘贴截图、从访达复制的文件：传上去。带格式的文字（网页、文档里复制的）照常粘贴成字。 */
+/**
+ * 粘贴截图、从访达复制的文件：传上去。带格式的文字（网页、文档里复制的）照常粘贴成字。
+ * 很长的一段字（超过 2000 字或 40 行）存成一个文字文件带上，输入框里只占一个小条，AI 按路径打开读。
+ * 任务页的输入框空着时粘进来的就是任务本身（第一行标题、「- 」开头的是步骤），照常粘成字；「/」命令后面的字也是。
+ */
 function onComposerPaste(e) {
   const files = [...(e.clipboardData?.files || [])];
-  if (!files.length || e.clipboardData.types.includes('text/html')) return;
+  if (files.length && !e.clipboardData.types.includes('text/html')) {
+    e.preventDefault();
+    return uploadFiles(files);
+  }
+  const text = e.clipboardData?.getData('text/plain') || '';
+  const lines = text.split('\n').length;
+  if ((text.length < 2000 && lines < 40) || S.slash || (C.kind === 'task' && !C.ta.value.trim())) return;
   e.preventDefault();
-  uploadFiles(files);
+  uploadFiles([new File([text], T`粘贴的文字（${lines} 行）.txt`, { type: 'text/plain' })]);
 }
 
 /** 人说的话最后一段全是反引号括起来的路径：那是带上的文件，画成缩略图和文件小条。 */
@@ -4364,8 +4374,14 @@ function splitFiles(text) {
 
 function fileEl(f) {
   if (isShot(f)) return h('a', { class: 'shot', href: rawUrl(f), target: '_blank', rel: 'noopener', 'data-tip': fileLabel(f) }, h('img', { src: rawUrl(f), alt: fileLabel(f), loading: 'lazy' }));
-  const up = f.startsWith(UPLOADS);
-  return h('button', { class: 'chip line', 'data-tip': f, onclick: () => (up ? window.open(rawUrl(f), '_blank', 'noopener') : openFile(f)) }, icon('file'), h('span', { class: 'ell' }, fileLabel(f)));
+  return h('button', { class: 'chip line', 'data-tip': f, onclick: () => viewFile(f) }, icon('file'), h('span', { class: 'ell' }, fileLabel(f)));
+}
+
+/** 点开一个带上的文件：项目里的文件在文件树里选中再打开；传上来的文字文件在页签里看，别的（pdf、视频……）交给浏览器。 */
+function viewFile(f) {
+  if (!f.startsWith(UPLOADS)) openFile(f);
+  else if (/\.(txt|md|markdown|log|csv|tsv|json|ya?ml|toml|xml)$/i.test(f)) openTab({ type: 'file', path: f, view: 0 });
+  else window.open(rawUrl(f), '_blank', 'noopener');
 }
 
 function onComposerKey(e) {

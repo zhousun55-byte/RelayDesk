@@ -2498,6 +2498,9 @@ button.busy::after {
 .composer .opt-row .chip {
   padding-right: 3px;
 }
+.composer .attach .chip .ell {
+  cursor: pointer;
+}
 /* 带上的图片：小条里一枚缩略图；正在传的转圈 */
 .chip .thumb {
   width: 16px;
@@ -3951,14 +3954,16 @@ button.busy::after {
   animation-duration: 0.28s;
 }
 
-/* 群聊里的长回答先收起 */
-.ai .text.fold {
+/* 群聊里的长回答、人说的长话先收起 */
+.ai .text.fold,
+.me .note.fold {
   max-height: 15em;
   overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, #000 62%, transparent);
   mask-image: linear-gradient(to bottom, #000 62%, transparent);
 }
-.ai .unfold {
+.ai .unfold,
+.me .unfold {
   margin-top: 2px;
   font-size: 12.5px;
 }

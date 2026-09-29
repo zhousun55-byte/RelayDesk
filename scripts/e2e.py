@@ -59,6 +59,9 @@ def main():
         'RELAY_TERMINAL': 'off',
     }
     subprocess.run(['node', CLI, 'init', '加一个导出'], cwd=repo, env=env, check=True, capture_output=True)
+    # 群聊里一句很长的话（之前发的）：网页上先收起
+    with open(os.path.join(repo, '.relay', 'talk.jsonl'), 'a') as f:
+        f.write(json.dumps({'ts': '2026-09-29T08:00:00.000Z', 'kind': 'human', 'who': '我', 'text': '\n'.join(f'第 {i} 行需求说明' for i in range(1, 31))}, ensure_ascii=False) + '\n')
     port = free_port()
     ui = subprocess.Popen(['node', CLI, 'ui', repo, '--port', str(port), '--no-open'], cwd=repo, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     url = f'http://127.0.0.1:{port}/'
@@ -123,6 +126,34 @@ def main():
             page.keyboard.press('Escape')
             page.wait_for_timeout(500)
             check(page.locator('.settings').count() == 0, '设置：按 Esc 关掉')
+
+            # 群聊：之前发的长话先收起，点「展开」看全文；粘进来很长的一段字存成文件带上，输入框里只有一个小条，点开在页签里看
+            page.get_by_role('tab', name='群聊').click()
+            page.locator('.me .note').first.wait_for()
+            folded = page.locator('.me .note.fold').count() == 1
+            page.locator('.me').get_by_role('button', name='展开').click()
+            page.wait_for_timeout(350)
+            check(folded and page.locator('.me .note.fold').count() == 0, '群聊：长话先收起，点「展开」看全文')
+            long = '\n'.join(f'日志第 {i} 行：导出失败' for i in range(1, 61))
+            paste = '''(text) => {
+              const ta = document.querySelector('.composer textarea');
+              ta.focus();
+              const dt = new DataTransfer();
+              dt.setData('text/plain', text);
+              const e = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+              ta.dispatchEvent(e);
+              return e.defaultPrevented;
+            }'''
+            check(not js(paste, '短短一句'), '粘一句短的：照常粘成字')
+            taken = js(paste, long)
+            chip = page.locator('.composer .attach .chip').filter(has_text='粘贴的文字（60 行）.txt')
+            chip.wait_for(timeout=5000)
+            check(taken and js('() => document.querySelector(".composer textarea").value') == '' and js('() => S.files[0]').startswith('.relay/uploads/'), '粘一大段字：存成文件带上，输入框里是空的')
+            chip.locator('.ell').click()
+            page.wait_for_function('() => document.body.innerText.includes("日志第 60 行")', timeout=5000)
+            check(True, '点那个小条：在页签里看到粘进来的全文')
+            page.locator('#center').get_by_role('tab', name='群聊').click()
+            page.get_by_label('页面').get_by_role('tab', name='接力').click()
 
             # 窗口窄于 1180px：右栏自己收起；宽回来自己打开（没改你记下的）
             no_right = '() => document.querySelector(".app").classList.contains("no-right")'

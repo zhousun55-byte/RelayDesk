@@ -370,6 +370,7 @@ const EN = {
   输入: 'Input',
   上传文件: 'Upload files',
   上传中: 'Uploading',
+  '粘贴的文字（{} 行）.txt': (n) => `Pasted text (${many(n, 'line')}).txt`,
   上传: 'upload',
   '上传「{}」': 'upload "{}"',
   '传不上去（{}）': "Couldn't upload ({})",
