@@ -162,6 +162,48 @@ test('同一个工具加几个模型：列出工具能换的模型、勾选加�
   }
 });
 
+test('对话：每一棒记下在工具里的对话，网页能读；这个项目文件夹里自己在工具里开的对话列出来（接力台派的不列，设置里能关）；回到原工具接着说', async () => {
+  const s = sandbox('sessions');
+  withFakes(s);
+  s.relay(['detect', '--offline']);
+  const ui = await startUi(s);
+  try {
+    assert.equal((await ui.call(`/api/sessions${q(s)}`)).status, 400, '没接入的文件夹不读');
+    await ui.call('/api/init', { dir: s.repo });
+    await ui.call('/api/task', { dir: s.repo, text: '做一件事', steps: ['第一件'] });
+    await ui.call('/api/go', { dir: s.repo, who: 'claude' });
+    await until(15_000, async () => (await ui.call(`/api/state${q(s)}`)).json.project.go?.status === 'done', '这一棒做完');
+    const st = await ui.call(`/api/state${q(s)}`);
+    const sess = st.json.project.stints[0].session;
+    assert.equal(sess.tool, 'claude');
+    const read = await ui.call(`/api/session${q(s)}&tool=${sess.tool}&id=${sess.id}`);
+    assert.equal(read.status, 200, JSON.stringify(read.json));
+    assert.deepEqual(read.json.messages.map((m: { role: string; text: string }) => [m.role, m.text]), [['user', '接着做']]);
+
+    // 自己在 Claude 桌面版里开的一段
+    const real = fs.realpathSync(s.repo);
+    const dir = path.join(s.home, '.claude', 'projects', real.replace(/[^A-Za-z0-9]/g, '-'));
+    fs.writeFileSync(path.join(dir, 'desk-000001.jsonl'), JSON.stringify({ type: 'user', cwd: real, entrypoint: 'claude-desktop', message: { role: 'user', content: '自己问的' } }) + '\n');
+    let list = await ui.call(`/api/sessions${q(s)}`);
+    assert.deepEqual(
+      list.json.sessions.map((x: { id: string; title: string }) => [x.id, x.title]),
+      [['desk-000001', '自己问的']],
+      '接力台派的那段不列'
+    );
+    await ui.call('/api/settings', { settings: { showSessions: false } });
+    list = await ui.call(`/api/sessions${q(s)}`);
+    assert.deepEqual(list.json.sessions, [], '设置里关掉就不列');
+
+    const open = await ui.call('/api/session/open', { dir: s.repo, tool: 'codex', id: 'abc-123456' });
+    assert.match(open.json.command, /codex resume abc-123456$/);
+    assert.equal((await ui.call('/api/session/open', { dir: s.repo, tool: 'claude', id: sess.id })).status, 200);
+    assert.equal((await ui.call('/api/session/open', { dir: s.repo, tool: 'dsh', id: 'abc-123456' })).status, 400);
+    assert.equal((await ui.call(`/api/session${q(s)}&tool=claude&id=${encodeURIComponent('../../x')}`)).status, 400);
+  } finally {
+    ui.child.kill();
+  }
+});
+
 test('网页开着时盯着文件夹：你在别的工具里改文件、写交接，接力台自动记上账', async () => {
   const s = sandbox('srv-watch');
   withFakes(s);

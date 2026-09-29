@@ -227,7 +227,7 @@ const layer = { querySelector: () => (menuOpen ? {} : null) };
 let reloads = 0;
 const location = { reload() { reloads++; } };
 let renders = 0;
-const renderAll = () => { renders++; }, toast = () => {};
+const renderAll = () => { renders++; }, toast = () => {}, loadSessions = () => {};
 const show = (el, on) => { el.hidden = !on; };
 let build = 'a';
 async function api() { return { build, project: { root: 'A' } }; }

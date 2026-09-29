@@ -62,6 +62,8 @@ export interface InvokeInput {
   effort?: string;
   /** 支持的工具会把最后一句话写进这个文件。 */
   outFile: string;
+  /** 接着工具里这段对话说（对话编号）。不支持的工具不管它。 */
+  resume?: string;
 }
 
 export interface Invocation {
@@ -434,6 +436,7 @@ function claudeInvoke(loc: Located, i: InvokeInput, settings: Record<string, unk
   if (Object.keys(settings).length) a.push('--settings', JSON.stringify(settings));
   if (i.model) a.push('--model', i.model);
   if (i.effort) a.push('--effort', i.effort);
+  if (i.resume) a.push('--resume', i.resume);
   return { argv: a, stdin: i.prompt, format: 'claude', env: { ...CLAUDE_ENV } };
 }
 
@@ -617,13 +620,16 @@ const codex: HarnessSpec = {
     return { model: s.model, label: s.model, effort: s.effort, efforts: s.efforts, via: s.provider };
   },
   invoke(loc, i) {
-    const a = [...loc.exec, 'exec', '--skip-git-repo-check', '--color', 'never', '-C', i.cwd, '--json', '-o', i.outFile];
+    // 接着一段对话：codex exec resume 编号（它不认 -C、-s、--color：在项目文件夹里起，沙箱用 -c 写）
+    const resume = !!i.resume && !i.readOnly;
+    const a = resume ? [...loc.exec, 'exec', 'resume', '--skip-git-repo-check', '--json', '-o', i.outFile] : [...loc.exec, 'exec', '--skip-git-repo-check', '--color', 'never', '-C', i.cwd, '--json', '-o', i.outFile];
     if (i.readOnly) a.push('-s', 'read-only', '--ephemeral');
     else if (i.level === 'full') a.push('--dangerously-bypass-approvals-and-sandbox');
     // 安全档：Codex 自己的沙箱，只能写工作目录，默认不联网。
-    else a.push('-s', 'workspace-write');
+    else a.push(...(resume ? ['-c', 'sandbox_mode="workspace-write"'] : ['-s', 'workspace-write']));
     if (i.model) a.push('-m', i.model);
     if (i.effort) a.push('-c', `model_reasoning_effort="${i.effort}"`);
+    if (resume) a.push(i.resume!);
     a.push('-');
     return { argv: a, stdin: i.prompt, format: 'codex', outFile: i.outFile };
   },
@@ -756,6 +762,7 @@ const cursorAgent: HarnessSpec = {
     // 名单里没指定：用你在 Cursor 里选的（命令行自己的默认可能还停在旧模型上）
     const model = i.model ?? cursorSettings().model;
     if (model) a.push('--model', model);
+    if (i.resume) a.push('--resume', i.resume);
     a.push(i.prompt);
     return { argv: a, format: 'cursor' };
   },
@@ -1032,6 +1039,7 @@ const antigravity: HarnessSpec = {
     a.push(...(i.readOnly ? ['--mode', 'plan'] : i.level === 'full' ? ['--dangerously-skip-permissions'] : ['--mode', 'accept-edits']), '--sandbox');
     if (i.model) a.push('--model', i.model);
     if (i.effort) a.push('--effort', i.effort);
+    if (i.resume) a.push('--conversation', i.resume);
     return { argv: a, format: 'agy' };
   },
   models: listModels(['models']),

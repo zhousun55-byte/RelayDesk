@@ -4056,3 +4056,51 @@ button.busy::after {
   margin-top: 2px;
   font-size: 12.5px;
 }
+
+/* ---------- 工具里的对话：人说的靠右一块浅灰，AI 答的照常排，用了什么工具一行灰字 ---------- */
+.sess {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 760px;
+  padding: 4px 0 32px;
+}
+.sess .sm.user {
+  align-self: flex-end;
+  max-width: 82%;
+}
+.sess .sm.user .note {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--fog);
+  font-size: 13.5px;
+}
+.sess .sm.ai {
+  font-size: 13.5px;
+}
+.sess .sm.tool {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11.5px/1.5 var(--mono);
+  color: var(--ink-3);
+}
+.thread.sess-head .t {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-3);
+}
+.thread.sess-head .caret {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.2s var(--ease);
+}
+.thread.sess-head[aria-expanded='true'] .caret {
+  transform: rotate(90deg);
+}
+.thread.sess .t {
+  color: var(--ink-2);
+}

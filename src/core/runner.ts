@@ -365,6 +365,21 @@ function textParser(): StreamParser {
 /** 工具自己打的、和干活无关的提示（登录方式、模型列表刷新失败之类），不进日志。 */
 export const NOISE = /connectors are disabled|unrecognized_model|codex_models_manager|responses_websocket|Skill descriptions were shortened|failed to refresh available models|Reading prompt from stdin/i;
 
+/**
+ * 各家输出里的对话编号：Claude Code、Cursor 每条带 session_id，Codex 开头 thread.started 带 thread_id，
+ * DeepSeek Harness 开头 session 事件带 id。记下来就能回到原工具接着这段对话说。
+ */
+export function sessionIdOf(raw: string): string | undefined {
+  const j = tryJson(raw);
+  if (!j) return undefined;
+  const ok = (v: unknown) => (typeof v === 'string' && /^[A-Za-z0-9][\w-]{5,80}$/.test(v.trim()) ? v.trim() : undefined);
+  for (const k of ['session_id', 'sessionId', 'thread_id', 'threadId', 'conversation_id', 'conversationId']) {
+    const v = ok(j[k]);
+    if (v) return v;
+  }
+  return j.type === 'session' ? ok(j.id) : undefined;
+}
+
 export function makeParser(format: StreamFormat): StreamParser {
   switch (format) {
     case 'claude':
@@ -491,6 +506,8 @@ export interface RunResult {
   model?: string;
   /** 工具自己报的额度窗口（没报就没有）。 */
   limits?: Limit[];
+  /** 这一棒在工具里的对话编号（输出里报了才有）。 */
+  session?: string;
   durationMs: number;
 }
 
@@ -577,6 +594,7 @@ export function startRun(req: RunRequest): RunHandle {
   child.stdout?.setEncoding('utf8');
   child.stderr?.setEncoding('utf8');
   let buf = '';
+  let session: string | undefined;
   child.stdout?.on('data', (c: string) => {
     quiet?.refresh();
     buf += c;
@@ -585,6 +603,7 @@ export function startRun(req: RunRequest): RunHandle {
       // Windows 上的工具按 \r\n 换行：行尾的 \r 去掉
       const line = buf.slice(0, i).replace(/\r$/, '');
       buf = buf.slice(i + 1);
+      session ??= sessionIdOf(line);
       for (const l of parser.line(line)) {
         saw(l);
         write(l);
@@ -634,7 +653,7 @@ export function startRun(req: RunRequest): RunHandle {
       const durationMs = Date.now() - started;
       write(`退出（${error ? error : `代码 ${code}`}，用时 ${Math.round(durationMs / 1000)} 秒）`);
       const limits = parser.limits?.() ?? [];
-      resolve({ code, finalText: finalText.trim(), timedOut, ...(late ? { late } : {}), stopped, ...(error ? { error } : {}), stderrTail: stderrTail.trim(), model: parser.model(), ...(limits.length ? { limits } : {}), durationMs });
+      resolve({ code, finalText: finalText.trim(), timedOut, ...(late ? { late } : {}), stopped, ...(error ? { error } : {}), stderrTail: stderrTail.trim(), model: parser.model(), ...(limits.length ? { limits } : {}), ...(session ? { session } : {}), durationMs });
     };
     child.on('error', (e) => finish(-1, `起不来：${e.message}`));
     child.on('close', (code, signal) => finish(code ?? (signal ? 128 : -1)));

@@ -10,7 +10,8 @@ import { addModelMembers, enableProvider, loadDetected, modelOptions, setCrew, s
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
 import { findHarness } from '../core/harness';
-import { copyToClipboard, fillTemplate, reveal, runOpener, chooseFolder } from '../core/launch';
+import { copyToClipboard, fillTemplate, openUrl, reveal, runOpener, chooseFolder } from '../core/launch';
+import { projectSessions, readSession, resumeHow, sessionToolOf } from '../core/sessions';
 import { loadLedger, markReview, pendingReviews } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
 import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
@@ -387,6 +388,20 @@ export function createServer(opts: ServerOptions): http.Server {
     '/api/file': (q) => readProjectFile(dirOf(q, {}), q.get('path') ?? ''),
     '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
     '/api/models': (q) => modelOptions(q.get('name') ?? ''),
+    // 这个项目文件夹里你自己在 Claude Code、Codex 里开的对话（设置里关掉就不列）
+    '/api/sessions': (q) => {
+      const root = dirOf(q, {});
+      requireProject(root);
+      return { sessions: autoSettingsSafe().settings.showSessions ? projectSessions(root) : [] };
+    },
+    // 读一段对话（接力台派出去的一棒、或者上面列出来的）：只认这个项目文件夹里的
+    '/api/session': (q) => {
+      const root = dirOf(q, {});
+      requireProject(root);
+      const tool = sessionToolOf(q.get('tool') ?? '');
+      if (!tool) throw new RelayError('这个工具的对话读不了', 'no-session');
+      return readSession(root, tool, q.get('id') ?? '');
+    },
   };
 
   const post: Record<string, Handler> = {
@@ -463,6 +478,14 @@ export function createServer(opts: ServerOptions): http.Server {
       return { opened: true, copied, hint: HINT };
     },
     '/api/copy-hint': () => ({ copied: copyToClipboard(HINT), hint: HINT }),
+    '/api/session/open': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      const how = resumeHow(str(b.tool) ?? '', str(b.id) ?? '', root);
+      if (!how) throw new RelayError('这个工具回不到原来的对话', 'no-session');
+      if ('url' in how) return { opened: openUrl(how.url) };
+      return { command: how.command, copied: copyToClipboard(how.command) };
+    },
     '/api/reveal': (q, b) => {
       // 在访达里显示项目文件夹 / 选中其中一个文件。
       const root = dirOf(q, b);

@@ -566,6 +566,8 @@ const S = {
   dir: new URLSearchParams(location.search).get('dir') || '',
   st: null,
   talk: { rows: [], votes: [], status: { speaking: [], queue: [] }, sessions: [] },
+  /** 这个项目文件夹里自己在工具里开的对话（dir：是哪个项目的，at：什么时候取的）。 */
+  sessions: { dir: '', at: 0, list: [] },
   tree: null,
   treeRev: 0,
   /** 选中的对话（任务）；null = 最新的那个。 */
@@ -1329,6 +1331,7 @@ async function refresh(force) {
       return;
     }
     renderAll();
+    loadSessions();
   } catch (e) {
     if (stale(t)) return;
     if (e instanceof TypeError) setOffline(true);
@@ -1600,6 +1603,8 @@ function renderLeft() {
     members().map((m) => [m.name, m.llm, m.cooling, m.canWork, m.tier, limitsText(m)]),
     busyMember(),
     looks.key,
+    S.sessions.dir === S.dir ? S.sessions.list.map((x) => [x.id, x.title, x.at]) : null,
+    store.get('sessOpen'),
   ]);
   if (sig !== leftSig) {
     leftSig = sig;
@@ -1656,6 +1661,7 @@ function drawLeft() {
     } else if (cur && p.init) {
       if (S.draft || !ts.length || blank(ts[ts.length - 1])) list.push(h('button', { class: 'thread draft', 'data-id': 'draft', onclick: newThread }, h('span', { class: 't' }, T`新任务`), h('span', { class: 'when' }, T`现在`)));
       for (const t of [...ts].reverse()) if (!blank(t)) list.push(threadEl(t));
+      if (S.view === 'relay' && S.sessions.dir === S.dir && S.sessions.list.length) list.push(...toolSessionsEls());
     }
     if (swap) list.forEach((el, i) => enterAnim(el, i));
     const row = h(
@@ -1740,6 +1746,54 @@ function dayClock(ts) {
   if (Number.isNaN(d.getTime())) return '';
   const w = when(ts);
   return sameDay(d, new Date()) ? w : `${w} ${clock(ts)}`;
+}
+
+/** 这个项目文件夹里、自己在 Claude Code、Codex 里开的对话（接力页左边，收成一行，点开看）。 */
+function toolSessionsEls() {
+  const all = S.sessions.list;
+  const open = !!store.get('sessOpen');
+  const head = h(
+    'button',
+    {
+      class: 'thread sess-head',
+      'data-id': 'sess-head',
+      'aria-expanded': String(open),
+      onclick: () => {
+        store.set('sessOpen', open ? null : 1);
+        renderLeft();
+      },
+    },
+    h('span', { class: 't' }, icon('chev', 'caret'), T`工具里的对话`),
+    h('span', { class: 'when' }, String(all.length))
+  );
+  if (!open) return [head];
+  return [
+    head,
+    ...all.map((x) =>
+      h(
+        'button',
+        { class: 'thread sess', 'data-id': `sess:${x.id}`, 'data-tip': SESSION_TOOL[x.tool], onclick: () => openSession(x.tool, x.id, x.title), oncontextmenu: (e) => ctx(e, sessionItems(x, x.title)) },
+        h('span', { class: 't' }, x.title || T`未命名`),
+        h('span', { class: 'when' }, when(x.at))
+      )
+    ),
+  ];
+}
+
+/** 取这个项目文件夹里的对话列表：换了项目马上取，同一个项目最多 20 秒取一次。 */
+async function loadSessions() {
+  const dir = S.dir;
+  if (!dir || !S.st || !S.st.project.init || (S.sessions.dir === dir && Date.now() - S.sessions.at < 20_000)) return;
+  S.sessions.at = Date.now();
+  try {
+    const r = await api(q('/api/sessions'));
+    if (S.dir !== dir) return;
+    const changed = JSON.stringify(r.sessions) !== JSON.stringify(S.sessions.list);
+    S.sessions = { dir, at: S.sessions.at, list: r.sessions };
+    if (changed) renderLeft();
+  } catch {
+    /* 读不到就先不列 */
+  }
 }
 
 function threadEl(t) {
@@ -3435,6 +3489,7 @@ function stintMenuItems(s) {
   return [
     s.facts && s.facts.files ? { label: T`改动`, icon: 'diff', run: () => openDiff(s.id) } : null,
     s.log ? { label: T`日志`, icon: 'log', run: () => openLog(s) } : null,
+    ...sessionItems(s.session, T`第 ${s.id} 棒`),
     s.handoff ? { label: T`复制交接`, icon: 'copy', run: () => copyHandoff(s) } : null,
     '-',
     pending ? { label: T`复核`, sub: rv ? rv.label : T`没有可用的强模型`, icon: 'review', disabled: !rv || runState().running, run: () => goWith(null, rv, 'review') } : null,
@@ -3557,6 +3612,7 @@ function detailBox(s) {
   const pending = s.review === 'needed' && s.status !== 'working' && !s.rolledBack;
   if (s.facts && s.facts.files) acts.push(h('button', { class: 'btn small', onclick: () => openDiff(s.id) }, icon('diff'), T`改动`));
   if (s.log) acts.push(h('button', { class: 'btn small', onclick: () => openLog(s) }, icon('log'), T`日志`));
+  for (const it of sessionItems(s.session, T`第 ${s.id} 棒`)) acts.push(h('button', { class: 'btn small', 'data-tip': it.sub || null, onclick: it.run }, icon(it.icon), it.label));
   if (pending) {
     const rv = reviewer();
     if (rv) acts.push(h('button', { class: 'btn small primary', disabled: runState().running, onclick: (e) => goWith(e.currentTarget, rv, 'review') }, icon('review'), T`复核`));
@@ -3974,6 +4030,7 @@ function tabLabel(t) {
   if (t.type === 'file') return fileLabel(t.path);
   if (t.type === 'diff') return t.path ? T`${basename(t.path)} · 第 ${t.id} 棒` : T`第 ${t.id} 棒 · 改动`;
   if (t.type === 'log') return T`第 ${t.id} 棒 · 日志`;
+  if (t.type === 'session') return t.title || T`对话`;
   return T`接力本`;
 }
 
@@ -4006,7 +4063,7 @@ function renderTabs() {
           oncontextmenu: (e) => ctx(e, tabMenuItems(t, i)),
           onkeydown: (e) => e.key === 'Enter' && e.currentTarget.click(),
         },
-        icon(t.type === 'file' ? 'file' : t.type === 'diff' ? 'diff' : t.type === 'log' ? 'log' : 'book'),
+        icon(t.type === 'file' ? 'file' : t.type === 'diff' ? 'diff' : t.type === 'log' ? 'log' : t.type === 'session' ? 'chat' : 'book'),
         h('span', { class: 'ell' }, tabLabel(t)),
         h('button', { class: 'x', 'aria-label': T`关闭`, onclick: () => closeTab(i) }, icon('x'))
       )
@@ -4036,6 +4093,45 @@ function openLog(s) {
   openTab({ type: 'log', id: s.id, path: s.log });
 }
 
+/** 对话记录属于哪个工具（接力台读得懂的两家）。 */
+const SESSION_TOOL = { claude: 'Claude Code', 'claude-official': 'Claude Code', codex: 'Codex' };
+
+/** 一棒（或列出来的一段对话）在工具里的对话：看整段对话、回到原工具接着说。 */
+function sessionItems(sess, title) {
+  if (!sess || !sess.id) return [];
+  const out = [];
+  if (SESSION_TOOL[sess.tool]) out.push({ label: T`对话`, icon: 'chat', run: () => openSession(sess.tool, sess.id, title) });
+  if (sess.tool === 'claude' || sess.tool === 'claude-official') out.push({ label: T`在 Claude 里打开`, icon: 'arrow', run: () => resumeSession(sess) });
+  else if (['codex', 'cursor-agent', 'agy'].includes(sess.tool)) out.push({ label: T`复制命令`, sub: { codex: 'codex resume', 'cursor-agent': 'cursor-agent --resume', agy: 'agy --conversation' }[sess.tool], icon: 'copy', run: () => resumeSession(sess) });
+  return out;
+}
+
+function openSession(tool, id, title) {
+  openTab({ type: 'session', tool, id, title });
+}
+
+async function resumeSession(sess) {
+  const r = await act(null, () => api('/api/session/open', { tool: sess.tool, id: sess.id }));
+  if (!r) return;
+  if (r.command) {
+    if (!r.copied) copyToast(r.command);
+    else toast(T`已复制：${r.command}`);
+  } else if (!r.opened) toast(T`没打开 Claude 桌面版`);
+}
+
+/** 对话正文：人说的、AI 答的、用了什么工具（一行灰字）。 */
+function sessionBody(data) {
+  const list = h('div', { class: 'sess' });
+  if (data.cut) list.append(h('div', { class: 'empty-note' }, T`只显示最后一部分`));
+  if (!data.messages.length) list.append(h('div', { class: 'empty-note' }, T`还没有说话`));
+  for (const m of data.messages) {
+    if (m.role === 'tool') list.append(h('div', { class: 'sm tool mono' }, m.text));
+    else if (m.role === 'user') list.append(h('div', { class: 'sm user' }, h('div', { class: 'note' }, m.text.length > 1500 ? `${m.text.slice(0, 1500)}…` : m.text)));
+    else list.append(h('div', { class: 'sm ai doc-md', html: md(m.text) }));
+  }
+  return list;
+}
+
 async function loadDoc(t) {
   const key = tabKey(t);
   const tk = ticket(`doc:${key}`);
@@ -4044,6 +4140,7 @@ async function loadDoc(t) {
     if (t.type === 'file') data = await api(q(`/api/file?path=${encodeURIComponent(t.path)}`));
     else if (t.type === 'diff') data = await api(q(`/api/diff?id=${t.id}${t.path ? `&path=${encodeURIComponent(t.path)}` : ''}`));
     else if (t.type === 'log') data = await api(q(`/api/log?path=${encodeURIComponent(t.path)}`));
+    else if (t.type === 'session') data = await api(q(`/api/session?tool=${encodeURIComponent(t.tool)}&id=${encodeURIComponent(t.id)}`));
     else data = await api(q('/api/brief'));
     if (stale(tk)) return;
     S.docs.set(key, { data });
@@ -4182,6 +4279,14 @@ function renderDoc(t) {
         );
       }
     }
+  } else if (t.type === 'session') {
+    const info = d && d.data ? d.data.info : null;
+    head.append(
+      h('div', { class: 'crumbs' }, tile({ label: SESSION_TOOL[t.tool] || t.tool, tool: SESSION_TOOL[t.tool] }, 's20'), h('b', null, (info && info.title) || t.title || T`对话`), h('span', null, ` · ${SESSION_TOOL[t.tool] || t.tool}`)),
+      ...sessionItems({ tool: t.tool, id: t.id }).filter((it) => it.icon !== 'chat').map((it) => h('button', { class: 'btn small', 'data-tip': it.sub || null, onclick: it.run }, icon(it.icon), it.label)),
+      iconBtn(T`刷新`, 'sync', () => (S.docs.delete(tabKey(t)), (docSig = ''), renderCenter()))
+    );
+    if (d && d.data) body.append(sessionBody(d.data));
   } else if (t.type === 'log') {
     head.append(h('div', { class: 'crumbs' }, h('b', null, T`第 ${t.id} 棒 · 日志`)));
     if (d && d.data) body.append(h('pre', { class: 'pre' }, d.data.text || T`（空的）`));
@@ -5604,6 +5709,13 @@ function settingsBody(tab, redraw) {
         const r = await api('/api/settings', { settings: { ...S.st.settings, ...patch } });
         S.st.settings = r.settings;
         mark.flash();
+        // 列不列工具里的对话：马上重取一次
+        if ('showSessions' in patch) {
+          S.sessions.at = 0;
+          if (!r.settings.showSessions) S.sessions.list = [];
+          loadSessions();
+          renderLeft();
+        }
       } catch (e) {
         fail(T`保存设置`, e);
         redraw();
@@ -5674,6 +5786,9 @@ function settingsBody(tab, redraw) {
       setRow(T`最多接力`, T`接满这么多棒就停下，不会一直做下去。`, stepper('maxStints', 1, 100, T`棒`)),
       setRow(T`额度用完时等恢复`, T`所有 AI 的额度都用完时，等最早恢复的那一位接着做；关掉就直接停下。`, sw('waitForQuota', T`额度用完时等恢复`)),
       setRow(T`做完后终审`, T`清单全部打勾后，请强模型把整件事从头过一遍，通过了才算完成。`, sw('finalReview', T`做完后终审`)),
+      setSec(T`对话`),
+      setRow(T`接着同一段对话`, T`同一个任务里，一位成员下一棒接着自己上一棒在工具里的那段对话；工具里一个任务就是一段对话。关掉就每棒新开一段，用的 token 少。`, sw('sameThread', T`接着同一段对话`)),
+      setRow(T`列出工具里的对话`, T`接力页左边列出这个项目文件夹里在 Claude Code、Codex 里开的对话，点开能看全文。只读这个项目文件夹的。`, sw('showSessions', T`列出工具里的对话`)),
     ];
   }
   const theme = store.get('theme') || '';

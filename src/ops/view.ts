@@ -51,6 +51,7 @@ export interface StintView {
   log?: string;
   quotaUntil?: string;
   tokens?: Stint['tokens'];
+  session?: Stint['session'];
 }
 
 /** 一段对话 = 一个任务：从写下它（或接入）开始，到换下一个任务为止。 */
@@ -170,6 +171,7 @@ function toView(s: Stint, rolledBack: ReadonlySet<number>, summary = s.summary ?
     ...(s.log ? { log: s.log } : {}),
     ...(s.quotaUntil ? { quotaUntil: s.quotaUntil } : {}),
     ...(s.tokens ? { tokens: s.tokens } : {}),
+    ...(s.session ? { session: s.session } : {}),
   };
 }
 

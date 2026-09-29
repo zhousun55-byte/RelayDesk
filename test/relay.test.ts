@@ -674,6 +674,43 @@ test('派活指定谁指挥、活派给谁：同一个工具的大模型拆和�
   assert.equal(runs.filter((l) => !/ -m /.test(l)).length, 2, '拆和终审用它自己的模型');
 });
 
+test('接着同一段对话：打开时同一个任务里一位成员下一棒接着自己上一棒在工具里的那段对话（codex exec resume、claude --resume）；关着每棒新开；每棒记下对话编号', () => {
+  const s = prepared('same-thread');
+  setOrder(s, ['codex', 'claude'], { sameThread: true });
+  s.relay(['init']);
+  s.relay(['task', '做几件事', '--step', '甲', '乙', '丙', '丁']);
+  s.relay(['go', 'codex']);
+  s.relay(['go', 'codex']);
+  s.relay(['go', 'claude']);
+  s.relay(['go', 'claude']);
+  const st = s.stints();
+  assert.deepEqual(
+    st.map((x) => [x.who.member, x.session?.tool, /^fake-/.test(x.session?.id ?? '')]),
+    [
+      ['codex', 'codex', true],
+      ['codex', 'codex', true],
+      ['claude', 'claude', true],
+      ['claude', 'claude', true],
+    ]
+  );
+  assert.equal(st[1].session?.id, st[0].session?.id, 'Codex 第二棒接着第一棒那段');
+  assert.equal(st[3].session?.id, st[2].session?.id, 'Claude Code 第二棒接着第一棒那段');
+  const log = fs.readFileSync(s.env.FAKE_LOG!, 'utf8').split('\n');
+  assert.ok(log.some((l) => l.startsWith('codex exec resume ') && l.endsWith(` ${st[0].session?.id} -`)), log.join('\n'));
+  assert.ok(log.some((l) => l.startsWith('claude -p ') && l.includes(`--resume ${st[2].session?.id}`)));
+
+  // 关掉：每棒新开
+  setOrder(s, ['codex', 'claude']);
+  s.relay(['go', 'codex']);
+  const last = s.stints().at(-1)!;
+  assert.notEqual(last.session?.id, st[0].session?.id);
+  // 换了任务：不接上一个任务的对话
+  setOrder(s, ['codex', 'claude'], { sameThread: true });
+  s.relay(['task', '换个任务', '--step', '戊']);
+  s.relay(['go', 'codex']);
+  assert.ok(![st[0].session?.id, last.session?.id].includes(s.stints().at(-1)!.session?.id), '新任务新开一段');
+});
+
 test('派活：弱模型出错、没有别的弱模型时停下，写明每位弱模型怎么了；不换强模型干活', () => {
   const s = prepared('dispatch-noweak', { FAKE_CLAUDE_MODE: 'fail' });
   setOrder(s, ['claude', 'codex']);

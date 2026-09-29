@@ -7,6 +7,7 @@
 不进 npm test：CI 里没有浏览器。
 """
 import json
+import re
 import os
 import socket
 import threading
@@ -175,6 +176,25 @@ def main():
             page.keyboard.press('Escape')
             page.wait_for_timeout(400)
             mock.shutdown()
+
+            # 工具里的对话：这个项目文件夹里自己在 Claude Code 里开的一段，左边收成一行，点开能看全文
+            real = os.path.realpath(repo)
+            cdir = os.path.join(home, '.claude', 'projects', re.sub(r'[^A-Za-z0-9]', '-', real))
+            os.makedirs(cdir, exist_ok=True)
+            with open(os.path.join(cdir, 'desk-000001.jsonl'), 'w') as f:
+                for row in [
+                    {'type': 'user', 'cwd': real, 'entrypoint': 'claude-desktop', 'message': {'role': 'user', 'content': '导出做成 CSV 吗'}},
+                    {'type': 'assistant', 'cwd': real, 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': '做成 CSV'}, {'type': 'tool_use', 'name': 'Read', 'input': {'file_path': 'README.md'}}]}},
+                ]:
+                    f.write(json.dumps(row, ensure_ascii=False) + '\n')
+            page.get_by_role('tab', name='接力').click()
+            js('() => { S.sessions.at = 0; return loadSessions(); }')
+            page.locator('.thread.sess-head').wait_for(timeout=5000)
+            page.locator('.thread.sess-head').click()
+            page.locator('.thread.sess').filter(has_text='导出做成 CSV 吗').click()
+            page.locator('.sess .sm.ai').wait_for(timeout=5000)
+            check(page.locator('.sess .sm.user').inner_text() == '导出做成 CSV 吗' and page.locator('.sess .sm.tool').inner_text() == 'Read：README.md', '工具里的对话：左边收成一行，点开看全文（人说的、AI 答的、用了什么工具）')
+            page.locator('.tab.chat-tab').click()
 
             # 群聊：之前发的长话先收起，点「展开」看全文；粘进来很长的一段字存成文件带上，输入框里只有一个小条，点开在页签里看
             page.get_by_role('tab', name='群聊').click()

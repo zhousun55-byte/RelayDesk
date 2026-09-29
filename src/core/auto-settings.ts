@@ -24,10 +24,14 @@ export interface AutoSettings {
   lang: 'zh' | 'en';
   /** 派活谁来指挥（拆步骤、终审）：成员名。空 = 强模型按顺序。 */
   lead: string;
+  /** 同一个任务里，一位成员下一棒接着自己上一棒在工具里的那段对话（工具里一个任务就是一段对话）。不接 = 每棒新开，省 token。 */
+  sameThread: boolean;
+  /** 左边列出这个项目文件夹里、你自己在 Claude Code、Codex 里开的对话。 */
+  showSessions: boolean;
 }
 
 export function defaultAutoSettings(): AutoSettings {
-  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, lang: 'zh', lead: '' };
+  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, lang: 'zh', lead: '', sameThread: false, showSessions: true };
 }
 
 export function autoSettingsPath(): string {
@@ -69,6 +73,8 @@ export function normalizeAutoSettings(raw: unknown): AutoSettings {
     finalReview: bool(o.finalReview, d.finalReview),
     lang: o.lang === 'en' ? 'en' : 'zh',
     lead: names(o.lead, '派活谁来指挥')[0] ?? '',
+    sameThread: bool(o.sameThread, d.sameThread),
+    showSessions: bool(o.showSessions, d.showSessions),
   };
 }
 

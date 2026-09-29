@@ -15,6 +15,7 @@ import { allMembers, orderMembers, readyMembers, spareFirst, type MemberInfo } f
 import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
 import { finalPrompt, planPrompt, reviewPrompt, stepPrompt, workPrompt } from '../core/prompts';
+import { sessionFile, sessionToolOf } from '../core/sessions';
 import { detectQuota, fullUntil, markOk, markQuota, noteError, noteLimits, recentErrors, untilText, type Limit } from '../core/quota';
 import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, usageTotal, type RunHandle, type RunResult } from '../core/runner';
 import { cause, plain } from '../core/cause';
@@ -531,6 +532,8 @@ class GoRunner {
     let actualModel: string | undefined;
     /** 工具自己报的额度窗口：Claude Code 在输出里报，Codex 记在它自己的会话里。 */
     let limits: Limit[] | undefined;
+    /** 这一棒在工具里的对话。 */
+    let session: Stint['session'];
     try {
       if (m.kind === 'harness') {
         const spec = findHarness(m.harness);
@@ -539,7 +542,7 @@ class GoRunner {
         const r = await this.runTool(
           logAbs,
           stintTitle(stint),
-          () => spec.invoke(loc, { cwd: root, prompt, level: this.settings.level, readOnly: false, model: m.agent.model?.trim() || undefined, effort: m.agent.effort, outFile: tmpOut() }),
+          () => spec.invoke(loc, { cwd: root, prompt, level: this.settings.level, readOnly: false, model: m.agent.model?.trim() || undefined, effort: m.agent.effort, outFile: tmpOut(), resume: this.resumeFor(m, id) }),
           timeoutMs,
           () => takeSnapshot(root, '看看改了没有').sha === from,
           spec.id
@@ -547,6 +550,7 @@ class GoRunner {
         finalText = r.finalText;
         stopped = r.stopped;
         actualModel = r.model;
+        if (r.session) session = { tool: spec.id, id: r.session };
         limits = r.limits ?? spec.limits?.(root, Date.parse(stint.startedAt)) ?? undefined;
         // 认额度只看工具自己报的话（出错信息、标准错误、日志里的「出错」「提示」）和最后一句话，不看 AI 说的话、搜的词：
         // 任务本身讲限流、额度时，那些话里全是 rate limit、quota。
@@ -631,7 +635,7 @@ class GoRunner {
     // 工具自己在输出里报的用量；不报的（DeepSeek Harness）从它自己记的会话里读
     // 从这一棒开始算：上一棒的会话在它结束前最后写入，差几百毫秒，不能往前放宽
     const tokens = usageTotal(logText) ?? findHarness(m.harness)?.usage?.(root, Date.parse(stint.startedAt)) ?? null;
-    const closed = closeStint(root, { ...stint, who: ran, pid: process.pid, ...(tokens ? { tokens } : {}) }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
+    const closed = closeStint(root, { ...stint, who: ran, pid: process.pid, ...(tokens ? { tokens } : {}), ...(session ? { session } : {}) }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
     // 调度拿着锁，这时只有检查命令在跑：它自己写的缓存、报告算接力台的改动，不算到哪一棒头上（不然下一轮会以为有别的 AI 在改文件）。
     if (kind === 'review' || kind === 'final' || closed.facts?.files || closed.factsError) await gateStint(root, id, cfg, { absorb: 'all' }).catch(() => undefined);
     // 终审的结论：收工时要看它（交接成功不等于终审通过）。
@@ -671,6 +675,20 @@ class GoRunner {
   private crewName(v: LedgerView): string | undefined {
     const lead = this.leadName(v);
     return lead ? this.members().find((m) => m.name === lead)?.agent.crew : undefined;
+  }
+
+  /**
+   * 「接着同一段对话」打开时：这位成员在这个任务里上一棒的对话编号（同一个工具、没被退回）。
+   * Claude Code、Codex 的还要看记录文件还在不在（被清掉了就新开一段）。
+   */
+  private resumeFor(m: MemberInfo, current: number): string | undefined {
+    if (!this.settings.sameThread) return undefined;
+    const v = loadLedger(this.root);
+    const since = taskSince(v);
+    const prev = [...v.stints].reverse().find((s) => s.id !== current && s.who.member === m.name && s.session?.tool === m.harness && !s.rolledBack && s.via === 'relay' && !(Date.parse(s.startedAt) < since));
+    if (!prev?.session) return undefined;
+    const tool = sessionToolOf(prev.session.tool);
+    return !tool || sessionFile(this.root, tool, prev.session.id) ? prev.session.id : undefined;
   }
 
   /** 能用的那一位（能调度、没在等额度、这次没出过错）。 */

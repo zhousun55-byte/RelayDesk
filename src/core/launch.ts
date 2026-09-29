@@ -174,6 +174,15 @@ export function reveal(target: string): boolean {
   return !r.error && r.status === 0;
 }
 
+/** 用系统打开一个链接（claude:// 这种叫起桌面程序的也是）。RELAY_TERMINAL=off 时不打开（测试用）。 */
+export function openUrl(url: string): boolean {
+  if (process.env.RELAY_TERMINAL === 'off') return false;
+  if (process.platform === 'darwin') return spawnSync('open', [url], { timeout: 10_000 }).status === 0;
+  if (process.platform === 'win32') return !spawnSync('cmd.exe', ['/c', 'start', '""', url], { timeout: 10_000, windowsHide: true }).error;
+  const r = spawnSync('xdg-open', [url], { timeout: 10_000, stdio: 'ignore' });
+  return !r.error && r.status === 0;
+}
+
 /** 这台电脑上弹选文件夹对话框的命令；没有就是 null（网页上改成自己贴路径）。 */
 function pickerCommand(prompt: string): string[] | null {
   if (process.platform === 'darwin') return ['osascript', '-e', `POSIX path of (choose folder with prompt "${prompt.replace(/["\\]/g, '')}")`];

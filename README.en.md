@@ -68,6 +68,10 @@ On the *Dispatch* page, *Lead → Crew* under the input box sets who splits the 
 
 Work sent to a coding tool (Claude Code, Codex, Cursor, Antigravity, DeepSeek Harness) runs in that tool's own CLI, so it keeps its own tools, subagents, skills, MCP servers, rules and memory. The Claude official-account member reads your user settings too; RelayDesk only overrides the few settings that point Claude Code at another provider. With permissions set to *project only*, MCP calls follow each tool's own approvals; with *unrestricted*, they are allowed (Cursor gets `--approve-mcps`). Group chat is read-only. API members use RelayDesk's small built-in agent and have no skills, MCP or subagents.
 
+### Conversations in tools
+
+Each leg records its conversation id in the tool (Claude Code, Codex, Cursor and Antigravity report one). On a leg, *Open in Claude* opens that conversation in the Claude desktop app; for Codex, Cursor and Antigravity, *Copy command* copies the command that continues it (`codex resume <id>` and so on). *Thread* shows the conversation inside RelayDesk, including anything you added later in the tool (Claude Code and Codex records are readable). On the Relay page, *Conversations in tools* lists the Claude Code and Codex conversations you started yourself in this project folder. In *Settings → Run*, *Continue the same conversation* (off by default) makes a member's next leg in a task continue its previous conversation, and *List conversations in tools* (on) can turn the list off. Only folders connected to RelayDesk are read, only when you look, and nothing is stored or sent anywhere.
+
 ## Where things live
 
 - `.relay/` in your project: the ledger, the relay book, handoffs, reviews, snapshots (a separate git directory, so your own git history is untouched), uploads.
