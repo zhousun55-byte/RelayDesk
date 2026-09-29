@@ -508,7 +508,7 @@ function splitLabel(label) {
 /* 给人看的名字一律是模型的名字（GPT-6 Sol、Claude Opus 5.5、Grok 4.7），工具只是它在哪儿跑。
    和 src/core/names.ts 的 llmName 是同一套规则（测试拿同一张表对照两边）。 */
 const LLM_WORD = { gpt: 'GPT', glm: 'GLM', mimo: 'MiMo', deepseek: 'DeepSeek', qwq: 'QwQ' };
-const LLM_VARIANT = /^(low|medium|high|xhigh|max|ultra|minimal|fast|thinking|preview|latest|\d{8})$/i;
+const LLM_VARIANT = /^(none|low|medium|high|xhigh|extra|max|ultra|minimal|fast|thinking|preview|latest|\d{8})$/i;
 
 function llmName(model) {
   const w = String(model || '')
@@ -5740,7 +5740,12 @@ function membersPane(redraw) {
         class: 'member',
         'data-name': m.name,
         draggable: canDrag ? 'true' : null,
-        oncontextmenu: (e) => ctx(e, [m.tierSet ? { label: T`强弱改回自动`, icon: 'sync', run: () => setTier('auto') } : null, { label: T`删除`, icon: 'trash', run: () => removeMember(m, row) }]),
+        oncontextmenu: (e) =>
+          ctx(e, [
+            m.kind === 'api' || m.agent.harness ? { label: T`添加模型`, icon: 'plus', run: () => addModelSheet(m, redraw) } : null,
+            m.tierSet ? { label: T`强弱改回自动`, icon: 'sync', run: () => setTier('auto') } : null,
+            { label: T`删除`, icon: 'trash', run: () => removeMember(m, row) },
+          ]),
         ondragstart: (e) => {
           dragName = m.name;
           e.dataTransfer.effectAllowed = 'move';
@@ -5821,15 +5826,18 @@ function membersPane(redraw) {
         {
           class: 'btn small',
           'aria-haspopup': 'menu',
-          onclick: (e) =>
+          onclick: (e) => {
+            const at = e.currentTarget;
             openMenu(
-              e.currentTarget,
+              at,
               [
+                modelTools().length ? { label: T`模型`, icon: 'plus', run: () => pickModelTool(at, redraw) } : null,
                 { label: T`接口`, icon: 'plus', run: () => addApiSheet(redraw) },
                 { label: T`桌面程序`, icon: 'plus', run: () => addAppSheet(redraw) },
               ],
               { align: 'end' }
-            ),
+            );
+          },
         },
         icon('plus'),
         T`添加`
@@ -5962,6 +5970,74 @@ function addAppSheet(redraw) {
     },
     redraw
   );
+}
+
+/** 能换模型的（接力台调得动的命令行工具、接口）：同一个工具只列一次。 */
+function modelTools() {
+  const seen = new Set();
+  return members().filter((m) => {
+    const key = m.kind === 'api' ? `api:${m.agent.api && m.agent.api.baseUrl}` : m.agent.harness ? `h:${m.agent.harness}` : null;
+    if (m.kind === 'app' || !key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** 先挑工具（只有一个就直接打开）。 */
+function pickModelTool(anchor, redraw) {
+  const tools = modelTools();
+  if (tools.length === 1) return addModelSheet(tools[0], redraw);
+  openMenu(anchor, tools.map((m) => ({ label: tr(m.label), tile: tile(m, 's20'), run: () => addModelSheet(m, redraw) })), { align: 'end' });
+}
+
+/** 同一个工具换个模型再加几位：列出它能用的模型勾选，也能直接写模型名。强弱按模型猜，名单里能改。 */
+function addModelSheet(m, redraw) {
+  const picked = new Set();
+  const note = (t) => h('p', { class: 'set-desc' }, t);
+  const list = h('div', { class: 'model-list', role: 'group', 'aria-label': T`模型` }, note(T`正在读取`));
+  const other = h('input', { class: 'input mono', placeholder: T`模型名`, oninput: () => sync() });
+  const add = h(
+    'button',
+    {
+      class: 'btn primary',
+      disabled: true,
+      onclick: (e) =>
+        act(e.currentTarget, () => api('/api/members/add-models', { from: m.name, models: [...picked, other.value.trim()].filter(Boolean) }), (r) => (r.added.length ? T`已添加 ${r.added.length} 位` : T`名单里已经有了`)).then((r) => {
+          if (!r) return;
+          // 按这次存好的名单画（别的刷新可能刚好把这次的盖过去）
+          if (S.st) S.st.members = r.members;
+          close();
+          redraw();
+        }),
+    },
+    T`添加`
+  );
+  const sync = () => (add.disabled = !picked.size && !other.value.trim());
+  const close = sheet({ title: T`添加模型`, body: h('div', null, h('p', { class: 'set-desc' }, tr(m.label)), list, field(T`其他模型`, other)), foot: [h('button', { class: 'btn ghost', onclick: () => close() }, T`取消`), add] });
+  const row = (o) => {
+    const b = h(
+      'button',
+      {
+        class: 'mi',
+        role: 'menuitemcheckbox',
+        'aria-checked': String(o.added),
+        disabled: o.added,
+        onclick: () => {
+          picked.has(o.id) ? picked.delete(o.id) : picked.add(o.id);
+          b.setAttribute('aria-checked', String(picked.has(o.id)));
+          sync();
+        },
+      },
+      tile({ label: `${m.label} · ${o.id}`, model: o.id, tool: m.tool, tier: o.tier }, 's20'),
+      h('span', { class: 'grow' }, h('span', null, o.name), h('span', { class: 'sub mono' }, o.id)),
+      h('span', { class: 'r' }, o.added ? T`已在名单里` : o.tier === 'strong' ? T`强` : T`弱`),
+      icon('check', 'ck')
+    );
+    return b;
+  };
+  api(`/api/models?name=${encodeURIComponent(m.name)}`)
+    .then((r) => morph(list, () => list.replaceChildren(...(r.models.length ? r.models.map(row) : [note(r.listed ? T`没列出模型，可以直接写模型名` : T`这个工具列不出模型，可以直接写模型名`)])), (b) => b.children))
+    .catch((e) => list.replaceChildren(note(T`读取失败：${e.message}`)));
 }
 
 // ---------- 搜索（⌘K） ----------

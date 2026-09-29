@@ -4,15 +4,15 @@ import path from 'node:path';
 import { scanApps } from './env';
 import { RelayError } from './errors';
 import { checkCommand } from './launch';
-import { findHarness, HARNESSES, harnessForCommand, locateCached, clearLocateCache, type HarnessSpec, type Level, type LoginInfo, type ModelInfo } from './harness';
+import { findHarness, HARNESSES, harnessForCommand, locateCached, clearLocateCache, shownModel, type HarnessSpec, type Level, type LoginInfo, type ModelInfo } from './harness';
 import { autoSettingsSafe } from './auto-settings';
-import { apiUsable } from './llm';
-import { appNameOf } from './names';
+import { apiUsable, listModels } from './llm';
+import { appNameOf, llmName, modelChoices } from './names';
 import { relayHome } from './paths';
 import { scanProviders, toApiSpec, type DetectedProvider } from './providers';
-import { agentKind, agentLabel, agentModel, loadRegistry, loadRegistryForDetect, registryPath, saveRegistry } from './registry';
+import { agentKind, agentLabel, agentModel, loadRegistry, loadRegistryForDetect, normalizeAgent, registryPath, saveRegistry } from './registry';
 import { sameModel, tierForModel, toolFamily } from './tier';
-import type { AgentConfig } from './types';
+import type { AgentConfig, Tier } from './types';
 
 /**
  * 自动识别：这台电脑上装了哪些 AI 编程工具（harness）、各自登没登录、默认用什么模型；
@@ -205,16 +205,19 @@ export function syncRegistry(report: DetectReport): string[] {
     const spec = findHarness(h.id)!;
     const loc = locateCached(spec);
     const cmd = loc ? [...loc.exec, ...(spec.manualArgs ?? [])].map((x) => (/[\s"']/.test(x) ? `'${x.replace(/'/g, `'\\''`)}'` : x)).join(' ') : h.id;
-    const bound = reg.agents.find((a) => harnessOf(a)?.id === h.id && agentKind(a) === 'cli');
+    const all = reg.agents.filter((a) => harnessOf(a)?.id === h.id && agentKind(a) === 'cli');
+    const bound = all[0];
     if (bound) {
       if (!bound.harness) {
         bound.harness = h.id;
         if (!bound.label) bound.label = LABELS[h.id] ?? h.label;
         changes.push(`「${bound.name}」认出来是 ${h.label}，可以全自动了。`);
-      } else if (bound.detected && loc && bound.cmd !== cmd) {
-        // 自动加的条目：工具升级后路径变了（比如 Cursor Agent 的版本目录），跟着更新。
-        bound.cmd = cmd;
-        changes.push(`「${bound.name}」的位置变了（${h.label} 升级过），已更新。`);
+      } else if (loc) {
+        // 自动加的条目（和照着它换了模型加的）：工具升级后路径变了（比如 Cursor Agent 的版本目录），跟着更新。
+        for (const a of all.filter((x) => x.detected && x.cmd !== cmd)) {
+          a.cmd = cmd;
+          changes.push(`「${a.name}」的位置变了（${h.label} 升级过），已更新。`);
+        }
       }
       continue;
     }
@@ -383,13 +386,85 @@ export interface Member {
 
 export function memberModel(a: AgentConfig, report: DetectReport | null): string | undefined {
   if (a.kind === 'api') return agentModel(a);
-  if (a.model?.trim()) return a.model.trim();
+  if (a.model?.trim()) return shownModel(a.harness, a.model.trim());
   const h = harnessOf(a);
   if (h) {
     const hr = report?.harnesses.find((x) => x.id === h.id);
     return hr?.model.label ?? hr?.model.model;
   }
   return a.api?.model;
+}
+
+/** 和这一位是同一个工具（或同一个接口地址）的几位。 */
+function sameTool(a: AgentConfig, all: AgentConfig[]): AgentConfig[] {
+  const kind = agentKind(a);
+  const base = (x: AgentConfig) => x.api?.baseUrl.replace(/\/+$/, '');
+  return all.filter((x) => agentKind(x) === kind && (kind === 'api' ? base(x) === base(a) : x.harness === a.harness));
+}
+
+const listed = new Map<string, { at: number; ids: string[] }>();
+
+/**
+ * 这一位所在的工具（或接口）能换哪些模型：工具自己列（不花额度，十分钟内不重问），同一个模型的几档并成一项；
+ * 已经在名单里的标上。listed = false：这个工具列不出来，只能自己写模型名。
+ */
+export async function modelOptions(name: string): Promise<{ listed: boolean; models: { id: string; name: string; tier: Tier; added: boolean }[] }> {
+  const reg = loadRegistry();
+  const a = reg.agents.find((x) => x.name === name);
+  if (!a) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
+  const kind = agentKind(a);
+  const spec = kind === 'cli' ? harnessOf(a) : null;
+  if (!(kind === 'api' && a.api) && !spec?.models) return { listed: false, models: [] };
+  const key = kind === 'api' ? `api:${a.api!.baseUrl}` : `h:${spec!.id}`;
+  let ids = listed.get(key);
+  if (!ids || Date.now() - ids.at > 10 * 60_000) {
+    const loc = spec ? locateCached(spec) : null;
+    const got = kind === 'api' ? await listModels(a.api!).catch(() => []) : loc ? await spec!.models!(loc).catch(() => []) : [];
+    if (got === null) return { listed: false, models: [] };
+    ids = { at: Date.now(), ids: got };
+    if (got.length) listed.set(key, ids);
+  }
+  const report = loadDetected();
+  const have = new Set(sameTool(a, reg.agents).map((x) => llmName(memberModel(x, report))));
+  const models = modelChoices(ids.ids, (id) => shownModel(a.harness, id)).map((c) => ({ id: c.id, name: c.name, tier: (tierForModel(c.shown) === 'strong' ? 'strong' : 'weak') as Tier, added: have.has(c.name) }));
+  return { listed: true, models };
+}
+
+/**
+ * 同一个工具（或同一个接口）换个模型再加几位：照抄这一位的设置，只换模型；强弱按模型猜（名单里能改）。
+ * 名单里同一个工具已经有这个模型的不重复加。返回加上的。
+ */
+export function addModelMembers(from: string, models: string[]): AgentConfig[] {
+  const reg = loadRegistry();
+  const a = reg.agents.find((x) => x.name === from);
+  if (!a) throw new RelayError(`名单里没有「${from}」`, 'no-agent');
+  const kind = agentKind(a);
+  if (kind === 'app' || (kind === 'cli' && !a.harness)) throw new RelayError(`${agentLabel(a)} 换不了模型：接力台调不动它`, 'bad-agent');
+  const report = loadDetected();
+  const names = new Set(reg.agents.map((x) => x.name));
+  const added: AgentConfig[] = [];
+  for (const model of [...new Set(models.map((m) => String(m ?? '').trim()).filter(Boolean))]) {
+    // 模型名会原样交给工具的命令行：空格、引号、shell 符号一律不收
+    if (!/^[^\s"'`$&|;<>\\^%!]{1,80}$/.test(model)) throw new RelayError(`模型名「${model.slice(0, 40)}」不对：不能有空格、引号和 $ & | ; 这类符号`, 'bad-agent');
+    // 同一个模型的另一档（grok-4.7-high 和 grok-4.7-xhigh-fast）也算有了
+    const shown = shownModel(a.harness, model);
+    const same = (x: AgentConfig) => {
+      const had = memberModel(x, report) ?? '';
+      return sameModel(had, shown) || llmName(had) === llmName(shown);
+    };
+    if (sameTool(a, [...reg.agents, ...added]).some(same)) continue;
+    const slug = model.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+    const stem = `${a.name}-${slug}`.slice(0, 36).replace(/[-_]+$/, '');
+    let n = stem;
+    for (let i = 2; names.has(n); i++) n = `${stem}${i}`;
+    names.add(n);
+    // 桌面程序、强弱、思考强度是那一位自己的，不照抄
+    const { app: _app, tierSet: _set, effort: _effort, ...rest } = a;
+    const agent = normalizeAgent({ ...rest, name: n, tier: tierForModel(shown) === 'strong' ? 'strong' : 'weak', ...(kind === 'api' ? { api: { ...a.api, model } } : { model }) });
+    added.push(agent);
+  }
+  if (added.length) saveRegistry({ ...reg, agents: [...reg.agents, ...added] });
+  return added;
 }
 
 /** 名单里每一位在全自动里能干什么。 */

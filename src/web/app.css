@@ -3532,6 +3532,19 @@ button.busy::after {
   display: flex;
   flex-direction: column;
 }
+/* 添加模型：一列能勾的模型，长了在框里滚 */
+.model-list {
+  max-height: min(46vh, 340px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: 6px -9px 10px;
+}
+.model-list .set-desc {
+  padding: 0 9px;
+}
+.model-list .sub.mono {
+  font: 11px/1.4 var(--mono);
+}
 .member {
   display: flex;
   align-items: center;

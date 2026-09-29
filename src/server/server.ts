@@ -6,7 +6,7 @@ import path from 'node:path';
 import { talkContext } from '../commands/talk';
 import { autoSettingsSafe, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
-import { enableProvider, loadDetected, tidyRegistry, type DetectReport } from '../core/detect';
+import { addModelMembers, enableProvider, loadDetected, modelOptions, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
 import { findHarness } from '../core/harness';
@@ -386,6 +386,7 @@ export function createServer(opts: ServerOptions): http.Server {
     },
     '/api/file': (q) => readProjectFile(dirOf(q, {}), q.get('path') ?? ''),
     '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
+    '/api/models': (q) => modelOptions(q.get('name') ?? ''),
   };
 
   const post: Record<string, Handler> = {
@@ -518,6 +519,13 @@ export function createServer(opts: ServerOptions): http.Server {
       saveRegistry(reg);
       for (const r of liveProjects()) refreshBrief(r);
       return { members: memberViews() };
+    },
+    '/api/members/add-models': (_q, b) => {
+      const models = Array.isArray(b.models) ? b.models.filter((x): x is string => typeof x === 'string').slice(0, 30) : [];
+      if (!models.some((x) => x.trim())) throw new RelayError('没选模型', 'bad-agent');
+      const added = addModelMembers(str(b.from) ?? '', models);
+      if (added.length) for (const r of liveProjects()) refreshBrief(r);
+      return { added: added.map((a) => a.name), members: memberViews() };
     },
     '/api/workers/save': (_q, b) => ({ agent: upsertAgent(b.agent, str(b.originalName)) }),
     '/api/workers/delete': (_q, b) => {

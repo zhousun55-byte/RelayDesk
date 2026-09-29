@@ -332,3 +332,95 @@ test('成员名单 agents.json 写坏了：识别时不报错，把坏的那份�
   assert.ok(registry.loadRegistry().agents.some((a) => a.name === 'codex'), '重新识别后名单重建');
   fs.rmSync(home('agents.json.broken'), { force: true });
 });
+
+test('同一个工具换个模型再加一位：工具列出来的几档并成一项；照抄设置只换模型；同一个模型不重复加；删掉其中一位不算删掉这个工具，升级后路径一起更新', () => {
+  // 各家 models 命令的输出：标题、说明、报错行不算
+  assert.deepEqual(harness.parseModelList('Available models\n\nauto - Auto (default)\ngpt-5.3-codex - Codex 5.3\ngrok-4.7-xhigh-fast - Grok 4.7  Extra High Fast (current)\n'), ['gpt-5.3-codex', 'grok-4.7-xhigh-fast']);
+  assert.deepEqual(harness.parseModelList('Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\n'), ['gemini-3.8-flash-high']);
+  assert.deepEqual(harness.parseModelList('You are not authenticated.\n\nDefault model: grok-4.6\n\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4.5\n'), ['grok-4.6', 'grok-4.5']);
+  assert.deepEqual(harness.parseModelList('\x1b[1mopencode/big-pickle\x1b[0m\ndeepseek/deepseek-v4-pro\nError: see https://cursor.com/download-1\n'), ['opencode/big-pickle', 'deepseek/deepseek-v4-pro']);
+  // 同一个模型的几档只留一个：不带「快」的，档位 high 或不写的；不是对话模型的（语音、向量）、Auto 不列
+  const ids = ['auto', 'grok-4.7-low', 'grok-4.7-xhigh-fast', 'grok-4.7-high', 'grok-4.7-high-fast', 'gpt-5.5-none', 'gpt-5.5-extra-high', 'gpt-5.5-high', 'gpt-5.3-codex-low', 'gpt-5.3-codex', 'mimo-v2.5-tts', 'text-embedding-3'];
+  assert.deepEqual(
+    names.modelChoices(ids).map((c) => [c.name, c.id]),
+    [
+      ['Grok 4.7', 'grok-4.7-high'],
+      ['GPT-5.5', 'gpt-5.5-high'],
+      ['GPT-5.3 Codex', 'gpt-5.3-codex'],
+    ]
+  );
+  // Claude Code 的简称：给人看的名字按这台电脑上最近实际用过的；没用过就是简称；接了别家模型的不换
+  const log = path.join(HOME, '.claude', 'projects', 'p', 's.jsonl');
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  fs.writeFileSync(log, `${JSON.stringify({ type: 'assistant', message: { model: 'claude-sonnet-5-5' } })}\n`);
+  assert.deepEqual(
+    names.modelChoices(harness.CLAUDE_ALIASES, (id) => harness.shownModel('claude-official', id)).map((c) => [c.name, c.id]),
+    [
+      ['Claude Fable', 'fable'],
+      ['Claude Opus', 'opus'],
+      ['Claude Sonnet 5.5', 'sonnet'],
+      ['Claude Haiku', 'haiku'],
+    ]
+  );
+  writeJson(path.join(HOME, '.claude', 'settings.json'), { env: { ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: 'x' } });
+  assert.equal(harness.shownModel('claude', 'sonnet'), 'sonnet', '接了别家模型的 Claude Code：sonnet 指的是别家的');
+  fs.rmSync(path.join(HOME, '.claude'), { recursive: true, force: true });
+
+  const h = (id: string, model?: string) => ({ id, label: id, vendor: '', version: '1', where: '', login: { state: 'ok' as const, detail: '' }, model: model ? { model, label: model } : {}, workLevels: ['safe' as const], canReview: true, tested: 'yes' as const, loginHint: '' });
+  const report = { at: '', harnesses: [h('codex', 'gpt-6-sol'), h('claude-official', 'claude-opus-5-5')], providers: [], apps: [], unknownKeys: [] };
+  writeJson(home('detected.json'), report);
+  writeJson(home('auto.json'), { order: [] });
+  writeJson(home('agents.json'), {
+    agents: [
+      { name: 'codex', kind: 'cli', cmd: '/old/codex', tier: 'strong', tierSet: true, harness: 'codex', effort: 'low', detected: true, app: 'open -a ChatGPT {{dir}}' },
+      { name: 'claude-official', label: 'Claude Code 官方账号', kind: 'cli', cmd: '/old/claude', tier: 'strong', harness: 'claude-official', detected: true },
+      { name: 'glm-api', kind: 'api', tier: 'weak', api: { baseUrl: 'https://open.bigmodel.cn/api/anthropic', model: 'GLM-5.3', apiKeyEnv: 'ZHIPU_CODING_KEY', format: 'anthropic' } },
+      { name: 'trae', kind: 'app', cmd: 'open -a Trae {{dir}}', tier: 'weak' },
+    ],
+  });
+  // 和原来那位同一个模型的（名字一样的另一档也算）不加；空的不算
+  const a1 = detect.addModelMembers('codex', ['gpt-6-luna', 'gpt-6-sol', 'gpt-6-luna-high', ' ', 'gpt-6-sol-fast']);
+  assert.deepEqual(
+    a1.map((a) => [a.name, a.model, a.tier, a.cmd, a.harness, a.app ?? null, a.effort ?? null, a.tierSet ?? null]),
+    [['codex-gpt-6-luna', 'gpt-6-luna', 'strong', '/old/codex', 'codex', null, null, null]],
+    '照抄工具和位置，桌面程序、思考强度、自己定的强弱不抄'
+  );
+  const a2 = detect.addModelMembers('claude-official', ['opus', 'sonnet', 'haiku']);
+  assert.deepEqual(
+    a2.map((a) => [a.name, a.model, a.tier, a.label]),
+    [
+      ['claude-official-sonnet', 'sonnet', 'strong', 'Claude Code 官方账号'],
+      ['claude-official-haiku', 'haiku', 'weak', 'Claude Code 官方账号'],
+    ],
+    '官方账号本来就是最新的 Opus；强弱按模型猜'
+  );
+  const a3 = detect.addModelMembers('glm-api', ['glm-5.3-flash']);
+  assert.deepEqual([a3[0].name, a3[0].api?.model, a3[0].model, a3[0].api?.apiKeyEnv, a3[0].tier], ['glm-api-glm-5-3-flash', 'glm-5.3-flash', 'glm-5.3-flash', 'ZHIPU_CODING_KEY', 'weak']);
+  assert.throws(() => detect.addModelMembers('trae', ['x-1']), (e: { code?: string }) => e.code === 'bad-agent', '桌面程序换不了模型');
+  for (const bad of ['gpt 6', 'x"&calc&"', 'a;rm', '$(id)', 'x'.repeat(81)]) assert.throws(() => detect.addModelMembers('codex', [bad]), (e: { code?: string }) => e.code === 'bad-agent', `模型名 ${bad.slice(0, 12)} 不收`);
+  assert.deepEqual(detect.addModelMembers('codex', ['gpt-6-luna']), [], '加过了不再加');
+  assert.equal(detect.addModelMembers('codex', ['a'.repeat(60)])[0].name.length <= 40, true, '名字太长截短');
+  assert.deepEqual(detect.tidyRegistry(report), [], '换了模型的几位不会被当成同一位并掉');
+
+  // 删掉原来那位：同一个工具还有别的模型在，这个工具不算删掉（桌面程序跟着它走了，算删掉）
+  registry.removeAgent('codex');
+  assert.deepEqual(registry.loadRegistry().removed, ['app:ChatGPT']);
+  // 工具升级换了位置：照着它加的几位一起更新
+  const bin = path.join(HOME, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\necho "codex-cli 9.9.9"\n', { mode: 0o755 });
+  const PATH = process.env.PATH;
+  process.env.PATH = `${bin}:/usr/bin:/bin`;
+  try {
+    harness.clearLocateCache();
+    detect.syncRegistry(report);
+    const reg = registry.loadRegistry();
+    const cmds = reg.agents.filter((a) => a.harness === 'codex').map((a) => a.cmd);
+    assert.deepEqual(cmds, [path.join(bin, 'codex'), path.join(bin, 'codex')]);
+    assert.ok(!reg.agents.some((a) => a.name === 'codex'), '删掉的那位没被加回来（同一个工具已经有人在）');
+  } finally {
+    process.env.PATH = PATH;
+    harness.clearLocateCache();
+  }
+  fs.rmSync(home('detected.json'), { force: true });
+});

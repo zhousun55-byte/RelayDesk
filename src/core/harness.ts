@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -99,6 +99,8 @@ export interface HarnessSpec {
   usage?(root: string, sinceMs: number): { input: number; output: number } | null;
   /** 输出里不带额度的工具：从它自己记的会话里读（sinceMs 之后这个项目最新的一份）；读不到就是 null。 */
   limits?(root: string, sinceMs: number): Limit[] | null;
+  /** 能换哪些模型（不花额度：它自己的 models 命令、模型缓存、简称）。这回列不出来是 null；根本列不了的工具不写。 */
+  models?(loc: Located): Promise<string[] | null>;
 }
 
 // ---- 小工具 ----
@@ -111,6 +113,59 @@ function run(argv: string[], timeoutMs = 15_000, dropEnv?: RegExp, extraEnv: Rec
   const e = resolveExec(argv);
   const r = spawnSync(e.file, e.args, { encoding: 'utf8', timeout: timeoutMs, env: agentEnv(extraEnv, dropEnv), cwd: os.tmpdir(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, windowsVerbatimArguments: e.verbatim });
   return { code: r.status ?? -1, out: (r.stdout ?? '').trim(), err: (r.stderr ?? '').trim() };
+}
+
+/** 不等它跑完（列模型要联网，不能卡住接力台）；出错也把输出交回来。 */
+function runAsync(argv: string[], timeoutMs: number): Promise<string> {
+  const e = resolveExec(argv);
+  return new Promise((resolve) => {
+    execFile(e.file, e.args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 4 << 20, env: agentEnv(), cwd: os.tmpdir(), windowsHide: true, windowsVerbatimArguments: e.verbatim }, (_err, out, err) => resolve(`${out ?? ''}\n${err ?? ''}`));
+  });
+}
+
+/**
+ * models 命令的输出：一行一个，「id - 名字」「id<Tab>名字」「  * id (default)」「provider/id」都认；
+ * 标题、说明、报错行不算（模型名里总有数字、- 或 /，「Available」「Default model:」没有）。
+ */
+export function parseModelList(text: string): string[] {
+  const out: string[] = [];
+  for (const line of text.replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/)) {
+    const t = line.replace(/^[\s*•-]+/, '').split(/\s/)[0] ?? '';
+    if (/^[a-z0-9][\w.:/[\]-]*$/i.test(t) && /[a-z]/i.test(t) && /[\d/-]/.test(t) && !t.includes('://') && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+const listModels = (args: string[]) => (loc: Located) => runAsync([...loc.exec, ...args], 30_000).then(parseModelList);
+
+/** Claude Code 认的简称：各取这一家最新的（Fable、Opus、Sonnet、Haiku）。 */
+export const CLAUDE_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'];
+
+const aliasCache = new Map<string, { at: number; model: string }>();
+
+/**
+ * 给人看的模型名：Claude Code 的简称（opus、sonnet……）换成这台电脑上最近实际用过的那一个（claude-sonnet-5-5）；
+ * 没用过就还是简称。调用时照样传简称，由 Claude Code 自己认。接了别家模型的 Claude Code 简称指的是别家的，不换。
+ */
+export function shownModel(harness: string | undefined, model: string): string {
+  const alias = model.toLowerCase();
+  if (!CLAUDE_ALIASES.includes(alias) || !(harness === 'claude-official' || (harness === 'claude' && !claudeThirdParty()))) return model;
+  const hit = aliasCache.get(alias);
+  if (hit && Date.now() - hit.at < 60_000) return hit.model;
+  const found = recentOfficialModel(new RegExp(`^claude-${alias}-`)) ?? model;
+  aliasCache.set(alias, { at: Date.now(), model: found });
+  return found;
+}
+
+/** Codex 自己缓存的模型列表（~/.codex/models_cache.json，按它的先后）：藏起来的不算。 */
+function codexModels(): string[] {
+  const list = readJson(path.join(home(), '.codex', 'models_cache.json'))?.models;
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((x) => obj(x))
+    .filter((m) => m.visibility !== 'hide' && strOf(m.slug))
+    .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0))
+    .map((m) => strOf(m.slug)!);
 }
 
 export function firstVersion(text: string): string {
@@ -316,6 +371,8 @@ const claude: HarnessSpec = {
     return { model: s.model, label: s.model?.replace(/\[[^\]]*\]$/, ''), via: s.baseHost };
   },
   invoke: (loc, i) => claudeInvoke(loc, i),
+  // 接了别家模型时简称指的是别家的，列不出来
+  models: async () => (claudeThirdParty() ? null : CLAUDE_ALIASES),
 };
 
 /** 接力台调用 Claude Code 时一律关掉它的自动更新：升不升级、升到哪一版由你决定。 */
@@ -486,6 +543,7 @@ const claudeOfficial: HarnessSpec = {
     // 没在名单里指定模型：用这台电脑上最近用过的最新 Opus（和桌面版一样）；命令行太旧用不了它、或者看不出来，就用简称 opus。
     return { ...claudeInvoke(loc, { ...i, model: i.model || officialModel(loc.version).model }, OFFICIAL_ARGS), dropEnv: CLAUDE_PROVIDER_ENV };
   },
+  models: async () => CLAUDE_ALIASES,
 };
 
 const codex: HarnessSpec = {
@@ -522,6 +580,7 @@ const codex: HarnessSpec = {
     return { argv: a, stdin: i.prompt, format: 'codex', outFile: i.outFile };
   },
   limits: (root, sinceMs) => codexSessionLimits(root, sinceMs),
+  models: async () => codexModels(),
 };
 
 /**
@@ -651,6 +710,7 @@ const cursorAgent: HarnessSpec = {
     a.push(i.prompt);
     return { argv: a, format: 'cursor' };
   },
+  models: listModels(['models']),
 };
 
 /**
@@ -925,6 +985,7 @@ const antigravity: HarnessSpec = {
     if (i.effort) a.push('--effort', i.effort);
     return { argv: a, format: 'agy' };
   },
+  models: listModels(['models']),
 };
 
 const gemini: HarnessSpec = {
@@ -1007,6 +1068,7 @@ const opencode: HarnessSpec = {
     a.push(i.prompt);
     return { argv: a, format: 'lines' };
   },
+  models: listModels(['models']),
 };
 
 const droid: HarnessSpec = {
@@ -1073,6 +1135,7 @@ const grok: HarnessSpec = {
     if (i.model) a.push('-m', i.model);
     return { argv: a, format: 'lines' };
   },
+  models: listModels(['models']),
 };
 
 export const HARNESSES: HarnessSpec[] = [claude, claudeOfficial, codex, cursorAgent, dsh, zcode, antigravity, gemini, qwen, opencode, droid, copilot, grok];

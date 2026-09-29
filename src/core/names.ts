@@ -5,7 +5,7 @@
 
 const WORD: Record<string, string> = { gpt: 'GPT', glm: 'GLM', mimo: 'MiMo', deepseek: 'DeepSeek', qwq: 'QwQ' };
 /** 模型名后面跟的思考强度、快慢、日期：不算名字的一部分。 */
-const VARIANT = /^(low|medium|high|xhigh|max|ultra|minimal|fast|thinking|preview|latest|\d{8})$/i;
+const VARIANT = /^(none|low|medium|high|xhigh|extra|max|ultra|minimal|fast|thinking|preview|latest|\d{8})$/i;
 
 /** gpt-6-sol → GPT-6 Sol；claude-opus-5-5、opus → Claude Opus 5.5、Claude Opus；cursor-grok-4.6-high-fast → Grok 4.6；deepseek/deepseek-flash → DeepSeek Flash。 */
 export function llmName(model: string | null | undefined): string {
@@ -31,6 +31,32 @@ export function llmName(model: string | null | undefined): string {
     i = 2;
   }
   return [head, ...w.slice(i).map(word)].join(' ');
+}
+
+/** 接口列出来的不是对话模型的：语音、转写、向量、画图、审核。 */
+const NOT_CHAT = /(^|[-_./])(tts|asr|voice\w*|speech|audio|whisper|transcribe|realtime|embed\w*|rerank\w*|moderation|image|dall-e)([-_.]|$)/i;
+
+/** 同一个模型的几档里挑哪个：不带「快」（贵）的先，档位 不写 > high > medium > xhigh > extra-high > max > low > minimal > none。 */
+const EFFORT_PREF = ['high', 'medium', 'xhigh', 'extra', 'max', 'low', 'minimal', 'none'];
+function variantRank(id: string): number {
+  const w = id.toLowerCase().split(/[-_\s]+/);
+  return (w.includes('fast') ? 20 : 0) + Math.max(-1, ...EFFORT_PREF.map((x, i) => (w.includes(x) ? i : -1))) + 1;
+}
+
+/**
+ * 工具列出来的模型并成给人挑的几项：同一个模型的几档（思考强度、快慢）只留一个，名字按 llmName。
+ * shown：给人看时换成哪个名字（Claude Code 的简称 → 最近实际用的那个），调用时还用原来的 id。
+ */
+export function modelChoices(ids: string[], shown: (id: string) => string = (id) => id): { id: string; name: string; shown: string }[] {
+  const best = new Map<string, { id: string; name: string; shown: string }>();
+  for (const id of ids) {
+    const s = shown(id);
+    const name = llmName(s);
+    if (!name || /^(auto|default)$/i.test(id) || NOT_CHAT.test(id)) continue;
+    const had = best.get(name);
+    if (!had || variantRank(id) < variantRank(had.id)) best.set(name, { id, name, shown: s });
+  }
+  return [...best.values()];
 }
 
 /** 一棒是谁做的（记下的是「Codex · gpt-6-sol」）给人看的名字：GPT-6 Sol；看不出模型的写工具名。 */

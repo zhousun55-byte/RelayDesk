@@ -9,6 +9,8 @@
 import json
 import os
 import socket
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import subprocess
 import sys
 import tempfile
@@ -30,6 +32,20 @@ def check(ok, what):
     print(('通过  ' if ok else '没过  ') + what)
     if not ok:
         fails.append(what)
+
+
+class Models(BaseHTTPRequestHandler):
+    """本机的假模型接口：只回模型列表（添加模型时读它）。"""
+
+    def do_GET(self):
+        body = json.dumps({'data': [{'id': 'demo-pro'}, {'id': 'demo-flash'}, {'id': 'demo-tts'}]}).encode()
+        self.send_response(200)
+        self.send_header('content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
 
 
 def free_port():
@@ -127,6 +143,33 @@ def main():
             page.keyboard.press('Escape')
             page.wait_for_timeout(500)
             check(page.locator('.settings').count() == 0, '设置：按 Esc 关掉')
+
+            # 添加模型：同一个接口换个模型再加一位（列出来的勾上、语音模型不列、已有的标上）
+            mock = ThreadingHTTPServer(('127.0.0.1', 0), Models)
+            threading.Thread(target=mock.serve_forever, daemon=True).start()
+            with open(os.path.join(home, '.relay', 'agents.json'), 'w') as f:
+                json.dump({'agents': [{'name': 'demo', 'label': 'Demo 接口', 'kind': 'api', 'tier': 'strong', 'tierSet': True, 'api': {'baseUrl': f'http://127.0.0.1:{mock.server_port}/v1', 'model': 'demo-pro', 'apiKeyEnv': ''}}]}, f)
+            js('() => refresh(true)')
+            page.get_by_role('button', name='设置').click()
+            page.locator('.settings').get_by_role('tab', name='成员').click()
+            page.locator('.settings .members .member').first.wait_for()
+            page.locator('.settings .set-title').get_by_role('button', name='添加').click()
+            page.get_by_role('menuitem', name='模型').click()
+            sheet = page.get_by_role('dialog', name='添加模型')
+            sheet.locator('.model-list .mi').first.wait_for(timeout=5000)
+            rows = sheet.locator('.model-list .mi')
+            had = rows.filter(has_text='Demo Pro')
+            check(rows.count() == 2 and had.is_disabled() and had.get_by_text('已在名单里').count() == 1, '添加模型：列出接口上的模型，语音模型不列，已在名单里的标上')
+            rows.filter(has_text='Demo Flash').click()
+            page.screenshot(path=os.path.join(tmp, 'add-model.png'))
+            sheet.get_by_role('button', name='添加').click()
+            page.wait_for_function('() => document.querySelectorAll(".settings .members .member").length === 2 && !document.querySelector("[role=dialog][aria-label=添加模型]")', timeout=5000)
+            with open(os.path.join(home, '.relay', 'agents.json')) as f:
+                added = [a for a in json.load(f)['agents'] if a['name'] != 'demo']
+            check(page.get_by_role('dialog', name='添加模型').count() == 0 and [(a['api']['model'], a['tier']) for a in added] == [('demo-flash', 'weak')] and page.locator('.settings .members').get_by_text('Demo Flash').count() == 1, '添加模型：勾上点「添加」，名单里多一位（照抄接口，只换模型，强弱按模型猜）')
+            page.keyboard.press('Escape')
+            page.wait_for_timeout(400)
+            mock.shutdown()
 
             # 群聊：之前发的长话先收起，点「展开」看全文；粘进来很长的一段字存成文件带上，输入框里只有一个小条，点开在页签里看
             page.get_by_role('tab', name='群聊').click()

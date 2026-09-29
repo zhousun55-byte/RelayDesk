@@ -93,6 +93,69 @@ test('网页接口：接入 → 写任务 → 派人接着做一棒 → 看交�
   }
 });
 
+test('同一个工具加几个模型：列出工具能换的模型、勾选加成几位；每位用自己的模型干活（Opus 做完一棒，Sonnet 接着做）', async () => {
+  const s = sandbox('models');
+  withFakes(s, { FAKE_CLAUDE_OFFICIAL: 'pro' });
+  fs.writeFileSync(
+    path.join(s.home, '.codex', 'models_cache.json'),
+    JSON.stringify({ models: [{ slug: 'gpt-6', visibility: 'list', priority: 1 }, { slug: 'gpt-6-luna', visibility: 'list', priority: 3 }, { slug: 'codex-auto-review', visibility: 'hide', priority: 43 }] })
+  );
+  s.relay(['detect', '--offline']);
+  const ui = await startUi(s);
+  try {
+    await ui.call('/api/init', { dir: s.repo });
+    await ui.call('/api/task', { dir: s.repo, text: '做两件事', steps: ['第一件', '第二件'] });
+    let r = await ui.call('/api/models?name=codex');
+    assert.deepEqual(
+      r.json.models.map((m: { id: string; name: string; added: boolean }) => [m.id, m.name, m.added]),
+      [
+        ['gpt-6', 'GPT-6', true],
+        ['gpt-6-luna', 'GPT-6 Luna', false],
+      ],
+      'Codex 自己缓存的列表，藏起来的不列，名单里已有的标上'
+    );
+    r = await ui.call('/api/models?name=claude');
+    assert.deepEqual([r.json.listed, r.json.models], [false, []], '接了别家模型的 Claude Code 列不出来');
+    r = await ui.call('/api/models?name=claude-official');
+    assert.deepEqual(
+      r.json.models.map((m: { id: string; added: boolean }) => [m.id, m.added]),
+      [
+        ['fable', false],
+        ['opus', true],
+        ['sonnet', false],
+        ['haiku', false],
+      ]
+    );
+    assert.equal((await ui.call('/api/models?name=nobody')).status, 400);
+
+    r = await ui.call('/api/members/add-models', { from: 'claude-official', models: ['sonnet'] });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual(r.json.added, ['claude-official-sonnet']);
+    const sonnet = r.json.members.find((m: { name: string }) => m.name === 'claude-official-sonnet');
+    assert.deepEqual([sonnet.llm, sonnet.tier, sonnet.canWork, sonnet.tool], ['Claude Sonnet', 'strong', true, 'Claude Code']);
+    assert.equal((await ui.call('/api/members/add-models', { from: 'codex', models: [] })).status, 400, '没选模型');
+    assert.deepEqual((await ui.call('/api/members/add-models', { from: 'claude-official', models: ['sonnet'] })).json.added, [], '加过了不再加');
+
+    // Opus 做一棒，Sonnet 接着做：各用各的模型
+    for (const who of ['claude-official', 'claude-official-sonnet']) {
+      const go = await ui.call('/api/go', { dir: s.repo, who });
+      assert.equal(go.status, 200, JSON.stringify(go.json));
+      await until(15_000, async () => (await ui.call(`/api/state${q(s)}`)).json.project.go?.status === 'done', `${who} 这一棒做完`);
+    }
+    const runs = fs
+      .readFileSync(s.env.FAKE_LOG!, 'utf8')
+      .split('\n')
+      .filter((l) => l.includes('--setting-sources') && l.includes(' -p'))
+      .map((l) => l.match(/--model (\S+)/)?.[1]);
+    assert.deepEqual(runs, ['opus', 'sonnet']);
+    const st = await ui.call(`/api/state${q(s)}`);
+    assert.equal(st.json.project.stints.length, 2);
+    assert.equal(st.json.project.task.done, 2, '第二棒接着第一棒往下做');
+  } finally {
+    ui.child.kill();
+  }
+});
+
 test('网页开着时盯着文件夹：你在别的工具里改文件、写交接，接力台自动记上账', async () => {
   const s = sandbox('srv-watch');
   withFakes(s);

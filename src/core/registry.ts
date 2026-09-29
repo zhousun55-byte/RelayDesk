@@ -253,5 +253,8 @@ export function removeAgent(name: string): void {
   const reg = loadRegistry();
   const gone = reg.agents.find((a) => a.name === name);
   if (!gone) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
-  saveRegistry({ agents: reg.agents.filter((a) => a !== gone), removed: [...(reg.removed ?? []), ...removalKeys(gone)] });
+  const rest = reg.agents.filter((a) => a !== gone);
+  // 同一个工具换了模型的还有别的几位在：这个工具不算删掉（重新识别照常更新它的位置）
+  const held = new Set(rest.flatMap(removalKeys));
+  saveRegistry({ agents: rest, removed: [...(reg.removed ?? []), ...removalKeys(gone).filter((k) => !held.has(k))] });
 }

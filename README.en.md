@@ -58,6 +58,14 @@ Then:
    - **Let RelayDesk do it:** click **Auto** at the top. To have one specific AI do one leg, use the ▾ next to it.
 4. **Watch, review, roll back** in the web app. Legs by weak models say *Needs review*.
 
+### One tool, several models
+
+A tool can usually switch models: Claude Code has Opus and Sonnet, Cursor has dozens. In *Settings → Members*, click *Add → Model* (or right-click a member → *Add models*), pick the tool and tick the models you want. Each model becomes its own member, with its own name, strong/weak setting and quota, and works like any other member in relays, dispatch and group chat. The list comes from the tool itself and costs nothing (Codex's model cache; the `models` command of Cursor, Antigravity, OpenCode and Grok; an API's model list; Claude Code's aliases fable / opus / sonnet / haiku). Effort and speed variants of one model are merged into one entry, and speech or embedding models are left out. For tools that can't list their models, type a model name. Nothing is added automatically; you choose.
+
+- Opus works, Sonnet continues: pick Sonnet in ▾ for the next leg. *Auto* follows the member order, so when Opus runs out, the next one takes over.
+- Opus directs Sonnet: mark Sonnet as weak, drag Opus to the top of the strong models, and write the task on the *Dispatch* page. Opus splits it into steps and does the final review; Sonnet does one step per leg.
+- Both discuss: tick both in the group chat.
+
 ## Where things live
 
 - `.relay/` in your project: the ledger, the relay book, handoffs, reviews, snapshots (a separate git directory, so your own git history is untouched), uploads.
