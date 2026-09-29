@@ -3,7 +3,7 @@ import path from 'node:path';
 import { RelayError } from './errors';
 import { appNameOf } from './names';
 import { relayHome } from './paths';
-import type { AgentConfig, AgentKind, AgentsRegistry, PromptMode, Tier } from './types';
+import type { AgentConfig, AgentKind, AgentsRegistry, Tier } from './types';
 
 /** 桌面程序「打开文件夹」命令里的占位符（旧版叫 {{worktree}}，也认）。 */
 export const DIR_PLACEHOLDER = '{{dir}}';
@@ -14,7 +14,6 @@ const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/;
 const KEY_FROM_RE = /^mimocode:[A-Za-z0-9._-]{1,80}$/;
 const KINDS: readonly AgentKind[] = ['cli', 'app', 'api'];
 const TIERS: readonly Tier[] = ['strong', 'weak'];
-const MODES: readonly PromptMode[] = ['arg', 'stdin', 'file'];
 
 const KNOWN_LABELS: Record<string, string> = {
   claude: 'Claude Code',
@@ -167,10 +166,6 @@ export function normalizeAgent(input: unknown): AgentConfig {
       throw new RelayError(`桌面程序的打开命令必须含 ${DIR_PLACEHOLDER}（项目文件夹），例如 open -a Cursor ${DIR_PLACEHOLDER}。`, 'bad-agent');
     }
     agent.cmd = cmd;
-    const promptIn = o.prompt as { mode?: unknown } | undefined;
-    const mode = (promptIn?.mode ?? o.mode ?? 'file') as PromptMode;
-    if (!MODES.includes(mode)) throw new RelayError('上岗词喂法只能是 arg / stdin / file。', 'bad-agent');
-    agent.prompt = { mode };
     if (model) agent.model = model;
     if (ask) agent.ask = ask;
     const harness = optText(o.harness, '编程工具', 40);

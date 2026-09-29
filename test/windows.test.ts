@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { which } from '../src/core/env';
 import { fillTemplate, shellWords } from '../src/core/launch';
+import { parseHandoff, parseReview, parseTask } from '../src/core/notes';
+import { protocolBlock, protocolState, upsertBlock } from '../src/core/protocol';
 import { npmShimTarget, resolveExec, shellArgv } from '../src/core/proc';
 
 /**
@@ -73,4 +75,32 @@ test('Windows：模板里的路径用双引号（里面的双引号写两遍）�
   assert.equal(fillTemplate('code {{dir}}', { dir: "/tmp/it's" }, false), `code '/tmp/it'\\''s'`);
   assert.deepEqual(shellWords('C:\\Tools\\x.exe "C:\\My Dir"', true), ['C:\\Tools\\x.exe', 'C:\\My Dir']);
   assert.deepEqual(shellWords('a\\ b', false), ['a b']);
+});
+
+test('Windows：AI 写的任务、交接、复核是 \\r\\n 换行也认得（打勾、状态、结论）', () => {
+  const crlf = (s: string) => s.replace(/\n/g, '\r\n');
+  const t = parseTask(crlf('# 任务\n\n加导出\n\n## 进度\n\n- [x] 第一步\n- [ ] 第二步\n'));
+  assert.deepEqual(t.items.map((i) => [i.text, i.done]), [['第一步', true], ['第二步', false]]);
+  assert.equal(t.title, '加导出');
+  const h = parseHandoff(crlf('# 交接：Codex · gpt-6\n\n- 状态：已交接\n\n## 做了什么\n\n- 加了导出按钮\n'));
+  assert.equal(h.state, 'handed');
+  assert.equal(h.summary, '加了导出按钮');
+  assert.equal(parseReview(crlf('# 复核：第 3 棒\n\n- 结论：没问题\n')).verdict, 'ok');
+});
+
+test('Windows：AGENTS.md 是 \\r\\n 换行时，规矩也用 \\r\\n 写，认得出是最新的，再写一遍不改', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-crlf-'));
+  try {
+    const f = path.join(dir, 'AGENTS.md');
+    fs.writeFileSync(f, '# 我的规矩\r\n\r\n用中文回答。\r\n');
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '@AGENTS.md\r\n');
+    assert.equal(upsertBlock(f), true);
+    const text = fs.readFileSync(f, 'utf8');
+    assert.ok(!/[^\r]\n/.test(text), '整个文件都是 \\r\\n');
+    assert.ok(text.includes(protocolBlock().split('\n')[1]));
+    assert.equal(protocolState(dir), 'ok');
+    assert.equal(upsertBlock(f), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

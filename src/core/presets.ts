@@ -22,7 +22,6 @@ export const PRESETS: Preset[] = [
       kind: 'cli',
       cmd: 'claude',
       tier: 'strong',
-      prompt: { mode: 'arg' },
       harness: 'claude',
     },
   },
@@ -36,7 +35,6 @@ export const PRESETS: Preset[] = [
       kind: 'cli',
       cmd: 'codex',
       tier: 'strong',
-      prompt: { mode: 'arg' },
       harness: 'codex',
     },
   },
@@ -86,7 +84,7 @@ export const PRESETS: Preset[] = [
     id: 'cli',
     title: '其他终端工具',
     hint: '任何能在终端里启动的 AI 工具。',
-    agent: { name: 'mycli', label: '我的工具', kind: 'cli', cmd: '', tier: 'weak', prompt: { mode: 'file' } },
+    agent: { name: 'mycli', label: '我的工具', kind: 'cli', cmd: '', tier: 'weak' },
   },
 ];
 

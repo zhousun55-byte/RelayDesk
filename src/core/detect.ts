@@ -164,9 +164,6 @@ const DEFAULT_NAMES: Record<string, string> = { claude: 'claude', 'claude-offici
 
 const LABELS: Record<string, string> = { zcode: 'ZCode 命令行' };
 
-/** 手动在终端里用时，第一句话怎么喂：大多数工具认「第一个参数是提示词」；ZCode / OpenCode 不认，只提示人转告。 */
-const MANUAL_MODE: Record<string, 'arg' | 'file'> = { zcode: 'file', opencode: 'file' };
-
 function harnessOf(a: AgentConfig): HarnessSpec | null {
   if (a.harness) return findHarness(a.harness);
   if (agentKind(a) === 'cli') return harnessForCommand(a.cmd);
@@ -228,7 +225,7 @@ export function syncRegistry(report: DetectReport): string[] {
     names.add(name);
     // 看不出用的哪个模型：按弱算（它做的活要复核），你在设置里可以改成强。
     const t = tierForModel(h.model.model);
-    reg.agents.push({ name, label: LABELS[h.id] ?? h.label, kind: 'cli', cmd, tier: t === 'strong' ? 'strong' : 'weak', prompt: { mode: MANUAL_MODE[h.id] ?? 'arg' }, harness: h.id, detected: true });
+    reg.agents.push({ name, label: LABELS[h.id] ?? h.label, kind: 'cli', cmd, tier: t === 'strong' ? 'strong' : 'weak', harness: h.id, detected: true });
     changes.push(`新加了 ${LABELS[h.id] ?? h.label}（${name}）。`);
   }
 

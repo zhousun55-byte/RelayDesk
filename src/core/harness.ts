@@ -332,12 +332,6 @@ function claudeInvoke(loc: Located, i: InvokeInput, extra: string[] = []): Invoc
   return { argv: a, stdin: i.prompt, format: 'claude', env: { ...CLAUDE_ENV } };
 }
 
-/**
- * Claude Code 用你的官方账号（claude.ai 登录）。你把 Claude Code 默认接到了别家模型（比如 DeepSeek）时，
- * 同一个 claude 命令其实是两位：默认的（别家模型，多半算弱）和官方账号（Opus，算强）。
- * 官方账号：跳过你的用户设置、去掉 ANTHROPIC_* 这些变量，就走 claude.ai 登录；默认用最新的 Opus。
- * 没接别家模型时它和「Claude Code」是同一位，不单列。
- */
 // ---- 旧版命令行用不了的新模型 ----
 
 /** 「Claude Code 2.1.263 does not support this model; version 2.1.280 or newer is required」 */
@@ -447,6 +441,12 @@ function locateOfficial(): Located | null {
   return claudeThirdParty() ? locateBin('claude') : null;
 }
 
+/**
+ * Claude Code 用你的官方账号（claude.ai 登录）。你把 Claude Code 默认接到了别家模型（比如 DeepSeek）时，
+ * 同一个 claude 命令其实是两位：默认的（别家模型，多半算弱）和官方账号（Opus，算强）。
+ * 官方账号：跳过你的用户设置、去掉 ANTHROPIC_* 这些变量，就走 claude.ai 登录；默认用最新的 Opus。
+ * 没接别家模型时它和「Claude Code」是同一位，不单列。
+ */
 const claudeOfficial: HarnessSpec = {
   id: 'claude-official',
   label: 'Claude Code 官方账号',
@@ -1103,7 +1103,8 @@ export function findHarness(id: string | undefined): HarnessSpec | null {
 /** 命令行的第一个词对应哪个工具（把旧名单里的 cmd: "claude" 认出来）。 */
 export function harnessForCommand(cmd: string | undefined): HarnessSpec | null {
   const first = (cmd ?? '').trim().split(/\s+/)[0] ?? '';
-  const base = path.basename(first);
+  // Windows 上是 codex.cmd、claude.exe
+  const base = path.basename(first.replace(/^["']|["']$/g, '')).replace(/\.(cmd|bat|exe)$/i, '');
   const map: Record<string, string> = { claude: 'claude', codex: 'codex', 'cursor-agent': 'cursor-agent', dsh: 'dsh', zcode: 'zcode', agy: 'agy', gemini: 'gemini', qwen: 'qwen', opencode: 'opencode', droid: 'droid', copilot: 'copilot', grok: 'grok' };
   return findHarness(map[base]);
 }

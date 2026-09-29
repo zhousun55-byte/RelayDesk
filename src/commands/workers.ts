@@ -13,7 +13,6 @@ interface AgentFlags {
   kind?: string;
   cmd?: string;
   tier?: string;
-  mode?: string;
   model?: string;
   ask?: string;
   apiBase?: string;
@@ -31,7 +30,6 @@ function withFlags(cmd: Command): Command {
     .option('--kind <类型>', 'cli（终端）| app（桌面）| api（只讨论）')
     .option('--cmd <命令>', '启动命令；桌面程序要含 {{dir}}（项目文件夹）')
     .option('--tier <能力>', 'strong（强）| weak（弱）')
-    .option('--mode <喂法>', '终端成员的上岗词喂法：arg | stdin | file')
     .option('--model <模型>', '派活时用的模型（如 gpt-6-sol；不填用工具自己的默认）')
     .option('--ask <命令>', '讨论命令：从标准输入读题、标准输出回答')
     .option('--api-base <地址>', 'API 地址（kind=api）')
@@ -48,7 +46,6 @@ function merged(base: Partial<AgentConfig>, name: string, f: AgentFlags): Record
   if (f.kind !== undefined) out.kind = f.kind;
   if (f.cmd !== undefined) out.cmd = f.cmd;
   if (f.tier !== undefined) out.tier = f.tier;
-  if (f.mode !== undefined) out.prompt = { mode: f.mode };
   if (f.model !== undefined) out.model = f.model;
   if (f.ask !== undefined) out.ask = f.ask;
   if (f.note !== undefined) out.note = f.note;
@@ -106,7 +103,7 @@ export function workersCommand(): Command {
   withFlags(workers.command('add').description('添加一个成员').argument('<名字>', '英文名，命令里用它，如 claude'))
     .option('--preset <编号>', '从现成配置开始（relay workers presets 查看）')
     .action((name: string, f: AgentFlags) => {
-      let base: Partial<AgentConfig> = { kind: 'cli', tier: 'weak', prompt: { mode: 'file' } };
+      let base: Partial<AgentConfig> = { kind: 'cli', tier: 'weak' };
       if (f.preset) {
         const p = findPreset(f.preset);
         if (!p) throw new RelayError(`没有叫 ${f.preset} 的现成配置。relay workers presets 查看。`, 'no-preset');

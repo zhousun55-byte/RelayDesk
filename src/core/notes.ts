@@ -72,7 +72,11 @@ function section(raw: string, name: RegExp): string {
 
 const PLACEHOLDER_ITEM = /^（.*）$/;
 
-export function parseTask(raw: string): TaskDoc {
+/** Windows 上的工具写的是 \r\n 换行：先换成 \n，不然「- [x] 第一步」「状态：已交接」这种按行认的都认不出来。 */
+const lf = (raw: string) => raw.replace(/\r\n?/g, '\n');
+
+export function parseTask(text: string): TaskDoc {
+  const raw = lf(text);
   const lines = raw.split('\n');
   const h1 = lines.findIndex((l) => /^#\s+/.test(l));
   const bodyLines: string[] = [];
@@ -447,7 +451,8 @@ function workBullet(text: string): string {
   return clip80(verdict ?? (/[:：]$/.test(t) && all[i + 1] ? `${t}${all[i + 1]}` : t));
 }
 
-export function parseHandoff(raw: string, file = '', mtimeMs = 0, bornMs?: number): HandoffDoc {
+export function parseHandoff(text: string, file = '', mtimeMs = 0, bornMs?: number): HandoffDoc {
+  const raw = lf(text);
   const h1 = raw.match(/^#[ \t]*交接[ \t]*[:：]?[ \t]*(.*)$/m) ?? raw.match(/^#[ \t]+(.*)$/m);
   const did = section(raw, /做了什么|做了|完成了/);
   return {
@@ -631,7 +636,8 @@ export function verdictOf(text: string | undefined): Verdict {
   return state ?? 'unknown';
 }
 
-export function parseReview(raw: string, file = '', mtimeMs = 0): ReviewDoc {
+export function parseReview(text: string, file = '', mtimeMs = 0): ReviewDoc {
+  const raw = lf(text);
   const targets = new Set<number>();
   for (const m of `${path.basename(file)}\n${(raw.match(/^#.*$/m) ?? [''])[0]}`.matchAll(/第\s*(\d+)\s*棒/g)) targets.add(Number(m[1]));
   const vt = field(raw, '结论') ?? '';

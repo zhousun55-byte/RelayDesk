@@ -3,14 +3,6 @@
 export type Tier = 'strong' | 'weak';
 
 /**
- * 终端工人的上岗词喂法：
- * - arg：把一句「先读 .relay/ONBOARD.md」当参数传给命令（claude / codex 这类都支持）；
- * - stdin：从标准输入喂这句话（非交互的脚本型工人）；
- * - file：什么都不喂，只在终端里提示人转告。
- */
-export type PromptMode = 'arg' | 'stdin' | 'file';
-
-/**
  * 工人类型：
  * - cli：终端里的编程工具（Claude Code、Codex……）。认得的（harness）接力台能替你调度；
  * - app：桌面程序（Cursor、ZCode、MiMo……）。cmd 是「打开文件夹」的命令，含 {{dir}}；接力台调度不了，你自己在里面接着做；
@@ -36,7 +28,7 @@ export interface ApiSpec {
 
 /** 全局工人名单 ~/.relay/agents.json 里的一条。 */
 export interface AgentConfig {
-  /** 唯一名（英文、数字、-、_），命令里用它：relay run claude。 */
+  /** 唯一名（英文、数字、-、_），命令里用它：relay go claude。 */
   name: string;
   /** 显示名，如「Claude Code」。没有就用 name。 */
   label?: string;
@@ -47,7 +39,6 @@ export interface AgentConfig {
   tier: Tier;
   /** 强弱是你在设置里定的（不再按模型名自动猜）。 */
   tierSet?: boolean;
-  prompt?: { mode: PromptMode };
   /** 正在用的模型（自己填，如 grok-4.6）。记进交接记录，方便区分同一个工具换了模型。 */
   model?: string;
   /**

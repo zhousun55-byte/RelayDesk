@@ -141,15 +141,23 @@ function firstBin(cands: string[][]): string[] | null {
   return null;
 }
 
-/** 复制到剪贴板：macOS pbcopy，Windows 用 PowerShell，Linux 用 wl-copy / xclip / xsel。RELAY_CLIPBOARD=off 时不动剪贴板（测试用）。 */
+/**
+ * 复制到剪贴板：macOS pbcopy，Windows 用 PowerShell，Linux 用 wl-copy / xclip / xsel。RELAY_CLIPBOARD=off 时不动剪贴板（测试用）。
+ * Windows 上先写进临时文件、按 UTF-8 读：PowerShell 按系统的编码（中文 Windows 是 GBK）读标准输入，中文会变乱码。
+ */
 export function copyToClipboard(text: string): boolean {
   if (process.env.RELAY_CLIPBOARD === 'off') return false;
-  const cmd =
-    process.platform === 'darwin'
-      ? ['pbcopy']
-      : process.platform === 'win32'
-        ? ['powershell.exe', '-NoProfile', '-Command', '$input | Set-Clipboard']
-        : firstBin([['wl-copy'], ['xclip', '-selection', 'clipboard'], ['xsel', '--clipboard', '--input']]);
+  if (process.platform === 'win32') {
+    const tmp = path.join(os.tmpdir(), `relay-clip-${process.pid}-${Date.now()}.txt`);
+    try {
+      fs.writeFileSync(tmp, text);
+      const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', `Get-Content -Raw -Encoding UTF8 -LiteralPath '${tmp.replace(/'/g, "''")}' | Set-Clipboard`], { timeout: 10_000, windowsHide: true });
+      return r.status === 0;
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
+  }
+  const cmd = process.platform === 'darwin' ? ['pbcopy'] : firstBin([['wl-copy'], ['xclip', '-selection', 'clipboard'], ['xsel', '--clipboard', '--input']]);
   if (!cmd) return false;
   const r = spawnSync(cmd[0], cmd.slice(1), { input: text, timeout: 5000 });
   return r.status === 0;

@@ -103,7 +103,8 @@ export async function saveUpload(root: string, name: string, body: Readable, max
   const dir = path.join(root, UPLOAD_REL);
   fs.mkdirSync(dir, { recursive: true });
   if (!fs.existsSync(path.join(dir, '.gitignore'))) fs.writeFileSync(path.join(dir, '.gitignore'), '*\n');
-  const base = path.basename(String(name).replace(/\\/g, '/')).replace(/[\u0000-\u001f\u007f]/g, '').trim() || '文件';
+  // Windows 上文件名不能带 <>:"|?*：一律换掉，别的电脑传上来的名字在哪都存得下
+  const base = path.basename(String(name).replace(/\\/g, '/')).replace(/[\u0000-\u001f\u007f]/g, '').replace(/[<>:"|?*]/g, '-').trim() || '文件';
   const ext = path.extname(base).slice(0, 16);
   const stem = base.slice(0, base.length - path.extname(base).length).slice(0, 80) || '文件';
   const d = new Date();

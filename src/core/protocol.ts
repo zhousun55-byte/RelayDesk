@@ -29,19 +29,21 @@ export function protocolBlock(): string {
   ].join('\n');
 }
 
-const BLOCK_RE = new RegExp(`${escape(BLOCK_START.slice(0, 12))}[\\s\\S]*?${escape(BLOCK_END)}\\n?`);
+const BLOCK_RE = new RegExp(`${escape(BLOCK_START.slice(0, 12))}[\\s\\S]*?${escape(BLOCK_END)}(?:\\r?\\n)?`);
 
 function escape(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** 把规矩写进（或更新）一个文件；返回是否改了。 */
-export function upsertBlock(file: string, block = protocolBlock()): boolean {
+/** 把规矩写进（或更新）一个文件；返回是否改了。文件是 \r\n 换行的（Windows 上写的），规矩也用 \r\n。 */
+export function upsertBlock(file: string, plain = protocolBlock()): boolean {
   const cur = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const eol = cur.includes('\r\n') ? '\r\n' : '\n';
+  const block = plain.replace(/\n/g, eol);
   let next: string;
-  if (BLOCK_RE.test(cur)) next = cur.replace(BLOCK_RE, `${block}\n`);
-  else if (!cur.trim()) next = `${block}\n`;
-  else next = `${cur}${cur.endsWith('\n') ? '' : '\n'}\n${block}\n`;
+  if (BLOCK_RE.test(cur)) next = cur.replace(BLOCK_RE, `${block}${eol}`);
+  else if (!cur.trim()) next = `${block}${eol}`;
+  else next = `${cur}${cur.endsWith('\n') ? '' : eol}${eol}${block}${eol}`;
   if (next === cur) return false;
   fs.writeFileSync(file, next);
   return true;
@@ -103,7 +105,7 @@ export function protocolState(root: string): 'ok' | 'old' | 'missing' {
     }
     any = true;
     const m = fs.readFileSync(p, 'utf8').match(BLOCK_RE);
-    if (!m || m[0].trim() !== want.trim()) stale = true;
+    if (!m || m[0].replace(/\r/g, '').trim() !== want.trim()) stale = true;
   }
   if (!any) return 'missing';
   return stale ? 'old' : 'ok';
