@@ -65,7 +65,7 @@ export function doctor(dir: string): DoctorLine[] {
     const list = allMembers(settings.level);
     const ready = readyMembers(list);
     const strong = ready.filter((m) => m.tier === 'strong');
-    if (ready.length) add('ok', `能派活的成员：${ready.map((m) => `${m.label}（${m.tier === 'strong' ? '强' : '弱'}）`).join('、')}`);
+    if (ready.length) add('ok', `能派活的成员：${ready.map((m) => m.label).join('、')}`);
     else add('warn', '没有能派活的成员：没装、没登录或额度都用完了');
     if (ready.length && !strong.length) add('warn', '能派活的成员里没有强模型');
     for (const m of list.filter((x) => x.cooling)) add('warn', `${m.label} ${cause.quota(m.cooling)}`);

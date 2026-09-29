@@ -496,7 +496,7 @@ class GoRunner {
     this.state.stints.push(id);
     this.phase(`第 ${id} 棒（${whoName(who)}）正在${what}`);
     const log = this.logger(logAbs);
-    log(`# ${stintTitle(stint)}（${tierWord(who.tier)}）${what}${targets.length ? `：第 ${targets.map((t) => t.id).join('、')} 棒` : ''}${step ? `：清单第 ${step.index} 步` : ''}`);
+    log(`# ${stintTitle(stint)}${targets.length ? `：第 ${targets.map((t) => t.id).join('、')} 棒` : ''}${step ? `：清单第 ${step.index} 步` : ''}`);
 
     const gate = cfg.gate.command.trim();
     let prompt: string;

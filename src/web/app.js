@@ -915,10 +915,8 @@ function stack(list, extra = () => '', max = 7) {
   );
 }
 
-const TIER_WORD = { strong: T`强模型`, weak: T`弱模型` };
-
 function memberTip(m) {
-  return [memberName(m), [tr(m.tool), TIER_WORD[m.tier]].filter(Boolean).join(' · '), m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : ''].filter(Boolean).join('\n');
+  return [memberName(m), tr(m.tool), m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : ''].filter(Boolean).join('\n');
 }
 
 /** 一棒是谁做的：模型的名字，下面一行在哪个工具里、强弱。 */
@@ -926,7 +924,7 @@ function whoTip(who) {
   if (!who.label || who.label === '不知道是谁') return T`身份不明`;
   const name = nameOf(who.label, who.model);
   const tool = tr(splitLabel(who.label)[0]);
-  return [name, [tool !== name ? tool : '', TIER_WORD[who.tier]].filter(Boolean).join(' · ')].filter(Boolean).join('\n');
+  return [name, tool !== name ? tool : ''].filter(Boolean).join('\n');
 }
 
 function busyMember() {
@@ -1718,7 +1716,6 @@ function drawLeft() {
                   label: memberName(m),
                   sub: [tr(m.tool), m.name === busy ? T`干活中` : m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : !m.canWork && m.kind !== 'app' ? T`不可调度` : limitsText(m)].filter(Boolean).join(' · '),
                   tile: tile(m, 's20', look(m)),
-                  right: m.tier === 'strong' ? T`强` : T`弱`,
                   run: () => openSettings('members'),
                 })),
               ],
@@ -2839,7 +2836,7 @@ function whoMenu(anchor) {
   if (drive.length) {
     items.push({ head: T`只做一棒` });
     for (const m of drive) {
-      items.push({ label: memberName(m), sub: m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : tr(m.tool) || '', tile: tile(m, 's20'), right: m.tier === 'strong' ? T`强` : m.tier === 'weak' ? T`弱` : '', disabled: !!m.cooling, run: () => goWith(null, m) });
+      items.push({ label: memberName(m), sub: m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : tr(m.tool) || '', tile: tile(m, 's20'), disabled: !!m.cooling, run: () => goWith(null, m) });
     }
   }
   if (self.length) {
@@ -3420,8 +3417,6 @@ function stintCard(s) {
         { class: 'who' },
         h('span', { class: 'who-tile', 'data-tip': whoTip(s.who) }, tile(s.who)),
         h('b', null, name === '不知道是谁' ? T`身份不明` : name),
-        // 只写「弱」：弱模型的棒要复核，强的不用标
-        s.who.tier === 'weak' ? h('span', { class: 'mdl' }, T`弱`) : null,
         pillOf(s),
         compact ? h('span', { class: 'say' }, sum.text) : null,
         spanOf(s)
