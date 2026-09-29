@@ -618,11 +618,13 @@ const UI = {
   left: clamp(Number(store.get('left')) || 264, 200, 420),
   right: clamp(Number(store.get('right')) || 296, 220, 560),
   noLeft: store.get('noLeft') === '1',
-  /** 右栏现在收着没有（下面 fitRight 算）；userNoRight 是你自己收的（记在本机），peek 是窗口窄时你临时打开的。 */
-  noRight: store.get('noRight') === '1',
-  userNoRight: store.get('noRight') === '1',
+  /** 右栏现在收着没有（下面 fitRight 算）；userNoRight 是这次你自己收的（不记：启动时右栏总是开着），peek 是窗口窄时你临时打开的。 */
+  noRight: false,
+  userNoRight: false,
   peek: false,
 };
+// 以前记在本机的「右栏收着」不再用（它让每次打开右栏都是收着的）
+store.set('noRight', null);
 
 const app = $('#app');
 const layer = $('#layer');
@@ -1240,7 +1242,6 @@ function toggleSide(side) {
   else if (side === 'right') {
     UI.userNoRight = !UI.userNoRight;
     UI.peek = false;
-    store.set(k, UI.userNoRight ? '1' : '');
   } else store.set(k, !UI[k] ? '1' : '');
   if (side === 'right') fitRight();
   else UI.noLeft = !UI.noLeft;
@@ -6304,6 +6305,8 @@ function renderAll() {
   $('#left').setAttribute('aria-label', T`项目和对话`);
   $('#right').setAttribute('aria-label', T`项目文件`);
   applyLayout();
+  // 栏的开合已经按 theme.js 定好的画出来了：下两帧再放开收放的动画（这一下不动）
+  requestAnimationFrame(() => requestAnimationFrame(() => document.documentElement.classList.remove('booting', 'boot-no-left', 'boot-no-right')));
   buildCenter();
   buildComposer();
   paperInk();

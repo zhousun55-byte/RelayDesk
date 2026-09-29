@@ -401,6 +401,23 @@ svg.i {
 .app.no-left.no-right {
   grid-template-columns: 0 minmax(0, 1fr) 0;
 }
+/* 页面画出来之前（theme.js 定的）：栏收着就直接画成收着；脚本接手前不放收放的动画（刷新时右栏先露出来再滑走就是这个） */
+@media (min-width: 861px) {
+  .boot-no-left .app {
+    grid-template-columns: 0 minmax(0, 1fr) var(--right);
+  }
+  .boot-no-right .app {
+    grid-template-columns: var(--left) minmax(0, 1fr) 0;
+  }
+  .boot-no-left.boot-no-right .app {
+    grid-template-columns: 0 minmax(0, 1fr) 0;
+  }
+}
+.booting .app,
+.booting .left-in,
+.booting .right-in {
+  transition: none !important;
+}
 .app.resizing {
   transition: none;
   user-select: none;

@@ -220,6 +220,30 @@ def main():
             page.wait_for_timeout(700)
             check(narrow_hidden and not js(no_right) and js('() => localStorage.getItem("relay.noRight")') is None, '窗口变窄右栏自己收起，宽回来自己打开')
 
+            # 刷新：栏的开合在画出来之前就定好。逐帧量右栏宽度——宽窗口时右栏启动就开着（以前记住的「收着」不算）、一直不动；
+            # 窗口窄时从第一帧起就是收着的（以前先按三栏都开画出来，再滑走）
+            page.add_init_script('''(() => {
+              window.__rw = [];
+              const tick = () => {
+                const r = document.getElementById('right');
+                if (r) window.__rw.push(Math.round(r.getBoundingClientRect().width));
+                if (window.__rw.length < 45) requestAnimationFrame(tick);
+              };
+              requestAnimationFrame(tick);
+            })()''')
+            js('() => localStorage.setItem("relay.noRight", "1")')
+            ready = '() => window.__rw && window.__rw.length >= 45 && typeof S !== "undefined" && S.st'
+            page.reload()
+            page.wait_for_function(ready, timeout=10000)
+            wide = js('() => window.__rw')
+            page.set_viewport_size({'width': 1100, 'height': 800})
+            page.reload()
+            page.wait_for_function(ready, timeout=10000)
+            tight = js('() => window.__rw')
+            page.set_viewport_size({'width': 1280, 'height': 800})
+            page.wait_for_timeout(700)
+            check(min(wide) > 200 and max(wide) - min(wide) <= 1 and max(tight) == 0 and not js(no_right), f'刷新时右栏不先露出来再滑走；启动时右栏开着（宽 {min(wide)}～{max(wide)}，窄窗口 {max(tight)}）')
+
             # 换语言：点左下角「EN」，整页淡出、重新载入成英文，接力台也记下（请 AI 用英文写）；再点「中」换回来
             page.locator('.lang-btn').click()
             page.wait_for_function('() => typeof LANG !== "undefined" && LANG.now === "en" && S.st && !document.documentElement.classList.contains("lang-in")', timeout=8000)
