@@ -20,3 +20,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  # Windows：全部测试用的假工具是 sh 脚本，在 Windows 上跑不了；这里只编译，跑按 Windows 规矩写的那几项和英文表
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node --test dist/test/windows.test.js dist/test/i18n.test.js

@@ -488,14 +488,15 @@ function tildify(p) {
 
 const basename = (p) => String(p).split(/[\\/]/).pop();
 
-/** 太长的路径只留后面几层。 */
+/** 太长的路径只留后面几层（Windows 的路径按 \\ 切）。 */
 function shortPath(p) {
   const t = tildify(p);
   if (t.length <= 42) return t;
-  const parts = t.split('/');
+  const sep = t.includes('\\') && !t.includes('/') ? '\\' : '/';
+  const parts = t.split(sep);
   let out = parts.pop();
-  while (parts.length && out.length + parts[parts.length - 1].length < 38) out = `${parts.pop()}/${out}`;
-  return `…/${out}`;
+  while (parts.length && out.length + parts[parts.length - 1].length < 38) out = `${parts.pop()}${sep}${out}`;
+  return `…${sep}${out}`;
 }
 
 /** 「Codex · gpt-6」→ ['Codex', 'gpt-6']。 */
@@ -1067,7 +1068,6 @@ function ctx(e, items) {
 
 let sheetStack = [];
 
-/** 弹窗。返回 close()；不管怎么关的（按钮、点外面、Esc），都会调 onClose。 */
 /** 把框 box 收到 r 那里的变换：中心对中心，等比缩到 r 的大小（最小 .2）。弹窗从按下的按钮长出来、缩回去都用它。 */
 function toward(box, r) {
   const b = box.getBoundingClientRect();
@@ -1079,6 +1079,7 @@ function toward(box, r) {
 let pressed = { el: null, at: 0 };
 document.addEventListener('pointerdown', (e) => (pressed = { el: e.target.closest?.('button, a, [role="button"]') ?? null, at: Date.now() }), true);
 
+/** 弹窗。返回 close()；不管怎么关的（按钮、点外面、Esc），都会调 onClose。 */
 function sheet({ title, body, foot, wide, bare, onClose }) {
   const focused = document.activeElement;
   const prev = focused && focused !== document.body ? focused : Date.now() - pressed.at < 1000 ? pressed.el : null;
@@ -3883,7 +3884,7 @@ function renderDoc(t) {
   if (t.type === 'file') {
     const parts = t.path.split('/');
     head.append(
-      h('div', { class: 'crumbs' }, parts.slice(0, -1).map((x) => [h('span', null, x), icon('chev')]), h('b', null, parts[parts.length - 1]), d && d.data ? h('span', null, ` · ${size(d.data.size)}`) : null)
+      h('div', { class: 'crumbs' }, parts.slice(0, -1).map((x) => [h('span', null, x), icon('chev')]), h('b', null, fileLabel(t.path)), d && d.data ? h('span', null, ` · ${size(d.data.size)}`) : null)
     );
     const who = touchers(t.path);
     if (who.length) {

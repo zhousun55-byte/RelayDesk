@@ -14,9 +14,16 @@ RelayDesk lets these AIs **take turns in the same project folder**, and makes su
 - **Mistakes can be undone.** There are snapshots before and after every leg, so you can roll back to before any leg, and undo the rollback.
 - **No babysitting.** Continue by hand in any AI tool (RelayDesk only keeps the books), or let RelayDesk dispatch: *Auto* keeps relaying until the work is accepted, switches to the next AI when one runs out, sends a strong model to review when its quota returns, and waits when nobody has quota.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/relay-dark.png">
+  <img alt="RelayDesk: one task as a route. A weak model (Gemini 3.8 Flash) did leg 9, GPT-6 Sol reviewed it and did the final review, and the task was accepted" src="docs/images/relay-en-light.png">
+</picture>
+
+The records in the screenshot were written by the AIs in Chinese; with English on, they write in English.
+
 There is also a **group chat**: ask several AIs the same thing. *Compare* asks them at once without seeing each other; *Vote* collects anonymous proposals and one vote per AI, weak or strong, with no voting for yourself. The adopted plan goes into the task's rules, and every later leg follows it.
 
-> The web app is available in English and Chinese: click **EN / 中** at the bottom left (the first visit follows your browser language). Detailed documentation is in Chinese ([README.md](README.md), [docs/设计说明.md](docs/设计说明.md)). RelayDesk is used most on macOS; the CLI and web app also run on Linux. There is a native Windows version (double-click `install-windows.cmd`, no WSL needed); it has not been tested on a real Windows machine yet.
+> The web app is available in English and Chinese: click **EN / 中** at the bottom left (the first visit follows your browser language). Detailed documentation is in Chinese ([README.md](README.md), [docs/设计说明.md](docs/设计说明.md)). RelayDesk is used most on macOS. Windows 10 / 11 has a native version (double-click `install-windows.cmd`, no WSL needed), installed and used on a real machine. The CLI and web app also run on Linux.
 
 ## Get started
 
@@ -62,8 +69,8 @@ The web app switches between English and Chinese with one click. With English on
 ## Development
 
 ```bash
-npm test      # build + all tests
-python3 scripts/e2e.py   # real browser clicks (needs playwright)
+npm test                  # build + all tests (no network, no cost)
+python3 scripts/e2e.py    # real browser clicks (needs playwright)
 ```
 
 Tests use fake `claude` / `codex` / `dsh` programs with the real argument and output formats, and a fake model API. Passing them is not the same as accepting a real tool. See [CONTRIBUTING.md](CONTRIBUTING.md) to add a new AI tool.

@@ -577,7 +577,8 @@ export function startRun(req: RunRequest): RunHandle {
     buf += c;
     let i: number;
     while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i);
+      // Windows 上的工具按 \r\n 换行：行尾的 \r 去掉
+      const line = buf.slice(0, i).replace(/\r$/, '');
       buf = buf.slice(i + 1);
       for (const l of parser.line(line)) {
         saw(l);

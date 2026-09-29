@@ -146,7 +146,7 @@ def main():
             }'''
             check(not js(paste, '短短一句'), '粘一句短的：照常粘成字')
             taken = js(paste, long)
-            chip = page.locator('.composer .attach .chip').filter(has_text='粘贴的文字（60 行）.txt')
+            chip = page.locator('.composer .attach .chip:not(.busy)').filter(has_text='粘贴的文字（60 行）.txt')
             chip.wait_for(timeout=5000)
             check(taken and js('() => document.querySelector(".composer textarea").value') == '' and js('() => S.files[0]').startswith('.relay/uploads/'), '粘一大段字：存成文件带上，输入框里是空的')
             chip.locator('.ell').click()
