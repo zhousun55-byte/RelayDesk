@@ -22,10 +22,12 @@ export interface AutoSettings {
   finalReview: boolean;
   /** 网页用的语言（网页上换语言时顺手存进来）：en 时请 AI 用英文写交接、复核和回答。 */
   lang: 'zh' | 'en';
+  /** 派活谁来指挥（拆步骤、终审）：成员名。空 = 强模型按顺序。 */
+  lead: string;
 }
 
 export function defaultAutoSettings(): AutoSettings {
-  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, lang: 'zh' };
+  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, lang: 'zh', lead: '' };
 }
 
 export function autoSettingsPath(): string {
@@ -66,6 +68,7 @@ export function normalizeAutoSettings(raw: unknown): AutoSettings {
     waitForQuota: bool(o.waitForQuota, d.waitForQuota),
     finalReview: bool(o.finalReview, d.finalReview),
     lang: o.lang === 'en' ? 'en' : 'zh',
+    lead: names(o.lead, '派活谁来指挥')[0] ?? '',
   };
 }
 

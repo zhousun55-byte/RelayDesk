@@ -59,6 +59,25 @@ export function modelChoices(ids: string[], shown: (id: string) => string = (id)
   return [...best.values()];
 }
 
+/** 牌子（GPT-6 Sol → gpt，Claude Opus 5.5 → claude）和版本号（6、5.5）：挑「同一家最新的几个」用。 */
+const vendorOf = (name: string) => (name.split(' ')[0] ?? '').replace(/-[\d.]+$/, '').toLowerCase();
+const versionOf = (name: string) => (name.match(/\d+(?:\.\d+)*/)?.[0] ?? '0').split('.').map(Number);
+function newer(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (b[i] ?? 0) - (a[i] ?? 0);
+  return 0;
+}
+
+/**
+ * 换模型时平时露出来的几个：现在用的，加上同一家版本最新的几个（一共 n 个），别的打字搜。
+ * 不知道现在用的是哪个：按工具列出来的先后取前 n 个。
+ */
+export function topModels(names: string[], current: string | undefined, n = 5): string[] {
+  if (!current || !names.includes(current)) return names.slice(0, n);
+  const v = vendorOf(current);
+  const same = names.filter((x) => x !== current && vendorOf(x) === v).sort((a, b) => newer(versionOf(a), versionOf(b)));
+  return [current, ...same.slice(0, n - 1)];
+}
+
 /** 一棒是谁做的（记下的是「Codex · gpt-6-sol」）给人看的名字：GPT-6 Sol；看不出模型的写工具名。 */
 export function whoName(who: { label: string; model?: string }): string {
   const [tool, ...rest] = who.label.split(' · ');

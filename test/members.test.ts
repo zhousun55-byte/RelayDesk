@@ -424,3 +424,38 @@ test('同一个工具换个模型再加一位：工具列出来的几档并成�
   }
   fs.rmSync(home('detected.json'), { force: true });
 });
+
+test('换模型：平时只露现在用的和同一家最新的几个；这一位换成别的模型（强弱改回按模型猜，同一个工具已有的不换）；派活时活派给谁', () => {
+  assert.deepEqual(names.topModels(['GLM-4.5', 'GLM-4.6', 'GLM-5', 'GLM-5.1', 'GLM-5.2', 'GLM-5.3', 'GLM-5.3 Flash', 'Kimi K3'], 'GLM-5.3'), ['GLM-5.3', 'GLM-5.3 Flash', 'GLM-5.2', 'GLM-5.1', 'GLM-5']);
+  assert.deepEqual(names.topModels(['GPT-5.5', 'GPT-6 Sol', 'GPT-6 Luna', 'Grok 4.7', 'GPT-5.6 Sol'], 'GPT-6 Sol', 3), ['GPT-6 Sol', 'GPT-6 Luna', 'GPT-5.6 Sol']);
+  assert.deepEqual(names.topModels(['A-1', 'B-2', 'C-3'], undefined, 2), ['A-1', 'B-2'], '不知道现在用的：按工具列的先后');
+
+  writeJson(home('detected.json'), { at: '', harnesses: [], providers: [], apps: [], unknownKeys: [] });
+  writeJson(home('auto.json'), { order: [] });
+  writeJson(home('agents.json'), {
+    agents: [
+      { name: 'mimo', kind: 'api', tier: 'strong', tierSet: true, api: { baseUrl: 'http://127.0.0.1:9/v1', model: 'mimo-v2.6-pro', apiKeyEnv: '' } },
+      { name: 'mimo-flash', kind: 'api', tier: 'weak', api: { baseUrl: 'http://127.0.0.1:9/v1', model: 'mimo-v2.6-flash', apiKeyEnv: '' } },
+      { name: 'trae', kind: 'app', cmd: 'open -a Trae {{dir}}', tier: 'weak' },
+    ],
+  });
+  const a = detect.setMemberModel('mimo', 'mimo-v2.5-pro');
+  assert.deepEqual([a.api?.model, a.model, a.tier, a.tierSet ?? null], ['mimo-v2.5-pro', 'mimo-v2.5-pro', 'weak', null], '换了模型：强弱改回按模型猜');
+  assert.throws(() => detect.setMemberModel('mimo', 'mimo-v2.6-flash'), (e: { code?: string; message: string }) => e.code === 'dup-agent' && /已经有 MiMo V2.6 Flash/.test(e.message));
+  assert.throws(() => detect.setMemberModel('trae', 'x-1'), (e: { code?: string }) => e.code === 'bad-agent');
+  assert.throws(() => detect.setMemberModel('mimo', 'a b'), (e: { code?: string }) => e.code === 'bad-agent');
+
+  assert.equal(detect.setCrew('mimo', 'mimo-flash').crew, 'mimo-flash');
+  assert.throws(() => detect.setCrew('mimo', 'trae'), (e: { code?: string }) => e.code === 'bad-agent', '桌面程序不能派活');
+  assert.throws(() => detect.setCrew('mimo', 'mimo'), (e: { code?: string }) => e.code === 'bad-agent');
+  registry.removeAgent('mimo-flash');
+  assert.equal(registry.loadRegistry().agents.find((x) => x.name === 'mimo')?.crew, undefined, '派给的那位删掉了：改回按顺序');
+  assert.equal(detect.setCrew('mimo', '').crew, undefined);
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const autoS = require('../src/core/auto-settings') as typeof import('../src/core/auto-settings');
+  assert.equal(autoS.normalizeAutoSettings({ lead: 'mimo' }).lead, 'mimo');
+  assert.equal(autoS.normalizeAutoSettings({}).lead, '');
+  fs.rmSync(home('detected.json'), { force: true });
+});
+

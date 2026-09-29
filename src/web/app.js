@@ -998,7 +998,11 @@ function place(el, anchor, opts = {}) {
 }
 
 function closeMenus() {
-  for (const m of layer.querySelectorAll('.menu:not(.leave)')) leave(m);
+  for (const m of layer.querySelectorAll('.menu:not(.leave)')) {
+    // 焦点还留在收起的菜单里：Esc 会被它接走，关不掉底下的弹窗
+    if (m.contains(document.activeElement)) document.activeElement.blur();
+    leave(m);
+  }
   SUG.menu = null;
   SUG.items = [];
 }
@@ -4267,8 +4271,10 @@ function buildComposer() {
     h('span', { class: 'track' }),
     (C.autoWord = h('span', null, T`全自动`))
   );
+  // 派活：谁指挥（拆步骤、终审）→ 谁干活
+  C.roles = h('button', { class: 'picker roles', 'aria-haspopup': 'menu', 'aria-label': T`指挥 → 干活`, 'data-tip': T`指挥 → 干活`, onclick: (e) => rolesMenu(e.currentTarget) });
   C.send = h('button', { class: 'send', 'aria-label': T`发送`, 'data-tip': T`发送`, 'data-kbd': '↵', onclick: send }, icon('up'));
-  C.tools = h('div', { class: 'tools' }, C.plus, C.seg, C.auto, C.pick, h('span', { class: 'sp' }), C.send);
+  C.tools = h('div', { class: 'tools' }, C.plus, C.seg, C.auto, C.roles, C.pick, h('span', { class: 'sp' }), C.send);
   C.box = h(
     'div',
     {
@@ -4355,6 +4361,8 @@ function updateComposer() {
   C.plus.hidden = !!S.slash;
   C.auto.hidden = !task;
   C.auto.setAttribute('aria-checked', String(S.autoAfter));
+  C.roles.hidden = !task || S.view !== 'dispatch' || !!S.slash || !members().length;
+  if (!C.roles.hidden) drawRoles();
   C.autoWord.textContent = S.view === 'dispatch' ? T`派活` : T`全自动`;
   C.optRow.hidden = !vote || !!S.slash;
   for (const b of C.seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === S.mode));
@@ -4471,6 +4479,59 @@ function pickMenu(anchor) {
         keep: true,
         on: () => S.ask.has(m.name),
         run: () => set(S.ask.has(m.name) ? [...S.ask].filter((n) => n !== m.name) : [...S.ask, m.name]),
+      })),
+    ],
+    { side: 'top' }
+  );
+}
+
+/** 派活谁指挥：设置里指定的；没指定就是强模型里排最前、现在能用的那位。干活：它配的那位，没配就是弱模型按顺序。 */
+function roles() {
+  const ready = members().filter((m) => m.canWork && !m.cooling);
+  const lead = memberByName(S.st.settings.lead) || ready.find((m) => m.tier === 'strong') || null;
+  const crew = lead && lead.agent && lead.agent.crew ? memberByName(lead.agent.crew) : null;
+  return { lead, crew, weak: ready.filter((m) => m.tier === 'weak' && (!lead || m.name !== lead.name)) };
+}
+
+function drawRoles() {
+  const { lead, crew, weak } = roles();
+  C.roles.replaceChildren(
+    lead ? tile(lead, 's20') : h('span', { class: 'none' }, T`没有强模型`),
+    icon('arrow', 'to'),
+    crew ? tile(crew, 's20') : weak.length ? stack(weak, () => '', 3) : h('span', { class: 'none' }, T`没有弱模型`),
+    icon('chev', 'caret')
+  );
+}
+
+async function rolesMenu(anchor) {
+  const { lead, crew } = roles();
+  const set = (path, body) => act(null, () => api(path, body)).then((r) => r && (r.members && (S.st.members = r.members), updateComposer()));
+  const setLead = (name) => set('/api/settings', { settings: { ...S.st.settings, lead: name } });
+  const setCrew = (name) => lead && set('/api/members/crew', { name: lead.name, crew: name });
+  const people = members().filter((m) => m.canWork && m.kind !== 'app');
+  const item = (m, on, run) => ({ label: memberName(m), sub: m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : tr(m.tool) || '', tile: tile(m, 's20', m.cooling ? 'cooling' : ''), on, run });
+  // 同一个工具还没加进来的几个模型：点了就加一位、派活派给它（比如 MiMo Pro 派给 MiMo Flash）
+  let more = [];
+  if (lead && canModel(lead)) {
+    const got = await Promise.race([api(`/api/models?name=${encodeURIComponent(lead.name)}`).catch(() => null), new Promise((r) => setTimeout(r, 1500, null))]);
+    more = ((got && got.models) || []).filter((o) => o.top && !o.current && !o.added).slice(0, 3);
+  }
+  openMenu(
+    anchor,
+    [
+      { head: T`指挥` },
+      { label: T`强模型按顺序`, icon: 'sync', on: () => !S.st.settings.lead, run: () => setLead('') },
+      ...people.map((m) => item(m, () => S.st.settings.lead === m.name, () => setLead(m.name))),
+      '-',
+      { head: T`干活` },
+      { label: T`弱模型按顺序`, icon: 'sync', disabled: !lead, on: () => !!lead && !crew, run: () => setCrew('') },
+      ...people.filter((m) => !lead || m.name !== lead.name).map((m) => item(m, () => !!crew && crew.name === m.name, () => setCrew(m.name))),
+      ...more.map((o) => ({
+        label: o.name,
+        sub: T`再加一位`,
+        icon: 'plus',
+        run: () =>
+          act(null, () => api('/api/members/add-models', { from: lead.name, models: [o.id] }), T`已添加 ${o.name}`).then((r) => r && r.added[0] && ((S.st.members = r.members), setCrew(r.added[0]))),
       })),
     ],
     { side: 'top' }
@@ -5742,7 +5803,7 @@ function membersPane(redraw) {
         draggable: canDrag ? 'true' : null,
         oncontextmenu: (e) =>
           ctx(e, [
-            m.kind === 'api' || m.agent.harness ? { label: T`添加模型`, icon: 'plus', run: () => addModelSheet(m, redraw) } : null,
+            canModel(m) ? { label: T`换模型`, icon: 'sync', run: () => modelMenu(row.querySelector('.mname') || row, m, redraw) } : null,
             m.tierSet ? { label: T`强弱改回自动`, icon: 'sync', run: () => setTier('auto') } : null,
             { label: T`删除`, icon: 'trash', run: () => removeMember(m, row) },
           ]),
@@ -5773,7 +5834,12 @@ function membersPane(redraw) {
       },
       h('span', { class: `handle${canDrag ? '' : ' off'}`, 'aria-hidden': 'true' }, icon('grip')),
       look,
-      h('div', { class: 'mn' }, h('b', null, name), note ? h('small', { 'data-tip': tr(m.update || (!m.canWork && m.why ? m.why : null)) || limitsTip(m) }, note) : null),
+      h(
+        'div',
+        { class: 'mn' },
+        canModel(m) ? h('button', { class: 'mname', 'aria-haspopup': 'menu', 'data-tip': T`换模型`, onclick: (e) => modelMenu(e.currentTarget, m, redraw) }, h('b', null, name), icon('down')) : h('b', null, name),
+        note ? h('small', { 'data-tip': tr(m.update || (!m.canWork && m.why ? m.why : null)) || limitsTip(m) }, note) : null
+      ),
       seg,
       h('button', { class: 'icon-btn del', 'aria-label': T`删除 ${name}`, 'data-tip': T`删除`, onclick: () => removeMember(m, row) }, icon('trash'))
     );
@@ -5831,7 +5897,6 @@ function membersPane(redraw) {
             openMenu(
               at,
               [
-                modelTools().length ? { label: T`模型`, icon: 'plus', run: () => pickModelTool(at, redraw) } : null,
                 { label: T`接口`, icon: 'plus', run: () => addApiSheet(redraw) },
                 { label: T`桌面程序`, icon: 'plus', run: () => addAppSheet(redraw) },
               ],
@@ -5972,72 +6037,75 @@ function addAppSheet(redraw) {
   );
 }
 
-/** 能换模型的（接力台调得动的命令行工具、接口）：同一个工具只列一次。 */
-function modelTools() {
-  const seen = new Set();
-  return members().filter((m) => {
-    const key = m.kind === 'api' ? `api:${m.agent.api && m.agent.api.baseUrl}` : m.agent.harness ? `h:${m.agent.harness}` : null;
-    if (m.kind === 'app' || !key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+/** 能换模型的：接力台调得动的命令行工具、接口（桌面程序不行）。 */
+function canModel(m) {
+  return m.kind === 'api' || !!(m.agent && m.agent.harness);
 }
 
-/** 先挑工具（只有一个就直接打开）。 */
-function pickModelTool(anchor, redraw) {
-  const tools = modelTools();
-  if (tools.length === 1) return addModelSheet(tools[0], redraw);
-  openMenu(anchor, tools.map((m) => ({ label: tr(m.label), tile: tile(m, 's20'), run: () => addModelSheet(m, redraw) })), { align: 'end' });
-}
-
-/** 同一个工具换个模型再加几位：列出它能用的模型勾选，也能直接写模型名。强弱按模型猜，名单里能改。 */
-function addModelSheet(m, redraw) {
-  const picked = new Set();
-  const note = (t) => h('p', { class: 'set-desc' }, t);
-  const list = h('div', { class: 'model-list', role: 'group', 'aria-label': T`模型` }, note(T`正在读取`));
-  const other = h('input', { class: 'input mono', placeholder: T`模型名`, oninput: () => sync() });
-  const add = h(
-    'button',
-    {
-      class: 'btn primary',
-      disabled: true,
-      onclick: (e) =>
-        act(e.currentTarget, () => api('/api/members/add-models', { from: m.name, models: [...picked, other.value.trim()].filter(Boolean) }), (r) => (r.added.length ? T`已添加 ${r.added.length} 位` : T`名单里已经有了`)).then((r) => {
-          if (!r) return;
-          // 按这次存好的名单画（别的刷新可能刚好把这次的盖过去）
-          if (S.st) S.st.members = r.members;
-          close();
-          redraw();
-        }),
-    },
-    T`添加`
-  );
-  const sync = () => (add.disabled = !picked.size && !other.value.trim());
-  const close = sheet({ title: T`添加模型`, body: h('div', null, h('p', { class: 'set-desc' }, tr(m.label)), list, field(T`其他模型`, other)), foot: [h('button', { class: 'btn ghost', onclick: () => close() }, T`取消`), add] });
-  const row = (o) => {
-    const b = h(
-      'button',
-      {
-        class: 'mi',
-        role: 'menuitemcheckbox',
-        'aria-checked': String(o.added),
-        disabled: o.added,
-        onclick: () => {
-          picked.has(o.id) ? picked.delete(o.id) : picked.add(o.id);
-          b.setAttribute('aria-checked', String(picked.has(o.id)));
-          sync();
-        },
-      },
-      tile({ label: `${m.label} · ${o.id}`, model: o.id, tool: m.tool, tier: o.tier }, 's20'),
-      h('span', { class: 'grow' }, h('span', null, o.name), h('span', { class: 'sub mono' }, o.id)),
-      h('span', { class: 'r' }, o.added ? T`已在名单里` : o.tier === 'strong' ? T`强` : T`弱`),
-      icon('check', 'ck')
-    );
-    return b;
+/**
+ * 换模型：从名字底下弹出来，上面搜，下面是现在用的和同一家最新的几个（别的打字搜）。
+ * 点一个就换成它；右边「+」是再加一位用它（比如 Opus 之外再加一位 Sonnet）。
+ */
+function modelMenu(anchor, m, redraw) {
+  closeMenus();
+  hideTip();
+  const search = h('input', { class: 'input msearch', placeholder: T`搜模型`, 'aria-label': T`搜模型` });
+  const list = h('div', { class: 'mlist' }, h('div', { class: 'mh' }, T`正在读取`));
+  const menu = h('div', { class: 'menu model-menu', role: 'menu', tabindex: '-1' }, search, list);
+  menu.addEventListener('keydown', (e) => menuKeys(e, menu));
+  layer.append(menu);
+  place(menu, anchor);
+  search.focus();
+  let opts = [];
+  let listed = true;
+  const choose = (o, add) => {
+    closeMenus();
+    act(null, () => api(add ? '/api/members/add-models' : '/api/members/model', add ? { from: m.name, models: [o.id] } : { name: m.name, model: o.id }), add ? T`已添加 ${o.name}` : T`已换成 ${o.name}`).then((r) => {
+      if (!r) return;
+      // 按这次存好的名单画（别的刷新可能刚好把这次的盖过去）
+      if (S.st) S.st.members = r.members;
+      redraw();
+    });
   };
+  const row = (o) =>
+    h(
+      'div',
+      { class: 'mrow' },
+      h(
+        'button',
+        { class: 'mi', role: 'menuitemradio', 'aria-checked': String(!!o.current), disabled: !!o.added, onclick: () => !o.current && choose(o, false) },
+        tile({ label: `${m.label} · ${o.id}`, model: o.id, tool: m.tool, tier: o.tier }, 's20'),
+        h('span', { class: 'grow' }, h('span', null, o.name), h('span', { class: 'sub mono' }, o.id)),
+        o.added ? h('span', { class: 'r' }, T`已在名单里`) : icon('check', 'ck')
+      ),
+      o.added || o.current ? null : h('button', { class: 'icon-btn add', 'aria-label': T`再加一位 ${o.name}`, 'data-tip': T`再加一位`, onclick: () => choose(o, true) }, icon('plus'))
+    );
+  const draw = () => {
+    const q = search.value.trim();
+    const low = q.toLowerCase();
+    const shown = low ? opts.filter((o) => o.name.toLowerCase().includes(low) || o.id.toLowerCase().includes(low)) : opts.filter((o) => o.top);
+    const rows = shown.map(row);
+    // 列表里没有的：直接用写的这个名字
+    if (q && !opts.some((o) => o.id.toLowerCase() === low)) rows.push(row({ id: q, name: q, tier: m.tier }));
+    if (!q && opts.length > shown.length) rows.push(h('div', { class: 'mh' }, T`共 ${opts.length} 个，打字搜`));
+    if (!q && !opts.length) rows.push(h('div', { class: 'mh' }, listed ? T`没列出模型，直接写模型名` : T`这个工具列不出模型，直接写模型名`));
+    list.replaceChildren(...rows);
+  };
+  search.addEventListener('input', draw);
+  search.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    list.querySelector('.mi:not(:disabled)')?.click();
+  });
   api(`/api/models?name=${encodeURIComponent(m.name)}`)
-    .then((r) => morph(list, () => list.replaceChildren(...(r.models.length ? r.models.map(row) : [note(r.listed ? T`没列出模型，可以直接写模型名` : T`这个工具列不出模型，可以直接写模型名`)])), (b) => b.children))
-    .catch((e) => list.replaceChildren(note(T`读取失败：${e.message}`)));
+    .then((r) => {
+      if (!menu.isConnected) return;
+      opts = r.models;
+      listed = r.listed;
+      draw();
+      place(menu, anchor);
+    })
+    .catch((e) => menu.isConnected && list.replaceChildren(h('div', { class: 'mh' }, T`读取失败：${e.message}`)));
 }
 
 // ---------- 搜索（⌘K） ----------

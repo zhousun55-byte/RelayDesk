@@ -6,7 +6,7 @@ import path from 'node:path';
 import { talkContext } from '../commands/talk';
 import { autoSettingsSafe, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
-import { addModelMembers, enableProvider, loadDetected, modelOptions, tidyRegistry, type DetectReport } from '../core/detect';
+import { addModelMembers, enableProvider, loadDetected, modelOptions, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
 import { findHarness } from '../core/harness';
@@ -526,6 +526,15 @@ export function createServer(opts: ServerOptions): http.Server {
       const added = addModelMembers(str(b.from) ?? '', models);
       if (added.length) for (const r of liveProjects()) refreshBrief(r);
       return { added: added.map((a) => a.name), members: memberViews() };
+    },
+    '/api/members/model': (_q, b) => {
+      setMemberModel(str(b.name) ?? '', str(b.model) ?? '');
+      for (const r of liveProjects()) refreshBrief(r);
+      return { members: memberViews() };
+    },
+    '/api/members/crew': (_q, b) => {
+      setCrew(str(b.name) ?? '', str(b.crew) ?? '');
+      return { members: memberViews() };
     },
     '/api/workers/save': (_q, b) => ({ agent: upsertAgent(b.agent, str(b.originalName)) }),
     '/api/workers/delete': (_q, b) => {

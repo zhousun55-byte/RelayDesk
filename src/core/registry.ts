@@ -207,6 +207,11 @@ export function normalizeAgent(input: unknown): AgentConfig {
     agent.app = app;
   }
   if (o.detected === true) agent.detected = true;
+  const crew = optText(o.crew, '派活时干活的成员', 40);
+  if (crew) {
+    if (!NAME_RE.test(crew) || crew === name) throw new RelayError('派活时干活的成员名不对', 'bad-agent');
+    agent.crew = crew;
+  }
   return agent;
 }
 
@@ -254,6 +259,8 @@ export function removeAgent(name: string): void {
   const gone = reg.agents.find((a) => a.name === name);
   if (!gone) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
   const rest = reg.agents.filter((a) => a !== gone);
+  // 谁派活时派给它的：改回按顺序
+  for (const a of rest) if (a.crew === name) delete a.crew;
   // 同一个工具换了模型的还有别的几位在：这个工具不算删掉（重新识别照常更新它的位置）
   const held = new Set(rest.flatMap(removalKeys));
   saveRegistry({ agents: rest, removed: [...(reg.removed ?? []), ...removalKeys(gone).filter((k) => !held.has(k))] });

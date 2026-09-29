@@ -660,6 +660,24 @@ class GoRunner {
     return readyMembers(this.members()).find((m) => !this.failed.has(m.name) && !exclude.includes(m.name) && (tier === 'any' || m.tier === tier)) ?? null;
   }
 
+  /** 派活这个任务谁指挥：设置里指定的；没指定就是拆这个任务的那一位。 */
+  private leadName(v: LedgerView): string | undefined {
+    if (this.settings.lead) return this.settings.lead;
+    const since = taskSince(v);
+    return [...v.stints].reverse().find((s) => s.kind === 'plan' && s.status === 'handed' && !s.rolledBack && !(Date.parse(s.startedAt) < since))?.who.member ?? undefined;
+  }
+
+  /** 派活时指挥的那一位配的干活的人。 */
+  private crewName(v: LedgerView): string | undefined {
+    const lead = this.leadName(v);
+    return lead ? this.members().find((m) => m.name === lead)?.agent.crew : undefined;
+  }
+
+  /** 能用的那一位（能调度、没在等额度、这次没出过错）。 */
+  private ready(name: string | undefined): MemberInfo | null {
+    return name ? readyMembers(this.members()).find((m) => m.name === name && !this.failed.has(m.name)) ?? null : null;
+  }
+
   /** 最早恢复额度的那一位。 */
   private earliestCooling(tier: Tier): MemberInfo | null {
     const list = this.members().filter((m) => m.canWork && m.cooling && !this.failed.has(m.name) && (tier === 'any' || m.tier === tier));
@@ -712,7 +730,7 @@ class GoRunner {
         return this.finishOnce(o);
       }
       // 派活时指定一位弱模型：它只做清单里下一步（强模型拆好的）。
-      const o = await this.runStint(m, 'work', [], this.dispatch && m.tier === 'weak' ? nextStep(readTask(this.root)) : undefined);
+      const o = await this.runStint(m, 'work', [], this.dispatch && (m.tier === 'weak' || m.name === this.crewName(v)) ? nextStep(readTask(this.root)) : undefined);
       return this.finishOnce(o);
     } catch (e) {
       return this.finish(e instanceof RelayError && e.code === 'native-active' ? 'needs-human' : 'failed', errorMessage(e));
@@ -791,7 +809,9 @@ class GoRunner {
             const since = taskSince(v);
             const doers = v.stints.filter((x) => x.kind === 'work' && !x.rolledBack && !(Date.parse(x.startedAt) < since)).map((x) => x.who.member).filter((x): x is string => !!x);
             const weak = [...this.weakFinals];
-            const fr = this.pick('strong', [...doers, ...weak]) ?? this.pick('strong', weak);
+            // 派活：指挥的那位（算强的话）来终审
+            const lead = dispatch ? this.ready(this.leadName(v)) : null;
+            const fr = (lead?.tier === 'strong' && !weak.includes(lead.name) ? lead : null) ?? this.pick('strong', [...doers, ...weak]) ?? this.pick('strong', weak);
             if (fr) {
               const o = await this.runStint(fr, 'final', merge ? pending : []);
               if (merge) this.merged = true;
@@ -823,7 +843,8 @@ class GoRunner {
 
         // 3. 派活：这个任务还没拆过，先请强模型拆成小步。
         if (dispatch && !planned(v)) {
-          const planner = this.pick('strong');
+          // 指定了谁指挥就请它（它用不了就换强模型按顺序，不断档）
+          const planner = this.ready(this.settings.lead) ?? this.pick('strong');
           if (!planner) {
             const c = this.earliestCooling('strong');
             if (c && (await this.waitFor(c, '派活要先请强模型拆解，强模型都没额度'))) continue;
@@ -839,11 +860,12 @@ class GoRunner {
           continue;
         }
 
-        // 4. 派人干活（派活时只派弱模型，一棒做清单里的一步）。
+        // 4. 派人干活（派活时派指挥的那位配的干活的人，没配就派弱模型；一棒做清单里的一步）。
         // 派活一棒只做一步：上限至少是步数的两倍（每步留一次重做），不然清单一长就停在半路
         const cap = dispatch ? Math.max(this.settings.maxStints, task.items.length * 2) : this.settings.maxStints;
         if (stints >= cap) return this.finish('needs-human', `全自动停止：接力到上限 ${stints} 棒，任务还没做完`);
-        const w = this.pick(dispatch ? 'weak' : 'any');
+        // 派活：指挥的那位配了干活的人就先派它（它用不了再按顺序派弱模型）
+        const w = dispatch ? this.ready(this.crewName(v)) ?? this.pick('weak') : this.pick('any');
         if (!w && dispatch) {
           // 弱模型都用不了：按「等额度」等最早恢复的弱模型，或者停下。不换强模型干活，也不复核（做到哪写在页面上，复核你来点）。
           const c = this.earliestCooling('weak');

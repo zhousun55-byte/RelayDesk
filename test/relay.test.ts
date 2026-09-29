@@ -641,6 +641,36 @@ test('派活：强模型先拆成小步，弱模型一棒做一步，中途不�
   assert.deepEqual(st[1].tokens, { input: 100, output: 20 }, 'Claude Code 干活：结束时报的用量');
 });
 
+test('派活指定谁指挥、活派给谁：同一个工具的大模型拆和终审、小模型一步步做（MiMo Pro 派给 MiMo Flash 这种）；排在前面的弱模型不派', () => {
+  const s = prepared('dispatch-crew');
+  const file = path.join(s.home, '.relay', 'agents.json');
+  const reg = JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: Record<string, unknown>[] };
+  const codex = reg.agents.find((a) => a.name === 'codex')!;
+  reg.agents.push({ ...codex, name: 'codex-mini', model: 'gpt-6-mini', tier: 'weak' });
+  codex.crew = 'codex-mini';
+  fs.writeFileSync(file, JSON.stringify(reg));
+  setOrder(s, ['claude', 'codex', 'codex-mini'], { lead: 'codex' });
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  const out = s.relay(['auto']);
+  assert.match(out, /✓ 验收通过：清单 4\/4 全部打勾/);
+  assert.deepEqual(
+    s.stints().map((x) => [x.kind, x.who.member]),
+    [
+      ['plan', 'codex'],
+      ['work', 'codex-mini'],
+      ['work', 'codex-mini'],
+      ['work', 'codex-mini'],
+      ['work', 'codex-mini'],
+      ['final', 'codex'],
+    ],
+    '弱模型 claude 排在最前也不派：活给指挥配的那位'
+  );
+  const runs = fs.readFileSync(s.env.FAKE_LOG!, 'utf8').split('\n').filter((l) => l.startsWith('codex exec'));
+  assert.equal(runs.filter((l) => / -m gpt-6-mini /.test(l)).length, 4, '做活的四棒用小模型');
+  assert.equal(runs.filter((l) => !/ -m /.test(l)).length, 2, '拆和终审用它自己的模型');
+});
+
 test('派活：弱模型出错、没有别的弱模型时停下，写明每位弱模型怎么了；不换强模型干活', () => {
   const s = prepared('dispatch-noweak', { FAKE_CLAUDE_MODE: 'fail' });
   setOrder(s, ['claude', 'codex']);

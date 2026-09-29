@@ -107,18 +107,18 @@ test('同一个工具加几个模型：列出工具能换的模型、勾选加�
     await ui.call('/api/task', { dir: s.repo, text: '做两件事', steps: ['第一件', '第二件'] });
     let r = await ui.call('/api/models?name=codex');
     assert.deepEqual(
-      r.json.models.map((m: { id: string; name: string; added: boolean }) => [m.id, m.name, m.added]),
+      r.json.models.map((m: { id: string; name: string; current: boolean; added: boolean; top: boolean }) => [m.id, m.name, m.current, m.added, m.top]),
       [
-        ['gpt-6', 'GPT-6', true],
-        ['gpt-6-luna', 'GPT-6 Luna', false],
+        ['gpt-6', 'GPT-6', true, false, true],
+        ['gpt-6-luna', 'GPT-6 Luna', false, false, true],
       ],
-      'Codex 自己缓存的列表，藏起来的不列，名单里已有的标上'
+      'Codex 自己缓存的列表，藏起来的不列，现在用的标上'
     );
     r = await ui.call('/api/models?name=claude');
     assert.deepEqual([r.json.listed, r.json.models], [false, []], '接了别家模型的 Claude Code 列不出来');
     r = await ui.call('/api/models?name=claude-official');
     assert.deepEqual(
-      r.json.models.map((m: { id: string; added: boolean }) => [m.id, m.added]),
+      r.json.models.map((m: { id: string; current: boolean }) => [m.id, m.current]),
       [
         ['fable', false],
         ['opus', true],
@@ -135,6 +135,12 @@ test('同一个工具加几个模型：列出工具能换的模型、勾选加�
     assert.deepEqual([sonnet.llm, sonnet.tier, sonnet.canWork, sonnet.tool], ['Claude Sonnet', 'strong', true, 'Claude Code']);
     assert.equal((await ui.call('/api/members/add-models', { from: 'codex', models: [] })).status, 400, '没选模型');
     assert.deepEqual((await ui.call('/api/members/add-models', { from: 'claude-official', models: ['sonnet'] })).json.added, [], '加过了不再加');
+    r = await ui.call('/api/models?name=claude-official');
+    assert.deepEqual(
+      r.json.models.filter((m: { added: boolean }) => m.added).map((m: { id: string }) => m.id),
+      ['sonnet'],
+      '别的成员已在用的标上'
+    );
 
     // Opus 做一棒，Sonnet 接着做：各用各的模型
     for (const who of ['claude-official', 'claude-official-sonnet']) {

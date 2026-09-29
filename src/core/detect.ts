@@ -7,7 +7,7 @@ import { checkCommand } from './launch';
 import { findHarness, HARNESSES, harnessForCommand, locateCached, clearLocateCache, shownModel, type HarnessSpec, type Level, type LoginInfo, type ModelInfo } from './harness';
 import { autoSettingsSafe } from './auto-settings';
 import { apiUsable, listModels } from './llm';
-import { appNameOf, llmName, modelChoices } from './names';
+import { appNameOf, llmName, modelChoices, topModels } from './names';
 import { relayHome } from './paths';
 import { scanProviders, toApiSpec, type DetectedProvider } from './providers';
 import { agentKind, agentLabel, agentModel, loadRegistry, loadRegistryForDetect, normalizeAgent, registryPath, saveRegistry } from './registry';
@@ -404,11 +404,23 @@ function sameTool(a: AgentConfig, all: AgentConfig[]): AgentConfig[] {
 
 const listed = new Map<string, { at: number; ids: string[] }>();
 
+export interface ModelOption {
+  id: string;
+  name: string;
+  tier: Tier;
+  /** 这一位现在用的。 */
+  current: boolean;
+  /** 同一个工具的别的成员已经在用。 */
+  added: boolean;
+  /** 平时露出来（现在用的和同一家最新的几个）；别的打字搜。 */
+  top: boolean;
+}
+
 /**
  * 这一位所在的工具（或接口）能换哪些模型：工具自己列（不花额度，十分钟内不重问），同一个模型的几档并成一项；
- * 已经在名单里的标上。listed = false：这个工具列不出来，只能自己写模型名。
+ * 标上现在用的、别的成员已经在用的、平时露出来的几个。listed = false：这个工具列不出来，只能自己写模型名。
  */
-export async function modelOptions(name: string): Promise<{ listed: boolean; models: { id: string; name: string; tier: Tier; added: boolean }[] }> {
+export async function modelOptions(name: string): Promise<{ listed: boolean; models: ModelOption[] }> {
   const reg = loadRegistry();
   const a = reg.agents.find((x) => x.name === name);
   if (!a) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
@@ -425,9 +437,52 @@ export async function modelOptions(name: string): Promise<{ listed: boolean; mod
     if (got.length) listed.set(key, ids);
   }
   const report = loadDetected();
-  const have = new Set(sameTool(a, reg.agents).map((x) => llmName(memberModel(x, report))));
-  const models = modelChoices(ids.ids, (id) => shownModel(a.harness, id)).map((c) => ({ id: c.id, name: c.name, tier: (tierForModel(c.shown) === 'strong' ? 'strong' : 'weak') as Tier, added: have.has(c.name) }));
+  const mine = llmName(memberModel(a, report));
+  const have = new Set(sameTool(a, reg.agents).filter((x) => x !== a).map((x) => llmName(memberModel(x, report))));
+  const all = modelChoices(ids.ids, (id) => shownModel(a.harness, id));
+  const top = new Set(topModels(all.filter((c) => !have.has(c.name)).map((c) => c.name), mine));
+  const models = all.map((c) => ({ id: c.id, name: c.name, tier: (tierForModel(c.shown) === 'strong' ? 'strong' : 'weak') as Tier, current: c.name === mine, added: have.has(c.name), top: top.has(c.name) }));
   return { listed: true, models };
+}
+
+/** 模型名会原样交给工具的命令行：空格、引号、shell 符号一律不收。 */
+function checkModelName(model: string): void {
+  if (!/^[^\s"'`$&|;<>\\^%!]{1,80}$/.test(model)) throw new RelayError(`模型名「${model.slice(0, 40)}」不对：不能有空格、引号和 $ & | ; 这类符号`, 'bad-agent');
+}
+
+/** 这一位换成用另一个模型：强弱改回按模型猜。同一个工具已经有别人在用这个模型就不换（名单里会有两位一样的）。 */
+export function setMemberModel(name: string, raw: string): AgentConfig {
+  const model = String(raw ?? '').trim();
+  checkModelName(model);
+  const reg = loadRegistry();
+  const a = reg.agents.find((x) => x.name === name);
+  if (!a) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
+  const kind = agentKind(a);
+  if (kind === 'app' || (kind === 'cli' && !a.harness)) throw new RelayError(`${agentLabel(a)} 换不了模型：接力台调不动它`, 'bad-agent');
+  const report = loadDetected();
+  const shown = shownModel(a.harness, model);
+  const other = sameTool(a, reg.agents).find((x) => x !== a && (sameModel(memberModel(x, report) ?? '', shown) || llmName(memberModel(x, report)) === llmName(shown)));
+  if (other) throw new RelayError(`名单里已经有 ${llmName(shown)} 了`, 'dup-agent');
+  if (kind === 'api') a.api = { ...a.api!, model };
+  a.model = model;
+  delete a.tierSet;
+  a.tier = tierForModel(shown) === 'strong' ? 'strong' : 'weak';
+  saveRegistry(reg);
+  return a;
+}
+
+/** 这一位派活时指挥，活派给谁（空 = 弱模型按顺序）。 */
+export function setCrew(name: string, crew: string): AgentConfig {
+  const reg = loadRegistry();
+  const a = reg.agents.find((x) => x.name === name);
+  if (!a) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
+  if (crew) {
+    const c = reg.agents.find((x) => x.name === crew);
+    if (!c || c === a || agentKind(c) === 'app') throw new RelayError(`「${crew}」不能派活`, 'bad-agent');
+    a.crew = crew;
+  } else delete a.crew;
+  saveRegistry(reg);
+  return a;
 }
 
 /**
@@ -444,8 +499,7 @@ export function addModelMembers(from: string, models: string[]): AgentConfig[] {
   const names = new Set(reg.agents.map((x) => x.name));
   const added: AgentConfig[] = [];
   for (const model of [...new Set(models.map((m) => String(m ?? '').trim()).filter(Boolean))]) {
-    // 模型名会原样交给工具的命令行：空格、引号、shell 符号一律不收
-    if (!/^[^\s"'`$&|;<>\\^%!]{1,80}$/.test(model)) throw new RelayError(`模型名「${model.slice(0, 40)}」不对：不能有空格、引号和 $ & | ; 这类符号`, 'bad-agent');
+    checkModelName(model);
     // 同一个模型的另一档（grok-4.7-high 和 grok-4.7-xhigh-fast）也算有了
     const shown = shownModel(a.harness, model);
     const same = (x: AgentConfig) => {

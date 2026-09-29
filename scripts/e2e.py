@@ -144,7 +144,7 @@ def main():
             page.wait_for_timeout(500)
             check(page.locator('.settings').count() == 0, '设置：按 Esc 关掉')
 
-            # 添加模型：同一个接口换个模型再加一位（列出来的勾上、语音模型不列、已有的标上）
+            # 换模型：点名字弹出来，平时只露现在用的和同一家的几个（语音模型不列）；「+」再加一位；打字搜、没有的直接用写的
             mock = ThreadingHTTPServer(('127.0.0.1', 0), Models)
             threading.Thread(target=mock.serve_forever, daemon=True).start()
             with open(os.path.join(home, '.relay', 'agents.json'), 'w') as f:
@@ -153,20 +153,25 @@ def main():
             page.get_by_role('button', name='设置').click()
             page.locator('.settings').get_by_role('tab', name='成员').click()
             page.locator('.settings .members .member').first.wait_for()
-            page.locator('.settings .set-title').get_by_role('button', name='添加').click()
-            page.get_by_role('menuitem', name='模型').click()
-            sheet = page.get_by_role('dialog', name='添加模型')
-            sheet.locator('.model-list .mi').first.wait_for(timeout=5000)
-            rows = sheet.locator('.model-list .mi')
-            had = rows.filter(has_text='Demo Pro')
-            check(rows.count() == 2 and had.is_disabled() and had.get_by_text('已在名单里').count() == 1, '添加模型：列出接口上的模型，语音模型不列，已在名单里的标上')
-            rows.filter(has_text='Demo Flash').click()
-            page.screenshot(path=os.path.join(tmp, 'add-model.png'))
-            sheet.get_by_role('button', name='添加').click()
-            page.wait_for_function('() => document.querySelectorAll(".settings .members .member").length === 2 && !document.querySelector("[role=dialog][aria-label=添加模型]")', timeout=5000)
+            page.locator('.settings .member .mname').first.click()
+            menu = page.locator('.model-menu:not(.leave)')
+            menu.locator('.mrow').first.wait_for(timeout=5000)
+            rows = menu.locator('.mrow')
+            check(rows.count() == 2 and menu.locator('[aria-checked=true]').filter(has_text='Demo Pro').count() == 1, '换模型：点名字弹出来，现在用的打着勾，语音模型不列')
+            page.screenshot(path=os.path.join(tmp, 'model-menu.png'))
+            rows.filter(has_text='Demo Flash').hover()
+            rows.filter(has_text='Demo Flash').get_by_role('button', name='再加一位 Demo Flash').click()
+            page.wait_for_function('() => document.querySelectorAll(".settings .members .member").length === 2', timeout=5000)
             with open(os.path.join(home, '.relay', 'agents.json')) as f:
                 added = [a for a in json.load(f)['agents'] if a['name'] != 'demo']
-            check(page.get_by_role('dialog', name='添加模型').count() == 0 and [(a['api']['model'], a['tier']) for a in added] == [('demo-flash', 'weak')] and page.locator('.settings .members').get_by_text('Demo Flash').count() == 1, '添加模型：勾上点「添加」，名单里多一位（照抄接口，只换模型，强弱按模型猜）')
+            check([(a['api']['model'], a['tier']) for a in added] == [('demo-flash', 'weak')] and page.locator('.settings .members').get_by_text('Demo Flash').count() == 1, '换模型：点「+」再加一位（照抄接口，只换模型，强弱按模型猜）')
+            page.locator('.settings .member .mname').filter(has_text='Demo Flash').click()
+            menu.locator('.msearch').fill('demo-mini')
+            menu.get_by_role('menuitemradio', name='demo-mini').click()
+            page.wait_for_function('() => [...document.querySelectorAll(".settings .members .mname")].some((b) => b.textContent.includes("Demo Mini"))', timeout=5000)
+            with open(os.path.join(home, '.relay', 'agents.json')) as f:
+                models = sorted(a['api']['model'] for a in json.load(f)['agents'])
+            check(models == ['demo-mini', 'demo-pro'], '换模型：打字搜，列表里没有的直接用写的名字，这一位换成它')
             page.keyboard.press('Escape')
             page.wait_for_timeout(400)
             mock.shutdown()

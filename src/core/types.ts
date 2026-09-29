@@ -60,6 +60,8 @@ export interface AgentConfig {
   detected?: boolean;
   /** 同一个模型的桌面程序（打开文件夹的命令，含 {{dir}}）：你自己接着做时打开它。和命令行 / 接口是同一家、同一个账号，所以并成一位。 */
   app?: string;
+  /** 派活时它来指挥，活派给谁（成员名，比如 MiMo Pro 派给 MiMo Flash）。不写 = 弱模型按顺序。 */
+  crew?: string;
 }
 
 export interface AgentsRegistry {

@@ -2647,6 +2647,13 @@ button.busy::after {
   height: 12px;
   margin-left: 2px;
 }
+.picker.roles {
+  padding-left: 4px;
+}
+.picker.roles .to {
+  width: 12px;
+  height: 12px;
+}
 .send {
   width: 32px;
   height: 32px;
@@ -3533,17 +3540,64 @@ button.busy::after {
   flex-direction: column;
 }
 /* 添加模型：一列能勾的模型，长了在框里滚 */
-.model-list {
-  max-height: min(46vh, 340px);
+/* 换模型：名字底下弹出来，上面搜，下面几行；长了在框里滚 */
+.model-menu {
+  width: 300px;
+}
+.model-menu .msearch {
+  width: 100%;
+  height: 30px;
+  margin-bottom: 4px;
+}
+.model-menu .mlist {
+  max-height: min(46vh, 320px);
   overflow: auto;
   overscroll-behavior: contain;
-  margin: 6px -9px 10px;
 }
-.model-list .set-desc {
-  padding: 0 9px;
+.model-menu .mrow {
+  display: flex;
+  align-items: center;
 }
-.model-list .sub.mono {
+.model-menu .mrow .mi {
+  flex: 1;
+  min-width: 0;
+}
+.model-menu .sub.mono {
   font: 11px/1.4 var(--mono);
+}
+.model-menu .add {
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.14s;
+}
+.model-menu .mrow:hover .add,
+.model-menu .add:focus-visible {
+  opacity: 1;
+}
+.member .mname {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  margin: -2px -5px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  color: var(--ink);
+  transition: background 0.14s;
+}
+.member .mname:hover {
+  background: var(--fog);
+}
+.member .mname svg.i {
+  width: 12px;
+  height: 12px;
+  color: var(--ink-3);
+  opacity: 0;
+  transition: opacity 0.14s;
+}
+.member:hover .mname svg.i,
+.member .mname:focus-visible svg.i {
+  opacity: 1;
 }
 .member {
   display: flex;
