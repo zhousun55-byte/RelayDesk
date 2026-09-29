@@ -4490,12 +4490,11 @@ function updateComposer() {
   C.seg.hidden = task || !!S.slash;
   C.pick.hidden = task || !!S.slash;
   C.plus.hidden = !!S.slash;
-  C.auto.hidden = !task;
+  C.auto.hidden = !task || S.view === 'dispatch';
   C.auto.setAttribute('aria-checked', String(S.autoAfter));
   C.roles.hidden = !task || S.view !== 'dispatch' || !!S.slash || !members().length;
   if (!C.roles.hidden) drawRoles();
-  // 派活页本来就叫派活：这个开关写它做的事（发出去就开始），不再重复页名
-  C.autoWord.textContent = S.view === 'dispatch' ? T`发出就开始` : T`全自动`;
+  C.autoWord.textContent = T`全自动`;
   C.optRow.hidden = !vote || !!S.slash;
   for (const b of C.seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === S.mode));
   C.pill.hidden = !S.slash;
@@ -5042,7 +5041,8 @@ async function createTask(text, p = pin()) {
   const refs = S.files.map((f) => `\`${f}\``).join(' ');
   // 派活页写的任务：全自动用派活（强模型拆、弱模型做）
   const dispatch = S.view === 'dispatch';
-  const autoAfter = S.autoAfter;
+  // 派活页写的任务发出去就开始派（派活本来就是交给接力台做）；接力页看开关（也可能是要自己在工具里接着做）
+  const autoAfter = dispatch || S.autoAfter;
   if (!S.st.project.init) await p.api('/api/init', {});
   await p.api('/api/task', { text: [lines[0].trim(), ...body, refs].filter(Boolean).join('\n'), steps, ...(dispatch ? { mode: 'dispatch' } : {}) });
   // 任务已经建在原来的项目里了；换了项目就不再替它开全自动、不动新项目的页面

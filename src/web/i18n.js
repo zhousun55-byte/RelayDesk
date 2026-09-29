@@ -199,7 +199,6 @@ const EN = {
   '没列出模型，写下名字也能换': 'No models listed; type a model name',
   '这个工具不报模型，写下名字也能换': 'This tool cannot list its models; type a model name',
   '指挥 → 干活': 'Lead → Crew',
-  '发出就开始': 'Start on send',
   '第 {} 棒{}': (span, word) => `${/[–、]/.test(span) ? 'Legs' : 'Leg'} ${String(span).replace(/、/g, ', ')}${word}`,
   谁派给谁: 'Who hands work to whom',
   '谁拆步骤、终审，派给谁一步步做': 'Who splits the task and does the final review, and who does the steps',

@@ -62,7 +62,7 @@ Then:
 
 A tool can usually switch models: Claude Code has Opus and Sonnet, Cursor has dozens. In *Settings → Members*, click a member's name: you see the model it uses and the newest few from the same family (type to search the rest, or type any model name). Click one to switch this member to it; the *+* on the right adds another member with that model, with its own name, strong/weak setting and quota. The list comes from the tool itself and costs nothing (Codex's model cache; the `models` command of Cursor, Antigravity, OpenCode and Grok; an API's model list; Claude Code's aliases fable / opus / sonnet / haiku). Effort and speed variants are merged, and speech or embedding models are left out. Nothing is added automatically.
 
-On the *Dispatch* page, the line under the input box (for example *GLM-5.3 hands to GLM-5.3 Flash*) sets who splits the task and does the final review, and who does the steps: by default strong models lead and weak models work, in list order. You can pick, for example, MiMo V2.6 Pro leading MiMo V2.6 Flash, GLM-5.3 leading GLM-5.3 Flash, or Opus leading Sonnet. If the crew member can't work this time, weak models take over in order. Strong and weak only decide reviews.
+A task written on the *Dispatch* page starts as soon as it is sent. On that page, the line under the input box (for example *GLM-5.3 hands to GLM-5.3 Flash*) sets who splits the task and does the final review, and who does the steps: by default strong models lead and weak models work, in list order. You can pick, for example, MiMo V2.6 Pro leading MiMo V2.6 Flash, GLM-5.3 leading GLM-5.3 Flash, or Opus leading Sonnet. If the crew member can't work this time, weak models take over in order. Strong and weak only decide reviews.
 
 ### What each tool keeps
 
