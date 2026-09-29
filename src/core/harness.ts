@@ -89,8 +89,8 @@ export interface HarnessSpec {
   /** 实测程度：yes = 实测过改文件和跑命令；partial = 实测过一部分；no = 按官方参数写的，没实测。 */
   tested: 'yes' | 'partial' | 'no';
   loginHint: string;
-  /** 你自己在终端里用它时要加的参数（比如 Claude Code 官方账号要跳过你的用户设置）。 */
-  manualArgs?: string[];
+  /** 你自己在终端里用它时要加的参数（比如 Claude Code 官方账号要盖掉接别家模型的设置）。 */
+  manualArgs?(): string[];
   locate(): Located | null;
   login(loc: Located): LoginInfo;
   model(loc: Located): ModelInfo;
@@ -234,8 +234,52 @@ export function claudeSettings(): { model?: string; baseHost?: string; hasToken:
 /** 把 Claude Code 接到别家模型、或者改掉它用的模型的环境变量：用官方账号时一律去掉。 */
 export const CLAUDE_PROVIDER_ENV = /^(ANTHROPIC_|CLAUDE_CODE_USE_(BEDROCK|VERTEX|FOUNDRY)$|CLAUDE_CODE_SUBAGENT_MODEL$)/;
 
-/** 跳过 ~/.claude/settings.json（别家模型的接口和密钥一般配在这里），只读项目里的设置。 */
-const OFFICIAL_ARGS = ['--setting-sources', 'project,local'];
+/** 接别家模型常用的几项：你的设置里没写也一并盖掉（防止从别处带进来）。 */
+const PROVIDER_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_SMALL_FAST_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'ANTHROPIC_DEFAULT_FABLE_MODEL',
+  'ANTHROPIC_CUSTOM_HEADERS',
+  'CLAUDE_CODE_SUBAGENT_MODEL',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+];
+
+/**
+ * 官方账号：照常读你的用户设置（技能、插件、MCP、钩子、规则都在），只把接别家模型的那几项盖掉
+ * （--settings 比用户设置优先）：地址写回官方的，密钥、模型名、别家云的开关写成空的，就走 claude.ai 登录。
+ * 以前是跳过整份用户设置（--setting-sources project,local），技能、插件、你自己加的 MCP 都跟着没了。
+ */
+export function officialSettings(): Record<string, unknown> {
+  const j = readJson(path.join(home(), '.claude', 'settings.json')) ?? {};
+  const keys = new Set([...PROVIDER_KEYS, ...Object.keys(obj(j.env)).filter((k) => CLAUDE_PROVIDER_ENV.test(k))]);
+  keys.delete('ANTHROPIC_BASE_URL');
+  const env: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' };
+  for (const k of [...keys].sort()) env[k] = '';
+  return { env, ...(j.apiKeyHelper !== undefined ? { apiKeyHelper: '' } : {}) };
+}
+
+/** 同一份设置存成文件（~/.relay/claude-official.json，只有要盖掉的几项，没有密钥）：你自己在终端里开官方账号、看登录状态时用，命令短。 */
+function officialSettingsFile(): string {
+  const p = path.join(relayHome(), 'claude-official.json');
+  const text = JSON.stringify(officialSettings(), null, 2) + '\n';
+  try {
+    if (fs.readFileSync(p, 'utf8') === text) return p;
+  } catch {
+    /* 还没有：下面写 */
+  }
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, text);
+  return p;
+}
+
+const officialArgs = () => ['--settings', officialSettingsFile()];
 
 /** Claude Code 默认是不是被接到了别家模型（DeepSeek、Kimi、智谱……）：返回那家的地址，没有返回 null。 */
 export function claudeThirdParty(): string | null {
@@ -378,12 +422,16 @@ const claude: HarnessSpec = {
 /** 接力台调用 Claude Code 时一律关掉它的自动更新：升不升级、升到哪一版由你决定。 */
 const CLAUDE_ENV = { DISABLE_AUTOUPDATER: '1' };
 
-function claudeInvoke(loc: Located, i: InvokeInput, extra: string[] = []): Invocation {
-  const a = [...loc.exec, ...extra, '-p', '--output-format', 'stream-json', '--verbose'];
+function claudeInvoke(loc: Located, i: InvokeInput, settings: Record<string, unknown> = {}): Invocation {
+  const a = [...loc.exec, '-p', '--output-format', 'stream-json', '--verbose'];
   if (i.readOnly) a.push('--tools', 'Read,Grep,Glob');
   else if (i.level === 'full') a.push('--dangerously-skip-permissions');
   // 安全档：自动接受改文件；命令放进 Claude Code 自己的沙箱（只能写当前文件夹），沙箱里的命令自动放行。
-  else a.push('--permission-mode', 'acceptEdits', '--settings', JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true } }));
+  else {
+    a.push('--permission-mode', 'acceptEdits');
+    settings = { ...settings, sandbox: { enabled: true, autoAllowBashIfSandboxed: true } };
+  }
+  if (Object.keys(settings).length) a.push('--settings', JSON.stringify(settings));
   if (i.model) a.push('--model', i.model);
   if (i.effort) a.push('--effort', i.effort);
   return { argv: a, stdin: i.prompt, format: 'claude', env: { ...CLAUDE_ENV } };
@@ -501,7 +549,7 @@ function locateOfficial(): Located | null {
 /**
  * Claude Code 用你的官方账号（claude.ai 登录）。你把 Claude Code 默认接到了别家模型（比如 DeepSeek）时，
  * 同一个 claude 命令其实是两位：默认的（别家模型，多半算弱）和官方账号（Opus，算强）。
- * 官方账号：跳过你的用户设置、去掉 ANTHROPIC_* 这些变量，就走 claude.ai 登录；默认用最新的 Opus。
+ * 官方账号：照常读你的用户设置，只把接别家模型的那几项盖掉（officialSettings）、去掉 ANTHROPIC_* 这些变量，就走 claude.ai 登录；默认用最新的 Opus。
  * 没接别家模型时它和「Claude Code」是同一位，不单列。
  */
 const claudeOfficial: HarnessSpec = {
@@ -513,10 +561,10 @@ const claudeOfficial: HarnessSpec = {
   canReview: true,
   tested: 'partial',
   loginHint: '在终端运行 claude auth login，用 claude.ai 账号登录（Claude 桌面版登录的是同一个账号）。',
-  manualArgs: OFFICIAL_ARGS,
+  manualArgs: officialArgs,
   locate: locateOfficial,
   login(loc) {
-    const r = run([...loc.exec, ...OFFICIAL_ARGS, 'auth', 'status'], 20_000, CLAUDE_PROVIDER_ENV);
+    const r = run([...loc.exec, ...officialArgs(), 'auth', 'status'], 20_000, CLAUDE_PROVIDER_ENV);
     try {
       const j = JSON.parse(r.out) as { loggedIn?: boolean; authMethod?: string; subscriptionType?: string };
       if (j.loggedIn) return { state: 'ok', detail: `已登录（${j.authMethod ?? 'claude.ai'}${j.subscriptionType ? ` · ${j.subscriptionType}` : ''}）` };
@@ -541,7 +589,7 @@ const claudeOfficial: HarnessSpec = {
   },
   invoke(loc, i) {
     // 没在名单里指定模型：用这台电脑上最近用过的最新 Opus（和桌面版一样）；命令行太旧用不了它、或者看不出来，就用简称 opus。
-    return { ...claudeInvoke(loc, { ...i, model: i.model || officialModel(loc.version).model }, OFFICIAL_ARGS), dropEnv: CLAUDE_PROVIDER_ENV };
+    return { ...claudeInvoke(loc, { ...i, model: i.model || officialModel(loc.version).model }, officialSettings()), dropEnv: CLAUDE_PROVIDER_ENV };
   },
   models: async () => CLAUDE_ALIASES,
 };
@@ -703,7 +751,8 @@ const cursorAgent: HarnessSpec = {
     const a = [...loc.exec, '-p', '--trust', '--output-format', 'stream-json', '--workspace', i.cwd];
     if (i.readOnly) a.push('--mode', 'ask');
     // --force：不再逐个确认；安全档同时打开 Cursor 自己的沙箱（命令只能写工作目录）。
-    else a.push('--force', '--sandbox', i.level === 'full' ? 'disabled' : 'enabled');
+    // 不限制：MCP 也自动批准（没人在旁边点头，不批准就用不上）；只在项目里：跟着你在 Cursor 里的设置。
+    else a.push('--force', '--sandbox', i.level === 'full' ? 'disabled' : 'enabled', ...(i.level === 'full' ? ['--approve-mcps'] : []));
     // 名单里没指定：用你在 Cursor 里选的（命令行自己的默认可能还停在旧模型上）
     const model = i.model ?? cursorSettings().model;
     if (model) a.push('--model', model);

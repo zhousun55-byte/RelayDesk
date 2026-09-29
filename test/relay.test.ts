@@ -456,7 +456,9 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
     ['claude-official', 'claude', 'codex'],
     '按排序先后加：官方账号在前'
   );
-  assert.match(reg.agents[0].cmd ?? '', /claude --setting-sources project,local$/, '你自己在终端里开官方账号的命令');
+  assert.match(reg.agents[0].cmd ?? '', /claude --settings \S+\/\.relay\/claude-official\.json$/, '你自己在终端里开官方账号的命令：盖掉接 DeepSeek 的设置');
+  const over = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'claude-official.json'), 'utf8'));
+  assert.deepEqual([over.env.ANTHROPIC_BASE_URL, over.env.ANTHROPIC_AUTH_TOKEN, over.env.ANTHROPIC_MODEL], ['https://api.anthropic.com', '', ''], '那份设置里只有要盖掉的几项，没有密钥');
   s.relay(['workers', 'add', 'claude-app', '--kind', 'app', '--cmd', 'open -a Claude {{dir}}', '--label', 'Claude']);
   s.relay(['init']);
   s.relay(['task', '做两步', '--step', '第一步', '第二步']);
@@ -487,8 +489,9 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   assert.equal(first.review, 'done');
   assert.match(first.reviews[0].byLabel, /^Claude Code 官方账号/, '复核人写认出来的身份，不写它自称的「Claude Code」');
   const calls = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n');
-  assert.ok(calls.some((l) => l.startsWith('claude --setting-sources project,local -p ') && l.includes('--model claude-opus-5-5')), `用最新的 Opus，不用简称 opus（它不一定是最新版）\n${calls.join('\n')}`);
-  assert.ok(calls.some((l) => l.startsWith('claude -p ')), '接 DeepSeek 的那位照常调用');
+  const official = (l: string) => l.includes('"ANTHROPIC_BASE_URL":"https://api.anthropic.com"');
+  assert.ok(calls.some((l) => l.startsWith('claude -p ') && official(l) && l.includes('--model claude-opus-5-5') && !l.includes('--setting-sources')), `用最新的 Opus，不用简称 opus（它不一定是最新版）；照常读用户设置\n${calls.join('\n')}`);
+  assert.ok(calls.some((l) => l.startsWith('claude -p ') && !official(l)), '接 DeepSeek 的那位照常调用');
 
   // 官方账号额度用完（新版的原话）：记成额度用完，按提示里的时区记下恢复时间，不是「出错」。
   s.env.FAKE_CLAUDE_OFFICIAL_MODE = 'session-limit';
@@ -510,7 +513,7 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   s.relay(['go', 'claude-official']);
   const fourth = s.stints()[3];
   assert.equal(fourth.status, 'handed', '换成 opus 之后做完了');
-  const tries = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n').filter((l) => l.includes('--setting-sources'));
+  const tries = fs.readFileSync(path.join(s.base, 'fake.log'), 'utf8').trim().split('\n').filter((l) => l.includes('"ANTHROPIC_BASE_URL":"https://api.anthropic.com"'));
   assert.deepEqual(
     tries.map((l) => l.match(/--model (\S+)/)?.[1]),
     ['claude-opus-5-5', 'opus']

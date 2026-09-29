@@ -151,7 +151,7 @@ test('同一个工具加几个模型：列出工具能换的模型、勾选加�
     const runs = fs
       .readFileSync(s.env.FAKE_LOG!, 'utf8')
       .split('\n')
-      .filter((l) => l.includes('--setting-sources') && l.includes(' -p'))
+      .filter((l) => l.includes('"ANTHROPIC_BASE_URL":"https://api.anthropic.com"') && l.includes(' -p'))
       .map((l) => l.match(/--model (\S+)/)?.[1]);
     assert.deepEqual(runs, ['opus', 'sonnet']);
     const st = await ui.call(`/api/state${q(s)}`);

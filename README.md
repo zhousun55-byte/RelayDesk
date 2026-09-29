@@ -104,7 +104,7 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 **同一个 Claude Code 可能是两位。** 很多人在 `~/.claude/settings.json` 里把 Claude Code 接到了 DeepSeek、Kimi、智谱这类便宜的模型，同时手上还有 Claude 官方账号。接力台会把它们当成两位成员：
 
 - 「Claude Code」：接的别家模型（比如 DeepSeek），多半算弱；
-- 「Claude Code 官方账号」：claude.ai 登录的，默认用最新的 Opus，算强。接力台派它时会跳过你的用户设置（`--setting-sources project,local`）、去掉 `ANTHROPIC_*` 这些变量，让它走官方账号，额度和 Claude 桌面版是同一份。
+- 「Claude Code 官方账号」：claude.ai 登录的，默认用最新的 Opus，算强。接力台派它时照常读你的用户设置（技能、插件、MCP、钩子都在），只把接别家模型的那几项盖掉（地址写回官方的，密钥、模型名写成空的，这份覆盖存在 `~/.relay/claude-official.json`，里面没有密钥），再去掉 `ANTHROPIC_*` 这些变量，让它走官方账号，额度和 Claude 桌面版是同一份。
   - 装了 Claude 桌面版的话，接力台用**桌面版自带的那份 Claude Code**（在 `~/Library/Application Support/Claude/claude-code/` 里，跟着桌面版更新，通常比终端里的新，能用上最新的 Opus）。终端里的 `claude` 一点不动；接力台调用 Claude Code 时也会关掉它的自动更新，升不升级由你定。
   - 「最新的 Opus」按这台电脑上最近用过的来定（和桌面版一样）。命令行里的简称 `opus` 不一定是最新版，所以接力台会写全名。
   - 用的那份 Claude Code 太旧、用不了这个模型时，接力台会当场换成 `opus` 接着干，这一棒不算失败，并记下来；名单上会标出来。桌面版更新（或者你自己在终端升级）之后，会自动换回最新的。
@@ -117,6 +117,16 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 - 两位一起讨论：群聊里把两位都勾上。
 
 **到底是哪个 Claude 干的，以记录为准。** Claude Code 自己的会话记录（`~/.claude/projects/`）里记着每条回复实际用的是哪个模型。接力台拿它核对三件事：交接是哪个模型写的、复核结论是哪个模型写的、这段时间谁改了项目文件。所以接了 DeepSeek 的 Claude Code 在交接里自称 Opus，照样按弱的算；它写的复核（包括给自己写的）不算数，还要强模型再核。
+
+### 各家工具自己的本事：技能、MCP、子代理、规则和记忆
+
+派给编程工具（Claude Code、Codex、Cursor、Antigravity、DeepSeek Harness）的活，跑的就是它们自己的命令行：用它们自己的工具、子代理、技能、MCP，读它们自己的规则和记忆（Claude Code 的插件、钩子和自动记忆，Codex 的 `~/.codex/AGENTS.md`，项目里的 `CLAUDE.md`、`AGENTS.md`）。几点例外：
+
+- 权限「只在项目里」时，MCP 要不要问你按各家工具自己的设置：你在工具里允许过的照常能用，没允许过的没人点头就用不上；「不限制」时都能用（Cursor 会加上自动批准 MCP）。能操作电脑的 MCP 最好只在「不限制」时用。
+- 群聊只读：各家只给看文件的工具，技能和 MCP 不开。
+- 接口成员（MiMo 接口、智谱接口这类）不经过任何工具，用的是接力台自带的小助手（读写文件、跑命令、搜索），没有技能、MCP、子代理，也不读别的工具的全局规则。
+
+同一个技能放在好几个文件夹（`~/.claude/skills`、`~/.agents/skills`、项目里的 `.claude/skills` 和 `.agents/skills`）时，有的工具会读到两份。建议真正的文件只放一份（比如 `.agents/skills`），别处放指向它的链接，改一处各家都跟着变。
 
 ### 快照和退回
 

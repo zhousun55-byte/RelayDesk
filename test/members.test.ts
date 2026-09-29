@@ -459,3 +459,17 @@ test('换模型：平时只露现在用的和同一家最新的几个；这一�
   fs.rmSync(home('detected.json'), { force: true });
 });
 
+test('Claude Code 官方账号：照常读用户设置（技能、插件、MCP 都在），只把接别家模型的几项盖掉；别的设置不碰', () => {
+  writeJson(path.join(HOME, '.claude', 'settings.json'), { env: { ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: 'x', ANTHROPIC_FOO_MODEL: 'y', MY_TOOL: 'z' }, apiKeyHelper: '/bin/key', model: 'deepseek' });
+  const o = harness.officialSettings() as { env: Record<string, string>; apiKeyHelper?: string };
+  assert.equal(o.env.ANTHROPIC_BASE_URL, 'https://api.anthropic.com');
+  assert.equal(o.env.ANTHROPIC_AUTH_TOKEN, '');
+  assert.equal(o.env.ANTHROPIC_FOO_MODEL, '', '你设置里别的 ANTHROPIC_* 也盖掉');
+  assert.equal(o.env.ANTHROPIC_DEFAULT_OPUS_MODEL, '', '常见的几项没写也盖掉');
+  assert.equal('MY_TOOL' in o.env, false, '别的变量不碰');
+  assert.equal(o.apiKeyHelper, '', '取密钥的脚本也不用');
+  assert.ok(!Object.values(o.env).some((v) => v && v !== 'https://api.anthropic.com'), '不带出你设置里的值');
+  fs.rmSync(path.join(HOME, '.claude'), { recursive: true, force: true });
+  assert.deepEqual(Object.keys(harness.officialSettings()), ['env'], '没有用户设置也照样盖');
+});
+

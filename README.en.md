@@ -64,6 +64,10 @@ A tool can usually switch models: Claude Code has Opus and Sonnet, Cursor has do
 
 On the *Dispatch* page, *Lead → Crew* under the input box sets who splits the task and does the final review, and who does the steps: by default strong models lead and weak models work, in list order. You can pick, for example, MiMo V2.6 Pro leading MiMo V2.6 Flash, GLM-5.3 leading GLM-5.3 Flash, or Opus leading Sonnet. If the crew member can't work this time, weak models take over in order. Strong and weak only decide reviews.
 
+### What each tool keeps
+
+Work sent to a coding tool (Claude Code, Codex, Cursor, Antigravity, DeepSeek Harness) runs in that tool's own CLI, so it keeps its own tools, subagents, skills, MCP servers, rules and memory. The Claude official-account member reads your user settings too; RelayDesk only overrides the few settings that point Claude Code at another provider. With permissions set to *project only*, MCP calls follow each tool's own approvals; with *unrestricted*, they are allowed (Cursor gets `--approve-mcps`). Group chat is read-only. API members use RelayDesk's small built-in agent and have no skills, MCP or subagents.
+
 ## Where things live
 
 - `.relay/` in your project: the ledger, the relay book, handoffs, reviews, snapshots (a separate git directory, so your own git history is untouched), uploads.

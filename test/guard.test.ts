@@ -193,7 +193,7 @@ test('官方账号的 Claude Code：用 Claude 桌面版自带的新版（终端
   s.relay(['init']);
   s.relay(['task', '做一件事', '--step', '第一件']);
   s.relay(['go', 'claude-official']);
-  assert.match(fakeLog(s), /desktop-claude DISABLE_AUTOUPDATER=1 --setting-sources project,local -p/);
+  assert.match(fakeLog(s), /desktop-claude DISABLE_AUTOUPDATER=1 -p .*"ANTHROPIC_BASE_URL":"https:\/\/api\.anthropic\.com"/);
   const st = s.stints();
   assert.equal(st[0].who.member, 'claude-official');
   assert.equal(st[0].who.tier, 'strong');

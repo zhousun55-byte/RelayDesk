@@ -14,7 +14,7 @@ import type { Sandbox } from './helpers';
  * - 只读（群聊 / 投票）：按提示词回答（投票时不投自己）。
  * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail / slow（先把进程号写进 FAKE_DIR/<名字>.pid，
  * 睡 30 秒再干活）/ offline（像断网时的 Codex：一直报「Reconnecting... waiting for network」，永远不结束），FAKE_<名字>_WHO = 交接里写的身份；FAKE_REVIEW_SAY = 复核完说的那句话。
- * claude 带 --setting-sources（跳过用户设置）时扮演「官方账号」：FAKE_CLAUDE_OFFICIAL=pro 算登录了，
+ * claude 带着把地址写回 api.anthropic.com 的 --settings（盖掉接别家模型的设置）时扮演「官方账号」：FAKE_CLAUDE_OFFICIAL=pro 算登录了，
  * 身份和行为看 FAKE_CLAUDE_OFFICIAL_WHO / FAKE_CLAUDE_OFFICIAL_MODE；这时环境里还带着 ANTHROPIC_* 就报错（说明接力台没去掉）。
  * 额度窗口：官方账号的 claude 发 rate_limit_event，codex 干活时在 CODEX_HOME（没设就是 ~/.codex）的 sessions 里写带 rate_limits 的 rollout；
  * FAKE_<名字>_LIMITS / FAKE_CLAUDE_OFFICIAL_LIMITS = 「5 小时 一周」两个百分比（claude 默认 5 72，codex 默认 30 41）；额度用完时设了 FAKE_RESETS_IN（秒），就报 5 小时窗口用满、那么久以后恢复。
@@ -27,7 +27,7 @@ function fakeScript(name: 'claude' | 'codex'): string {
     `NAME=${name}`,
     'OFFICIAL=0; AUTH=0',
     'for a in "$@"; do',
-    '  [ "$a" = "--setting-sources" ] && OFFICIAL=1',
+    '  case "$a" in *\'"ANTHROPIC_BASE_URL":"https://api.anthropic.com"\'* | */claude-official.json) OFFICIAL=1 ;; esac',
     '  [ "$a" = auth ] && AUTH=1',
     'done',
     'if [ $AUTH -eq 1 ]; then',

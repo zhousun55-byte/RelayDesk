@@ -204,7 +204,7 @@ export function syncRegistry(report: DetectReport): string[] {
     if (h.login.state === 'no') continue;
     const spec = findHarness(h.id)!;
     const loc = locateCached(spec);
-    const cmd = loc ? [...loc.exec, ...(spec.manualArgs ?? [])].map((x) => (/[\s"']/.test(x) ? `'${x.replace(/'/g, `'\\''`)}'` : x)).join(' ') : h.id;
+    const cmd = loc ? [...loc.exec, ...(spec.manualArgs?.() ?? [])].map((x) => (/[\s"']/.test(x) ? `'${x.replace(/'/g, `'\\''`)}'` : x)).join(' ') : h.id;
     const all = reg.agents.filter((a) => harnessOf(a)?.id === h.id && agentKind(a) === 'cli');
     const bound = all[0];
     if (bound) {

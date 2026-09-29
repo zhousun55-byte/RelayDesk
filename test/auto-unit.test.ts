@@ -36,6 +36,8 @@ test('工具调用参数：安全档 / 完全放开 / 只读，各家都按无�
     const cursor = findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'safe', readOnly: false });
     assert.deepEqual(cursor.argv.slice(1), ['-p', '--trust', '--output-format', 'stream-json', '--workspace', '/wt', '--force', '--sandbox', 'enabled', '--model', 'grok-4.7-high-fast', 'P']);
     assert.ok(findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'safe', readOnly: true }).argv.includes('ask'));
+    assert.ok(findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'full', readOnly: false }).argv.includes('--approve-mcps'), '不限制：MCP 自动批准');
+    assert.ok(!findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'full', readOnly: true }).argv.includes('--approve-mcps'), '群聊只读：不批准 MCP');
     assert.ok(findHarness('cursor-agent')!.invoke(loc, { ...base, level: 'safe', readOnly: false, model: 'x-1' }).argv.join(' ').includes('--model x-1'), '名单里指定的优先');
   } finally {
     process.env.HOME = realHome;
