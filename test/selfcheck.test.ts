@@ -666,3 +666,91 @@ test('验收对指纹：文件夹和账本最后记下的不一样（在接力�
   assert.equal(acc.state, 'working');
   assert.deepEqual(acc.items.map((i) => i.text), ['文件夹里有还没记上账的改动']);
 });
+
+test('投票：出方案没出上的照样投票、只算一张票，「没出方案」单独记（以前记成一张弃权票，同一位看着像投了两次）；旧记录读的时候也挪开', async () => {
+  const api = (name: string) => ({ name, label: name, kind: 'api', tier: 'weak', api: { baseUrl: 'http://127.0.0.1:9', model: `${name}-model`, apiKeyEnv: '' } });
+  registry([api('a1'), api('a2'), api('a3')]);
+  const root = tmpDir('vote-noopt');
+  const real = talkMod.askAgent;
+  talkMod.askAgent = async (agent: { name: string }, prompt: string) => {
+    const ballot = /投票：<方案字母>/.test(prompt);
+    if (!ballot && agent.name === 'a3') throw new Error('没有输出');
+    return ballot ? '投票：A\n理由：简单' : `${agent.name} 的方案`;
+  };
+  try {
+    const final = await vote.startVote(root, { question: '怎么查这个脚本？', voters: ['a1', 'a2', 'a3'] }).done;
+    assert.equal(final.options.length, 2);
+    assert.deepEqual(final.ballots.map((b) => b.voter).sort(), ['a1', 'a2', 'a3'], '一位一张票');
+    assert.deepEqual(final.noOption?.map((x) => [x.voter, x.why]), [['a3', '没有输出']]);
+    assert.equal(final.ballots.find((b) => b.voter === 'a3')?.choice, 'A', 'a3 没出方案，投别人的照样算数');
+  } finally {
+    talkMod.askAgent = real;
+  }
+  const file = talk.talkPath(tmpDir('vote-old'));
+  const opt = { key: 'A', text: '先跑体检', author: 'a1', authorLabel: 'A1' };
+  talk.appendTalkRaw(file, {
+    kind: 'vote', id: 'vote-old', ts: '2026-09-29T08:00:00.000Z', question: '怎么查？', status: 'done', options: [opt], voters: ['glm-api'],
+    ballots: [
+      { voter: 'glm-api', voterLabel: 'GLM-5.3', choice: null, reason: '', void: '没出方案，没有输出' },
+      { voter: 'glm-api', voterLabel: 'GLM-5.3', choice: 'A', reason: '对得上' },
+    ],
+  });
+  const old = vote.readVotes(file)[0];
+  assert.deepEqual(old.ballots.map((b) => b.choice), ['A']);
+  assert.deepEqual(old.noOption, [{ voter: 'glm-api', voterLabel: 'GLM-5.3', why: '没有输出' }]);
+});
+
+test('群聊里的接口成员一直在看文件、看到步数用完也没回答：请它不再看文件，照看到的直接回答（以前记成「没有输出」）', async () => {
+  const root = tmpDir('ask-steps');
+  fs.writeFileSync(path.join(root, 'README.md'), 'demo\n');
+  const calls: number[] = [];
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const j = JSON.parse(body) as { messages: { role: string; content?: unknown }[] };
+      calls.push(j.messages.length);
+      const last = j.messages.at(-1)!;
+      const nudged = last.role === 'user' && /不要再调用工具/.test(String(last.content));
+      const msg = nudged ? { role: 'assistant', content: '方案：先跑体检，再只看改过的地方' } : { role: 'assistant', content: '', tool_calls: [{ id: `c${calls.length}`, type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } }] };
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ choices: [{ message: msg }] }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const reply = await talk.askAgent({ name: 'reader', kind: 'api', tier: 'weak', api: { baseUrl: `http://127.0.0.1:${port}/v1`, model: 'glm-5.3', apiKeyEnv: '' } }, '请给出你的方案', root);
+    assert.equal(reply, '方案：先跑体检，再只看改过的地方');
+    assert.equal(calls.length, 31, '30 步看文件，再问一次');
+  } finally {
+    server.close();
+  }
+  // Claude 协议：「工具结果」和这句话是同一轮（一问一答要交替）
+  const llm = require('../src/core/llm') as typeof import('../src/core/llm');
+  const chat = new llm.ToolChat({ baseUrl: 'http://127.0.0.1:9', model: 'm', apiKeyEnv: '', format: 'anthropic' }, 'sys', []);
+  chat.user('问题');
+  chat.results([{ id: 't1', content: '文件内容' }]);
+  chat.user('直接回答');
+  const msgs = (chat as unknown as { msgs: { role: string; content: { type: string }[] }[] }).msgs;
+  assert.deepEqual(msgs.map((m) => m.role), ['user', 'user']);
+  assert.deepEqual(msgs[1].content.map((b) => b.type), ['tool_result', 'text']);
+});
+
+test('Cursor 一时拿不到模型列表（「Cannot use this model: …. Available models:」后面是空的）算临时出错：群聊里等几秒再问一次', async () => {
+  assert.equal(runner.looksLikeNetworkBlip('Cannot use this model: grok-4.7-high-fast. Available models:'), true);
+  assert.equal(runner.looksLikeNetworkBlip('Cannot use this model: grok-9. Available models: auto, grok-4.7-high'), false, '列表不是空的：真没有这个模型，不重试');
+  const dir = tmpDir('ask-blip');
+  const script = path.join(dir, 'flaky.js');
+  fs.writeFileSync(script, `const fs=require('fs');const m=${JSON.stringify(path.join(dir, 'once'))};if(!fs.existsSync(m)){fs.writeFileSync(m,'');console.error('Cannot use this model: grok-4.7-high-fast. Available models:');process.exit(1)}console.log('第二次就好了')`);
+  const was = process.env.RELAY_RETRY_MS;
+  process.env.RELAY_RETRY_MS = '20';
+  try {
+    const reply = await talk.askAgent({ name: 'flaky', kind: 'cli', cmd: 'x', tier: 'weak', ask: `"${process.execPath}" "${script}"` }, 'hi', dir);
+    assert.equal(reply, '第二次就好了');
+  } finally {
+    if (was === undefined) delete process.env.RELAY_RETRY_MS;
+    else process.env.RELAY_RETRY_MS = was;
+  }
+});

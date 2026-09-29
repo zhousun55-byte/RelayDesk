@@ -11,7 +11,7 @@ import { llmName, toolName } from './names';
 import { shellArgv } from './proc';
 import { redactSecrets } from './redact';
 import { detectQuota, noteLimits } from './quota';
-import { clip, lastError, logTail, startRun, toolLines, type RunResult } from './runner';
+import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, type RunResult } from './runner';
 import { cause, plain } from './cause';
 import { agentKind, agentLabel, canTalk, findAgent, loadRegistry, OUT_PLACEHOLDER } from './registry';
 import type { AgentConfig } from './types';
@@ -376,6 +376,12 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     refreshHarnessModel(harness);
     const again = make();
     if (modelArg(again.argv) !== used) r = await startRun({ invocation: again, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
+  }
+  // 像是临时出错（网络抖了、服务器忙、Cursor 一时拿不到模型列表），又一句话没说：等几秒原地再问一次
+  const said = `${r.error ?? ''}\n${r.stderrTail}\n${toolLines(logTail(logPath, 6000))}`;
+  if (r.code !== 0 && !r.stopped && !r.timedOut && !r.finalText.trim() && !detectQuota(said).hit && looksLikeNetworkBlip(said)) {
+    await new Promise((res) => setTimeout(res, Number(process.env.RELAY_RETRY_MS ?? 5000)));
+    r = await startRun({ invocation: make(), cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
   }
   noteLimits(agent.name, r.limits);
   const log = logTail(logPath, 6000);

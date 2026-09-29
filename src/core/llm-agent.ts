@@ -378,6 +378,13 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
       }
     }
     if (!finished && steps >= maxSteps) input.log(`到了 ${maxSteps} 步上限，停下。`);
+    // 群聊、投票：看文件看到步数用完了、或者一句话没说就停了，回答还是空的：请它不再看文件，照已经看到的直接回答。
+    // （2026-09-29 投票时 GLM-5.3 出方案一句话没写，记成了「没有输出」；它投票时说读了很多项目文件，多半是读到步数用完。）
+    if (ro && !finalText.trim() && !input.shouldStop() && input.deadline - Date.now() > 10_000) {
+      chat.user('文件就看到这里：不要再调用工具，根据已经看到的内容，现在直接回答。');
+      const r = await chat.next(Math.min(180_000, input.deadline - Date.now()));
+      if (r.text.trim()) finalText = r.text;
+    }
   } catch (e) {
     return { finalText, steps, stopped: false, timedOut: false, error: errorMessage(e) };
   } finally {

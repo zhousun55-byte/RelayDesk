@@ -3686,7 +3686,7 @@ function voteCard(v, live = true) {
           onkeydown: cast ? (e) => (e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget && (e.preventDefault(), castVote(v, o)) : null,
         },
         h('span', { class: 'key' }, o.key),
-        h('span', { class: 'otext' }, o.text),
+        h('span', { class: 'otext', html: inline(esc(o.text)) }),
         h('span', { class: 'voters' }, done ? ballots.filter((b) => b.choice === o.key).map((b) => (b.voter === 'human' ? me() : h('span', { 'data-tip': nameOf(b.voterLabel) }, tile({ agent: b.voter, label: b.voterLabel }, 's16')))) : null),
         h('span', { class: 'n' }, done || n ? String(n) : ''),
         h(
@@ -3701,6 +3701,8 @@ function voteCard(v, live = true) {
     );
   }
   box.append(opts);
+  // 出方案那一步没出上的：照样投了票，这里单独写一行（不是弃权）
+  if (v.noOption && v.noOption.length) box.append(h('div', { class: 'noopt' }, T`没出方案：${v.noOption.map((x) => T`${nameOf(x.voterLabel)}（${tr(x.why)}）`).join(T`、`)}`));
   const why = ballots.filter((b) => b.voter !== 'human' || b.choice);
   if (done && why.length) {
     box.append(

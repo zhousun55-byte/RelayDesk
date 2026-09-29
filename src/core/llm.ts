@@ -244,7 +244,11 @@ export class ToolChat {
   ) {}
 
   user(text: string): void {
-    this.msgs.push(this.spec.format === 'anthropic' ? { role: 'user', content: [{ type: 'text', text }] } : { role: 'user', content: text });
+    if (this.spec.format !== 'anthropic') return void this.msgs.push({ role: 'user', content: text });
+    // Claude 的协议里一问一答要交替：上一条已经是「工具结果」（也是 user），就把这句话接在它后面
+    const last = this.msgs.at(-1);
+    if (last?.role === 'user' && Array.isArray(last.content)) last.content.push({ type: 'text', text });
+    else this.msgs.push({ role: 'user', content: [{ type: 'text', text }] });
   }
 
   async next(timeoutMs = 180_000): Promise<{ text: string; calls: ToolCall[] }> {

@@ -49,6 +49,7 @@ function voteText(v: Vote): string {
     const by = done && o.author !== 'human' ? ` · ${o.authorLabel} 出的` : o.author === 'human' ? ' · 我列的' : '';
     out.push(`${c.bold(`方案 ${o.key}`)}（${n} 票${done && v.leaders?.includes(o.key) ? '，最多' : ''}${v.adopted?.key === o.key ? '，已采纳' : ''}）${by}\n${o.text}`);
   }
+  if (v.noOption?.length) out.push(c.dim(`没出方案：${v.noOption.map((x) => `${x.voterLabel}（${x.why}）`).join('、')}`));
   if (done) for (const b of v.ballots) out.push(c.dim(`${b.voterLabel}：${b.choice ? `投 ${b.choice}` : `弃权（${b.void ?? ''}）`}${b.reason ? ` · ${b.reason}` : ''}`));
   if (done && v.leaders && v.leaders.length > 1) out.push(`平票：${v.leaders.join('、')}`);
   return out.join('\n');

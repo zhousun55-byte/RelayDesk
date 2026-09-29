@@ -409,7 +409,12 @@ function offlineMs(): number {
 
 /** 工具出错的样子像不像网络抖了一下（连接被断开、服务器临时忙）：像的话值得隔几秒原地再试一次。 */
 export function looksLikeNetworkBlip(text: string): boolean {
-  return looksOffline(text) || /\b50[234]\b|\b429\b|rate.?limit|overloaded|temporarily unavailable|service unavailable|bad gateway/i.test(text);
+  return (
+    looksOffline(text) ||
+    /\b50[234]\b|\b429\b|rate.?limit|overloaded|temporarily unavailable|service unavailable|bad gateway/i.test(text) ||
+    // Cursor 一时拿不到这个账号的模型列表：说「用不了这个模型」、后面的列表是空的（2026-09-29 投票时碰到，隔一会儿列表又有了）
+    /Cannot use this model\b[^\n]*Available models:[ \t]*$/im.test(text)
+  );
 }
 
 /** 一棒的日志里记的 token 用量加起来（每家工具每轮一行「本轮用了 X 输入 / Y 输出 token」）；一行都没有就是没报。 */

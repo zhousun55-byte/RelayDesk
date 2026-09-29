@@ -56,6 +56,19 @@ export interface Vote {
   /** 你采纳的方案。 */
   adopted?: { key: string; at: string };
   error?: string;
+  /** 出方案那一步没出上的（出错、没有输出）：它照样投票，投票和出方案是两回事，不记成弃权。 */
+  noOption?: { voter: string; voterLabel: string; why: string }[];
+}
+
+/** 旧记录把「没出方案」记成了一张弃权票（同一位后面还有一张真投的票，看着像投了两次）：读的时候挪到 noOption。 */
+function tidyOld(v: Vote): Vote {
+  const old = (v.ballots ?? []).filter((b) => b.voter !== 'human' && !b.choice && b.void?.startsWith('没出方案'));
+  if (!old.length) return v;
+  return {
+    ...v,
+    ballots: v.ballots.filter((b) => !old.includes(b)),
+    noOption: [...(v.noOption ?? []), ...old.map((b) => ({ voter: b.voter, voterLabel: b.voterLabel, why: b.void!.replace(/^没出方案[，,]?/, '') }))],
+  };
 }
 
 /** 一段群聊记录里的投票（同一个投票取最后一条）。 */
@@ -71,7 +84,7 @@ export function readVotes(file: string): Vote[] {
     if (!line.includes('"vote"')) continue;
     try {
       const v = JSON.parse(line) as Vote;
-      if (v.kind === 'vote' && typeof v.id === 'string') byId.set(v.id, v);
+      if (v.kind === 'vote' && typeof v.id === 'string') byId.set(v.id, tidyOld(v));
     } catch {
       /* 坏行跳过 */
     }
@@ -235,7 +248,7 @@ async function runVote(root: string, th: Thread, v: Vote, context: () => TalkCon
           const text = await askAgent(a, proposePrompt({ speaker: speaker(name), root, question: v.question, context: ctx }), root);
           if (text.trim()) got.push({ author: name, text: text.trim().slice(0, 2000) });
         } catch (e) {
-          v.ballots.push({ voter: name, voterLabel: speaker(name), choice: null, reason: '', void: `没出方案，${plain(errorMessage(e))}` });
+          (v.noOption ??= []).push({ voter: name, voterLabel: speaker(name), why: plain(errorMessage(e)) });
         }
       });
       if (got.length < 2) {
@@ -246,7 +259,6 @@ async function runVote(root: string, th: Thread, v: Vote, context: () => TalkCon
       v.options = shuffle(got)
         .slice(0, KEYS.length)
         .map((g, i) => ({ key: KEYS[i], text: g.text, author: g.author, authorLabel: g.author === 'human' ? '我' : speaker(g.author) }));
-      v.ballots = v.ballots.filter((b) => b.void);
       v.status = 'voting';
       save(th.file, v);
     }
