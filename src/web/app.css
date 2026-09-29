@@ -1840,7 +1840,7 @@ button.busy::after {
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--ink-3);
-  transition: opacity 0.14s;
+  transition: transform 0.26s var(--ease);
 }
 .card.ghost .who b {
   font-weight: 500;
@@ -1920,7 +1920,7 @@ button.busy::after {
 }
 .card:hover .who .tm,
 .card:focus-within .who .tm {
-  opacity: 0;
+  transform: translateX(calc(-1 * var(--acts, 34px)));
 }
 .tail {
   margin: 8px 0 0;
@@ -2648,11 +2648,20 @@ button.busy::after {
   margin-left: 2px;
 }
 .picker.roles {
-  padding-left: 4px;
+  gap: 5px;
+  max-width: 340px;
+  padding: 0 6px;
+  font-size: 12.5px;
+}
+.picker.roles .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
 }
 .picker.roles .to {
-  width: 12px;
-  height: 12px;
+  flex: none;
+  color: var(--ink-3);
 }
 .send {
   width: 32px;
@@ -4103,4 +4112,18 @@ button.busy::after {
 }
 .thread.sess .t {
   color: var(--ink-2);
+}
+
+.sess .sm.user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+.sess .sm.user .cap {
+  font: 11px/1 var(--mono);
+  color: var(--ink-4);
+}
+.vote .cap .when {
+  color: var(--ink-4);
 }

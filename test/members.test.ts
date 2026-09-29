@@ -473,3 +473,36 @@ test('Claude Code 官方账号：照常读用户设置（技能、插件、MCP �
   assert.deepEqual(Object.keys(harness.officialSettings()), ['env'], '没有用户设置也照样盖');
 });
 
+
+test('DeepSeek Harness 能换的模型：读桌面版设置里现在用的那家接口下面列的模型（它没有列模型的命令）', () => {
+  const f = path.join(HOME, '.dsh', 'profiles', 'desktop', 'cordis.patch.yml');
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(
+    f,
+    [
+      '- id: agent-default-model',
+      '  name: "@deepseek-ai/dsh-agent-default-model"',
+      '  config:',
+      '    provider: deepseek-account',
+      '    model: deepseek-flash',
+      '- id: llm-deepseek-official',
+      '  config:',
+      '    models:',
+      '      - id: deepseek-chat',
+      '- id: llm-deepseek-account',
+      '  name: "@deepseek-ai/dsh-llm-deepseek-account"',
+      '  config:',
+      '    models:',
+      '      - id: deepseek-flash',
+      '        name: DeepSeek-Flash',
+      '        inputModalities:',
+      '          - text',
+      '      - id: deepseek-v4-pro',
+      '        name: DeepSeek-V4-Pro',
+      '',
+    ].join('\n')
+  );
+  assert.deepEqual(harness.dshModels(), ['deepseek-flash', 'deepseek-v4-pro'], '只列现在用的那家接口的');
+  fs.rmSync(path.join(HOME, '.dsh'), { recursive: true, force: true });
+  assert.deepEqual(harness.dshModels(), []);
+});

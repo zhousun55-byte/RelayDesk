@@ -50,19 +50,19 @@ export interface DetectReport {
 
 /** 认得的桌面程序。id = 加进名单时的名字；tier = 默认强弱（桌面程序看不出用的哪个模型，你可以在设置里改）。 */
 const APPS: { name: string; id: string; label: string; tier: 'strong' | 'weak'; hint: string }[] = [
-  { name: 'Cursor', id: 'cursor', label: 'Cursor', tier: 'weak', hint: '你自己打开它接着做；接力台调度时用 Cursor Agent（同一个账号、同样的模型）。' },
-  { name: 'ZCode', id: 'zcode', label: 'ZCode', tier: 'weak', hint: '你自己打开它接着做；接力台调度时用它自带的命令行内核。' },
-  { name: 'Xiaomi MiMo', id: 'mimo', label: 'MiMo', tier: 'weak', hint: '你自己打开它接着做；接力台调度时可以用它的 Token Plan 接口（要你同意）。' },
-  { name: 'ChatGPT', id: 'chatgpt', label: 'ChatGPT', tier: 'strong', hint: '你自己打开它接着做；接力台调度时用 Codex。' },
-  { name: 'Claude', id: 'claude-app', label: 'Claude', tier: 'strong', hint: '你自己打开它接着做；接力台调度时用 Claude Code。' },
-  { name: 'Codex', id: 'codex-app', label: 'Codex 桌面版', tier: 'strong', hint: '你自己打开它接着做；接力台调度时用 Codex 命令行。' },
-  { name: 'Trae', id: 'trae', label: 'Trae', tier: 'weak', hint: '你自己打开它接着做。' },
-  { name: 'Windsurf', id: 'windsurf', label: 'Windsurf', tier: 'weak', hint: '你自己打开它接着做。' },
-  { name: 'Kiro', id: 'kiro', label: 'Kiro', tier: 'weak', hint: '你自己打开它接着做。' },
-  { name: 'Qoder', id: 'qoder', label: 'Qoder', tier: 'weak', hint: '你自己打开它接着做。' },
-  { name: 'CodeBuddy', id: 'codebuddy', label: 'CodeBuddy', tier: 'weak', hint: '你自己打开它接着做。' },
-  { name: 'Antigravity', id: 'antigravity', label: 'Antigravity', tier: 'weak', hint: '你自己打开它接着做；接力台调度时用 agy 命令行。' },
-  { name: 'DeepSeek Harness', id: 'deepseek-harness-app', label: 'DeepSeek Harness 桌面版', tier: 'weak', hint: '你自己打开它接着做；接力台调度时用它自带的无界面模式（同一个登录、同一个模型）。' },
+  { name: 'Cursor', id: 'cursor', label: 'Cursor', tier: 'weak', hint: '手动接着做时打开它；接力台调度时用 Cursor Agent（同一个账号、同样的模型）。' },
+  { name: 'ZCode', id: 'zcode', label: 'ZCode', tier: 'weak', hint: '手动接着做时打开它；接力台调度时用它自带的命令行内核。' },
+  { name: 'Xiaomi MiMo', id: 'mimo', label: 'MiMo', tier: 'weak', hint: '手动接着做时打开它；接力台调度时可以用它的 Token Plan 接口（要你同意）。' },
+  { name: 'ChatGPT', id: 'chatgpt', label: 'ChatGPT', tier: 'strong', hint: '手动接着做时打开它；接力台调度时用 Codex。' },
+  { name: 'Claude', id: 'claude-app', label: 'Claude', tier: 'strong', hint: '手动接着做时打开它；接力台调度时用 Claude Code。' },
+  { name: 'Codex', id: 'codex-app', label: 'Codex 桌面版', tier: 'strong', hint: '手动接着做时打开它；接力台调度时用 Codex 命令行。' },
+  { name: 'Trae', id: 'trae', label: 'Trae', tier: 'weak', hint: '手动接着做时打开它。' },
+  { name: 'Windsurf', id: 'windsurf', label: 'Windsurf', tier: 'weak', hint: '手动接着做时打开它。' },
+  { name: 'Kiro', id: 'kiro', label: 'Kiro', tier: 'weak', hint: '手动接着做时打开它。' },
+  { name: 'Qoder', id: 'qoder', label: 'Qoder', tier: 'weak', hint: '手动接着做时打开它。' },
+  { name: 'CodeBuddy', id: 'codebuddy', label: 'CodeBuddy', tier: 'weak', hint: '手动接着做时打开它。' },
+  { name: 'Antigravity', id: 'antigravity', label: 'Antigravity', tier: 'weak', hint: '手动接着做时打开它；接力台调度时用 agy 命令行。' },
+  { name: 'DeepSeek Harness', id: 'deepseek-harness-app', label: 'DeepSeek Harness 桌面版', tier: 'weak', hint: '手动接着做时打开它；接力台调度时用它自带的无界面模式（同一个登录、同一个模型）。' },
 ];
 
 function findApps(): AppReport[] {

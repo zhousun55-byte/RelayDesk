@@ -3217,7 +3217,7 @@ function talkRow(r) {
     return h(
       'div',
       { class: 'me', oncontextmenu: (e) => ctx(e, msgMenuItems(body)) },
-      h('span', { class: 'cap' }, [r.mode === 'solo' ? T`对比` : '', clock(r.ts)].filter(Boolean).join(' · ')),
+      h('span', { class: 'cap' }, [r.mode === 'solo' ? T`对比` : '', dayClock(r.ts)].filter(Boolean).join(' · ')),
       ...(body ? foldable(h('div', { class: 'note', html: inline(esc(body)) }), body) : []),
       files.length ? h('div', { class: 'att' }, files.map(fileEl)) : null
     );
@@ -3273,7 +3273,7 @@ function aiRow(r, compact) {
     'div',
     { class: 'ai', oncontextmenu: (e) => ctx(e, msgMenuItems(r.text)) },
     h('span', { class: 'who-tile', 'data-tip': memberByName(r.agent) ? memberTip(memberByName(r.agent)) : name }, tile({ agent: r.agent, label: r.who, model: r.model })),
-    h('div', null, h('div', { class: 'who' }, h('b', null, name), compact ? null : h('span', { class: 'time' }, clock(r.ts))), ...foldable(h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) }), r.text)),
+    h('div', null, h('div', { class: 'who' }, h('b', null, name), h('span', { class: 'time' }, compact ? clock(r.ts) : dayClock(r.ts))), ...foldable(h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) }), r.text)),
     compact ? null : h('div', { class: 'hover-acts' }, iconBtn(T`复制`, 'copy', () => copyToast(r.text)))
   );
 }
@@ -3387,6 +3387,8 @@ function stintCard(s) {
     {
       class: `stop card${ghost ? ' ghost' : ''}${compact ? ' compact' : ''}${live ? ' live' : ''}${open ? ' open' : ''}${s.rolledBack ? ' void' : ''}`,
       'data-stint': String(s.id),
+      // 悬停时右上角出按钮：时间往左让出这么宽，不再消失
+      style: `--acts:${files ? 64 : 34}px`,
       tabindex: '0',
       'aria-expanded': String(open),
       onclick: (e) => {
@@ -3460,11 +3462,25 @@ function cardFoot(s) {
   if (s.gate && s.gate.status === 'error') warn(T`检查没跑成`, s.gate.detail);
   if (s.protectedHits) warn(T`改了不许改的文件`, s.protectedHits.join('\n'));
   // 复核、并进了复核的终审：列出复核了哪几棒、结论是什么
+  // 结论一样的并成一段：「第 2–19 棒 · 没问题」，不一棒一个堆成几行（点它跳到那一段的第一棒，悬停看是哪几棒）
   if (s.kind !== 'work' && s.targets) {
-    for (const id of s.targets) {
+    const groups = new Map();
+    for (const id of [...s.targets].sort((a, b) => a - b)) {
       const tg = stintById(id);
       const r = tg && (tg.reviews || []).find((x) => x.by === s.id);
-      bits.push(h('button', { class: 'st link-st', onclick: () => jumpTo(id) }, T`第 ${id} 棒${r ? ` · ${tr(r.verdictWord)}` : ''}${r && r.weak ? T` · 不算数` : ''}`));
+      const word = `${r ? ` · ${tr(r.verdictWord)}` : ''}${r && r.weak ? T` · 不算数` : ''}`;
+      if (!groups.has(word)) groups.set(word, []);
+      groups.get(word).push(id);
+    }
+    for (const [word, ids] of groups) {
+      const runs = [];
+      for (const id of ids) {
+        const last = runs[runs.length - 1];
+        if (last && id === last[1] + 1) last[1] = id;
+        else runs.push([id, id]);
+      }
+      const span = runs.map(([a, b]) => (a === b ? String(a) : `${a}–${b}`)).join('、');
+      bits.push(h('button', { class: 'st link-st', 'data-tip': ids.length > 1 ? ids.map((id) => T`第 ${id} 棒`).join('、') : null, onclick: () => jumpTo(ids[0]) }, T`第 ${span} 棒${word}`));
     }
   }
   const f = s.facts;
@@ -3645,7 +3661,7 @@ async function skipReview(btn, s) {
   if (!S.st) return;
   const { root, name } = S.st.project;
   const who = s.who.tier === 'unknown' ? T`身份不明` : s.who.tier === 'weak' ? T`弱模型` : T`还没复核`;
-  if (!(await confirmSheet(T`跳过第 ${s.id} 棒的复核？`, T`「${name}」第 ${s.id} 棒（${who}）跳过后不再等复核。可以撤销。`, T`跳过复核`))) return;
+  if (!(await confirmSheet(T`跳过第 ${s.id} 棒的复核？`, T`「${name}」第 ${s.id} 棒（${who}）跳过后不再等复核。事后还能撤回。`, T`跳过复核`))) return;
   if (!S.st || S.st.project.root !== root) return fail(T`跳过复核`, T`项目已经换了`);
   const r = await act(btn, () => api('/api/mark', { dir: root, stint: s.id }));
   if (r) toast(T`第 ${s.id} 棒已跳过复核`, { action: { label: T`撤销`, run: () => act(null, () => api('/api/mark', { dir: root, stint: s.id, review: 'needed' }), T`已改回待复核`) } });
@@ -3654,7 +3670,7 @@ async function skipReview(btn, s) {
 async function rollbackTo(btn, s) {
   if (!S.st) return;
   const { root, name } = S.st.project;
-  if (!(await confirmSheet(T`退回到第 ${s.id} 棒之前？`, T`「${name}」第 ${s.id} 棒和之后的改动作废，清单里对应的勾去掉。可以撤销。`, T`退回`))) return;
+  if (!(await confirmSheet(T`退回到第 ${s.id} 棒之前？`, T`「${name}」第 ${s.id} 棒和之后的改动作废，清单里对应的勾去掉。事后还能撤回。`, T`退回`))) return;
   if (!S.st || S.st.project.root !== root) return fail(T`退回`, T`项目已经换了`);
   const r = await act(btn, () => api('/api/rollback', { dir: root, stint: s.id }));
   if (r) {
@@ -3905,7 +3921,8 @@ function voteCard(v, live = true) {
         ? [T`投票 · 出方案 `, dots]
         : v.status === 'voting'
           ? [T`投票中 ${aiBallots.length}/${v.voters.length}`, h('span', { class: 'tally', 'aria-hidden': 'true' }, v.voters.map((_, i) => h('i', { class: i < aiBallots.length ? 'on' : i === aiBallots.length ? 'next' : null })))]
-          : T`投票 · ${total} 票`
+          : T`投票 · ${total} 票`,
+      v.ts ? h('span', { class: 'when' }, ` · ${dayClock(v.ts)}`) : null
     ),
     h('p', { class: 'q' }, v.question)
   );
@@ -4125,11 +4142,12 @@ async function resumeSession(sess) {
 /** 对话正文：人说的、AI 答的、用了什么工具（一行灰字）。 */
 function sessionBody(data) {
   const list = h('div', { class: 'sess' });
-  if (data.cut) list.append(h('div', { class: 'empty-note' }, T`只显示最后一部分`));
-  if (!data.messages.length) list.append(h('div', { class: 'empty-note' }, T`还没有说话`));
+  if (data.cut) list.append(h('div', { class: 'empty-note' }, T`只留了最近的一截`));
+  if (!data.messages.length) list.append(h('div', { class: 'empty-note' }, T`还没人开口`));
+  // 每一问上面写时间（不是今天的带日期），好按时间找
   for (const m of data.messages) {
     if (m.role === 'tool') list.append(h('div', { class: 'sm tool mono' }, m.text));
-    else if (m.role === 'user') list.append(h('div', { class: 'sm user' }, h('div', { class: 'note' }, m.text.length > 1500 ? `${m.text.slice(0, 1500)}…` : m.text)));
+    else if (m.role === 'user') list.append(h('div', { class: 'sm user' }, m.at ? h('span', { class: 'cap' }, dayClock(m.at)) : null, h('div', { class: 'note' }, m.text.length > 1500 ? `${m.text.slice(0, 1500)}…` : m.text)));
     else list.append(h('div', { class: 'sm ai doc-md', html: md(m.text) }));
   }
   // 读出来的最后几句一句接一句浮上来（全文几百句只动最后几句）
@@ -4385,7 +4403,7 @@ function buildComposer() {
     (C.autoWord = h('span', null, T`全自动`))
   );
   // 派活：谁指挥（拆步骤、终审）→ 谁干活
-  C.roles = h('button', { class: 'picker roles', 'aria-haspopup': 'menu', 'aria-label': T`指挥 → 干活`, 'data-tip': T`指挥 → 干活`, onclick: (e) => rolesMenu(e.currentTarget) });
+  C.roles = h('button', { class: 'picker roles', 'aria-haspopup': 'menu', 'aria-label': T`谁派给谁`, 'data-tip': T`谁拆步骤、终审，派给谁一步步做`, onclick: (e) => rolesMenu(e.currentTarget) });
   C.send = h('button', { class: 'send', 'aria-label': T`发送`, 'data-tip': T`发送`, 'data-kbd': '↵', onclick: send }, icon('up'));
   C.tools = h('div', { class: 'tools' }, C.plus, C.seg, C.auto, C.roles, C.pick, h('span', { class: 'sp' }), C.send);
   C.box = h(
@@ -4476,7 +4494,8 @@ function updateComposer() {
   C.auto.setAttribute('aria-checked', String(S.autoAfter));
   C.roles.hidden = !task || S.view !== 'dispatch' || !!S.slash || !members().length;
   if (!C.roles.hidden) drawRoles();
-  C.autoWord.textContent = S.view === 'dispatch' ? T`派活` : T`全自动`;
+  // 派活页本来就叫派活：这个开关写它做的事（发出去就开始），不再重复页名
+  C.autoWord.textContent = S.view === 'dispatch' ? T`发出就开始` : T`全自动`;
   C.optRow.hidden = !vote || !!S.slash;
   for (const b of C.seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === S.mode));
   C.pill.hidden = !S.slash;
@@ -4614,10 +4633,12 @@ function drawRoles() {
   C.roles.dataset.sig = sig;
   // 换了指挥或干活的人：新的图标淡进来（第一次画不动）
   if (changed && !still()) requestAnimationFrame(() => [...C.roles.children].forEach((el, i) => el.animate([{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }], { duration: 260, delay: stagger(i), easing: EASE.ease, fill: 'backwards' })));
+  // 写明谁派给谁：「GLM-5.3 派给 GLM-5.3 Flash」，没配就是「派给弱模型」
+  const who = (m) => [tile(m, 's16'), h('span', { class: 'nm' }, memberName(m))];
   C.roles.replaceChildren(
-    lead ? tile(lead, 's20') : h('span', { class: 'none' }, T`没有强模型`),
-    icon('arrow', 'to'),
-    crew ? tile(crew, 's20') : weak.length ? stack(weak, () => '', 3) : h('span', { class: 'none' }, T`没有弱模型`),
+    ...(lead ? who(lead) : [h('span', { class: 'nm' }, T`没有强模型`)]),
+    h('span', { class: 'to' }, T`派给`),
+    ...(crew ? who(crew) : weak.length ? [stack(weak, () => '', 3), h('span', { class: 'nm' }, T`弱模型`)] : [h('span', { class: 'nm' }, T`没有弱模型`)]),
     icon('chev', 'caret')
   );
 }
@@ -5797,12 +5818,12 @@ function settingsBody(tab, redraw) {
       setRow(T`每一棒最长`, T`一位 AI 接着做一段叫一棒。到时间还没交接就停下，算作出错。`, stepper('stintTimeoutMin', 1, 600, T`分钟`, 5)),
       setRow(T`复核、终审最长`, T`强模型检查别人做的活，到时间就停下。`, stepper('reviewTimeoutMin', 1, 240, T`分钟`, 5)),
       setSec(T`全自动`),
-      setRow(T`最多接力`, T`接满这么多棒就停下，不会一直做下去。`, stepper('maxStints', 1, 100, T`棒`)),
+      setRow(T`最多接力`, T`接满这些棒就停，不会没完没了地接下去。`, stepper('maxStints', 1, 100, T`棒`)),
       setRow(T`额度用完时等恢复`, T`所有 AI 的额度都用完时，等最早恢复的那一位接着做；关掉就直接停下。`, sw('waitForQuota', T`额度用完时等恢复`)),
-      setRow(T`做完后终审`, T`清单全部打勾后，请强模型把整件事从头过一遍，通过了才算完成。`, sw('finalReview', T`做完后终审`)),
+      setRow(T`做完后终审`, T`清单全部打勾后，由强模型把整件事从头再走一遍，过了才算完成。`, sw('finalReview', T`做完后终审`)),
       setSec(T`对话`),
-      setRow(T`接着同一段对话`, T`同一个任务里，一位成员下一棒接着自己上一棒在工具里的那段对话；工具里一个任务就是一段对话。关掉就每棒新开一段，用的 token 少。`, sw('sameThread', T`接着同一段对话`)),
-      setRow(T`列出工具里的对话`, T`接力页左边列出这个项目文件夹里在 Claude Code、Codex 里开的对话，点开能看全文。只读这个项目文件夹的。`, sw('showSessions', T`列出工具里的对话`)),
+      setRow(T`接着同一段对话`, T`同一个任务里，一位成员的下一棒顺着它上一棒在工具里的那段话说下去，一个任务在工具里就是一整段对话。关掉则每棒另起一段，token 用得少。`, sw('sameThread', T`接着同一段对话`)),
+      setRow(T`列出工具里的对话`, T`接力页左边列出在这个文件夹里、用 Claude Code 和 Codex 开过的对话，点开是全文。别的文件夹不读。`, sw('showSessions', T`列出工具里的对话`)),
     ];
   }
   const theme = store.get('theme') || '';
@@ -5974,7 +5995,7 @@ function membersPane(redraw) {
     );
     list.append(row);
   }
-  if (!all.length) list.append(h('div', { class: 'empty-note' }, T`名单是空的`));
+  if (!all.length) list.append(h('div', { class: 'empty-note' }, T`名单还空着`));
   const consent = h('div');
   const fillConsent = (want) =>
     consent.replaceChildren(
@@ -6201,7 +6222,7 @@ function modelMenu(anchor, m, redraw) {
   closeMenus();
   hideTip();
   const search = h('input', { class: 'input msearch', placeholder: T`搜模型`, 'aria-label': T`搜模型` });
-  const list = h('div', { class: 'mlist' }, h('div', { class: 'mh' }, T`正在读取`));
+  const list = h('div', { class: 'mlist' }, h('div', { class: 'mh' }, T`读取中`));
   const menu = h('div', { class: 'menu model-menu', role: 'menu', tabindex: '-1' }, search, list);
   menu.addEventListener('keydown', (e) => menuKeys(e, menu));
   layer.append(menu);
@@ -6238,8 +6259,8 @@ function modelMenu(anchor, m, redraw) {
     const rows = shown.map(row);
     // 列表里没有的：直接用写的这个名字
     if (q && !opts.some((o) => o.id.toLowerCase() === low)) rows.push(row({ id: q, name: q, tier: m.tier }));
-    if (!q && opts.length > shown.length) rows.push(h('div', { class: 'mh' }, T`共 ${opts.length} 个，打字搜`));
-    if (!q && !opts.length) rows.push(h('div', { class: 'mh' }, listed ? T`没列出模型，直接写模型名` : T`这个工具列不出模型，直接写模型名`));
+    if (!q && opts.length > shown.length) rows.push(h('div', { class: 'mh' }, T`共 ${opts.length} 个，其余的搜得到`));
+    if (!q && !opts.length) rows.push(h('div', { class: 'mh' }, listed ? T`没列出模型，写下名字也能换` : T`这个工具不报模型，写下名字也能换`));
     // 搜的时候还在的一行滑到新位置，新出来的淡进来
     morph(list, () => list.replaceChildren(...rows), (b) => b.children);
   };

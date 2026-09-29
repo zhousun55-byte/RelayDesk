@@ -431,12 +431,12 @@ export function markReview(root: string, id: number, review: 'skip' | 'needed', 
     if (s.kind !== 'work') throw new RelayError('只有干活的棒要复核。', 'not-work');
     // 撤销：去掉跳过时记的那句说明，改回待复核。
     const next: Stint = { ...s, review: 'needed' };
-    const rest = (s.note ?? '').replace(/\s*你标记为不用复核。\s*$/, '');
+    const rest = (s.note ?? '').replace(/\s*你?标记为不用复核。\s*$/, '');
     if (rest) next.note = rest;
     else delete next.note;
     saveStint(root, next);
   } else {
-    saveStint(root, { ...s, review: 'skip', note: [s.note, note?.trim() || '你标记为不用复核。'].filter(Boolean).join(' ') });
+    saveStint(root, { ...s, review: 'skip', note: [s.note, note?.trim() || '标记为不用复核。'].filter(Boolean).join(' ') });
   }
 }
 

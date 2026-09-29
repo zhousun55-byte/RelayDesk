@@ -542,7 +542,7 @@ function locateOfficial(): Located | null {
         exec: [desk.bin],
         version,
         where: desk.bin,
-        note: `用的是 Claude 桌面版自带的 Claude Code ${version}（跟着桌面版更新，走你的 claude.ai 账号额度）${tv ? `；终端里的 claude ${tv} 没动` : ''}。`,
+        note: `用的是 Claude 桌面版自带的 Claude Code ${version}（跟着桌面版更新，走同一个 claude.ai 账号的额度）${tv ? `；终端里的 claude ${tv} 没动` : ''}。`,
       };
     }
   }
@@ -930,6 +930,25 @@ export function dshSettings(): { provider?: string; model?: string; effort?: str
   return {};
 }
 
+/**
+ * DeepSeek Harness 能换的模型：桌面版设置里（profiles/desktop/cordis.patch.yml）现在用的那家接口（llm-<provider>）
+ * 下面 models 列的 id（deepseek-flash、deepseek-v4-pro……）。它没有列模型的命令，读这份就够了。
+ */
+export function dshModels(): string[] {
+  let text = '';
+  try {
+    text = fs.readFileSync(path.join(dshHome(), 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8');
+  } catch {
+    return [];
+  }
+  const provider = dshSettings().provider;
+  const blocks = text.split(/\n(?=-\s)/).filter((b) => /^-?\s*id:\s*["']?llm-/m.test(b));
+  const mine = blocks.filter((b) => !provider || new RegExp(`^-?\\s*id:\\s*["']?llm-${provider.replace(/[^\w-]/g, '')}["']?\\s*$`, 'm').test(b));
+  const ids: string[] = [];
+  for (const b of mine.length ? mine : blocks) for (const m of b.matchAll(/^\s+-\s+id:\s*["']?([\w.:/-]+)["']?\s*$/gm)) if (!ids.includes(m[1])) ids.push(m[1]);
+  return ids;
+}
+
 function dshPatch(sel: { provider?: string; model?: string; effort?: string }): string | null {
   if (!sel.provider && !sel.model) return null;
   const lines = ['# 接力台写的：让无界面模式用和 DeepSeek Harness 桌面版一样的账号和模型。', '- id: agent-default-model', "  name: '@deepseek-ai/dsh-agent-default-model'", '  config:'];
@@ -1007,6 +1026,7 @@ const dsh: HarnessSpec = {
       env: { ...(loc.env ?? {}), DSH_PERMISSION_MODE: mode },
     };
   },
+  models: async () => dshModels(),
 };
 
 const agySettings = () => readJson(path.join(home(), '.gemini', 'antigravity-cli', 'settings.json'));
@@ -1178,7 +1198,7 @@ const grok: HarnessSpec = {
   workLevels: ['safe', 'full'],
   canReview: true,
   tested: 'no',
-  loginHint: '没登录。如果你是在 Cursor 里用 Grok，就不用管它；要单独用，在终端运行 grok login。',
+  loginHint: '没登录。在 Cursor 里用 Grok 的话不必理会；单独用它，先在终端运行 grok login。',
   locate: () => locateBin('grok'),
   login() {
     if (envValue('XAI_API_KEY')) return { state: 'ok', detail: '用环境变量 XAI_API_KEY' };

@@ -166,7 +166,7 @@ export function mimocodeProviders(): DetectedProvider[] {
       models,
       model,
       state: 'unknown',
-      detail: '要用 MiMo 桌面版里保存的密钥，你点「同意使用」后才会启用',
+      detail: '用的是 MiMo 桌面版里存的密钥，点「同意使用」之后才启用',
       source: 'mimocode',
     });
   }

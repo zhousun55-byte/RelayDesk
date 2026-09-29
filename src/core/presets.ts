@@ -15,7 +15,7 @@ export const PRESETS: Preset[] = [
   {
     id: 'claude',
     title: 'Claude Code（终端）',
-    hint: '接力台能替你调度它干活、复核、群聊；你也可以自己在终端里用它。',
+    hint: '接力台能调度它干活、复核、群聊；在终端里也能亲手用。',
     agent: {
       name: 'claude',
       label: 'Claude Code',
@@ -28,7 +28,7 @@ export const PRESETS: Preset[] = [
   {
     id: 'codex',
     title: 'Codex（终端）',
-    hint: '接力台能替你调度它干活、复核、群聊；你也可以自己在终端里用它。',
+    hint: '接力台能调度它干活、复核、群聊；在终端里也能亲手用。',
     agent: {
       name: 'codex',
       label: 'Codex',

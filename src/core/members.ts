@@ -9,7 +9,7 @@ import type { AgentConfig } from './types';
  * 成员：工人名单里的每一位，加上现在能不能用。
  * - harness：认得的编程工具（接力台能替你调度它干活、复核、群聊）；
  * - api：模型接口（接力台用内置小代理让它干活）；
- * - app：桌面程序（只能你自己打开它接着做；接力台负责记账）。
+ * - app：桌面程序（只能手动接着做时打开它；接力台负责记账）。
  */
 export interface MemberInfo extends MemberLike {
   kind: 'harness' | 'api' | 'app';
@@ -43,11 +43,11 @@ export function allMembers(level: Level = 'safe', report: DetectReport | null = 
     if (m) {
       out.push({ ...base, kind: m.kind, ...(m.harness ? { harness: m.harness } : {}), canWork: m.canWork, ...(m.why ? { why: m.why } : {}) });
     } else if (kind === 'app') {
-      out.push({ ...base, kind: 'app', canWork: false, why: '桌面程序：你自己打开它接着做，接力台负责记账。' });
+      out.push({ ...base, kind: 'app', canWork: false, why: '桌面程序：打开它亲手接着做，接力台在一旁记账。' });
     } else if (kind === 'api') {
       out.push({ ...base, kind: 'api', canWork: false, why: '接口没配好' });
     } else {
-      out.push({ ...base, kind: 'harness', canWork: false, why: a.harness ? '这台电脑上找不到它' : '不认得这个命令，只能你自己在终端里用' });
+      out.push({ ...base, kind: 'harness', canWork: false, why: a.harness ? '这台电脑上找不到它' : '认不出这个命令，只能在终端里亲手用' });
     }
   }
   // 还没并进同一家的桌面程序（刚加进来、还没识别过）：借那一位的模型来判断强弱（ZCode 桌面版和 ZCode 命令行用的是同一个 GLM）。
