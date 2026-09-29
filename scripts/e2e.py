@@ -194,6 +194,9 @@ def main():
             page.locator('.thread.sess').filter(has_text='导出做成 CSV 吗').click()
             page.locator('.sess .sm.ai').wait_for(timeout=5000)
             check(page.locator('.sess .sm.user').inner_text() == '导出做成 CSV 吗' and page.locator('.sess .sm.tool').inner_text() == 'Read：README.md', '工具里的对话：左边收成一行，点开看全文（人说的、AI 答的、用了什么工具）')
+            page.locator('.thread.sess-head').click()
+            page.wait_for_function('() => !document.querySelector(".thread.sess")', timeout=3000)
+            check(page.locator('.thread.sess-head').get_attribute('aria-expanded') == 'false', '工具里的对话：再点一下收起（原地淡出，不整列重画）')
             page.locator('.tab.chat-tab').click()
 
             # 群聊：之前发的长话先收起，点「展开」看全文；粘进来很长的一段字存成文件带上，输入框里只有一个小条，点开在页签里看

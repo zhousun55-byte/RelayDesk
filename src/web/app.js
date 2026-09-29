@@ -1604,7 +1604,6 @@ function renderLeft() {
     busyMember(),
     looks.key,
     S.sessions.dir === S.dir ? S.sessions.list.map((x) => [x.id, x.title, x.at]) : null,
-    store.get('sessOpen'),
   ]);
   if (sig !== leftSig) {
     leftSig = sig;
@@ -1751,33 +1750,37 @@ function dayClock(ts) {
 /** 这个项目文件夹里、自己在 Claude Code、Codex 里开的对话（接力页左边，收成一行，点开看）。 */
 function toolSessionsEls() {
   const all = S.sessions.list;
-  const open = !!store.get('sessOpen');
-  const head = h(
-    'button',
-    {
-      class: 'thread sess-head',
-      'data-id': 'sess-head',
-      'aria-expanded': String(open),
-      onclick: () => {
-        store.set('sessOpen', open ? null : 1);
-        renderLeft();
-      },
-    },
-    h('span', { class: 't' }, icon('chev', 'caret'), T`工具里的对话`),
-    h('span', { class: 'when' }, String(all.length))
-  );
-  if (!open) return [head];
-  return [
-    head,
-    ...all.map((x) =>
+  const rows = () =>
+    all.map((x) =>
       h(
         'button',
         { class: 'thread sess', 'data-id': `sess:${x.id}`, 'data-tip': SESSION_TOOL[x.tool], onclick: () => openSession(x.tool, x.id, x.title), oncontextmenu: (e) => ctx(e, sessionItems(x, x.title)) },
         h('span', { class: 't' }, x.title || T`未命名`),
         h('span', { class: 'when' }, when(x.at))
       )
-    ),
-  ];
+    );
+  // 点开 / 收起在原地做：一行行浮上来，收起时淡出去，箭头转过去（不整列重画）
+  const head = h(
+    'button',
+    {
+      class: 'thread sess-head',
+      'data-id': 'sess-head',
+      'aria-expanded': String(!!store.get('sessOpen')),
+      onclick: () => {
+        const open = !store.get('sessOpen');
+        store.set('sessOpen', open ? 1 : null);
+        head.setAttribute('aria-expanded', String(open));
+        if (open) {
+          const els = rows();
+          head.after(...els);
+          els.forEach((el, i) => enterAnim(el, i));
+        } else for (const el of head.parentNode.querySelectorAll('.thread.sess')) leave(el);
+      },
+    },
+    h('span', { class: 't' }, icon('chev', 'caret'), T`工具里的对话`),
+    h('span', { class: 'when' }, String(all.length))
+  );
+  return store.get('sessOpen') ? [head, ...rows()] : [head];
 }
 
 /** 取这个项目文件夹里的对话列表：换了项目马上取，同一个项目最多 20 秒取一次。 */
@@ -4129,6 +4132,8 @@ function sessionBody(data) {
     else if (m.role === 'user') list.append(h('div', { class: 'sm user' }, h('div', { class: 'note' }, m.text.length > 1500 ? `${m.text.slice(0, 1500)}…` : m.text)));
     else list.append(h('div', { class: 'sm ai doc-md', html: md(m.text) }));
   }
+  // 读出来的最后几句一句接一句浮上来（全文几百句只动最后几句）
+  if (!still()) [...list.children].slice(-8).forEach((el, i) => el.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 320, delay: stagger(i), easing: EASE.ease, fill: 'backwards' }));
   return list;
 }
 
@@ -4294,7 +4299,10 @@ function renderDoc(t) {
     head.append(h('div', { class: 'crumbs' }, h('b', null, T`接力本`)));
     if (d && d.data) body.append(h('div', { class: 'doc-md' }, h('div', { class: 'doc-md', html: md(d.data.text || T`（还没有）`) })));
   }
-  CE.doc.replaceChildren(h('div', { class: 'doc-pane' }, head, body));
+  const pane = h('div', { class: 'doc-pane' }, head, body);
+  CE.doc.replaceChildren(pane);
+  // 对话：从最新的那几句看起
+  if (t.type === 'session' && d && d.data) requestAnimationFrame(() => (pane.scrollTop = pane.scrollHeight));
 }
 
 // ---------- 输入框 ----------
@@ -4600,6 +4608,12 @@ function roles() {
 
 function drawRoles() {
   const { lead, crew, weak } = roles();
+  const sig = JSON.stringify([lead && lead.name, crew && crew.name, weak.map((m) => m.name)]);
+  if (C.roles.dataset.sig === sig) return;
+  const changed = !!C.roles.dataset.sig;
+  C.roles.dataset.sig = sig;
+  // 换了指挥或干活的人：新的图标淡进来（第一次画不动）
+  if (changed && !still()) requestAnimationFrame(() => [...C.roles.children].forEach((el, i) => el.animate([{ opacity: 0, transform: 'translateY(3px)' }, { opacity: 1, transform: 'none' }], { duration: 260, delay: stagger(i), easing: EASE.ease, fill: 'backwards' })));
   C.roles.replaceChildren(
     lead ? tile(lead, 's20') : h('span', { class: 'none' }, T`没有强模型`),
     icon('arrow', 'to'),
@@ -6152,6 +6166,28 @@ function addAppSheet(redraw) {
   );
 }
 
+/**
+ * 名单重画（换了模型、再加一位）：还在的从原来的位置滑过去，新来的一位淡进来，换了模型的那一位
+ * 图标和名字淡一下，不是整页一闪。
+ */
+function redrawMembers(redraw, touched) {
+  const rows = () => [...document.querySelectorAll('.settings .member')];
+  const before = new Map(rows().map((el) => [el.dataset.name, el.getBoundingClientRect().top]));
+  redraw();
+  if (still()) return;
+  let k = 0;
+  for (const el of rows()) {
+    const was = before.get(el.dataset.name);
+    if (was === undefined) {
+      el.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 320, delay: stagger(k++), easing: EASE.ease, fill: 'backwards' });
+      continue;
+    }
+    const d = was - el.getBoundingClientRect().top;
+    if (Math.abs(d) > 0.5) el.animate([{ transform: `translateY(${d}px)` }, { transform: 'none' }], { duration: 490, easing: EASE.spring });
+    if (el.dataset.name === touched) for (const x of el.querySelectorAll('.mt, .mn')) x.animate([{ opacity: 0.15, transform: 'translateY(2px)' }, { opacity: 1, transform: 'none' }], { duration: 280, easing: EASE.ease });
+  }
+}
+
 /** 能换模型的：接力台调得动的命令行工具、接口（桌面程序不行）。 */
 function canModel(m) {
   return m.kind === 'api' || !!(m.agent && m.agent.harness);
@@ -6179,13 +6215,13 @@ function modelMenu(anchor, m, redraw) {
       if (!r) return;
       // 按这次存好的名单画（别的刷新可能刚好把这次的盖过去）
       if (S.st) S.st.members = r.members;
-      redraw();
+      redrawMembers(redraw, add ? null : m.name);
     });
   };
   const row = (o) =>
     h(
       'div',
-      { class: 'mrow' },
+      { class: 'mrow', 'data-k': o.id },
       h(
         'button',
         { class: 'mi', role: 'menuitemradio', 'aria-checked': String(!!o.current), disabled: !!o.added, onclick: () => !o.current && choose(o, false) },
@@ -6204,7 +6240,8 @@ function modelMenu(anchor, m, redraw) {
     if (q && !opts.some((o) => o.id.toLowerCase() === low)) rows.push(row({ id: q, name: q, tier: m.tier }));
     if (!q && opts.length > shown.length) rows.push(h('div', { class: 'mh' }, T`共 ${opts.length} 个，打字搜`));
     if (!q && !opts.length) rows.push(h('div', { class: 'mh' }, listed ? T`没列出模型，直接写模型名` : T`这个工具列不出模型，直接写模型名`));
-    list.replaceChildren(...rows);
+    // 搜的时候还在的一行滑到新位置，新出来的淡进来
+    morph(list, () => list.replaceChildren(...rows), (b) => b.children);
   };
   search.addEventListener('input', draw);
   search.addEventListener('keydown', (e) => {
