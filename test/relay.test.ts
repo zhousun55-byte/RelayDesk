@@ -711,6 +711,18 @@ test('接着同一段对话：打开时同一个任务里一位成员下一棒�
   assert.ok(![st[0].session?.id, last.session?.id].includes(s.stints().at(-1)!.session?.id), '新任务新开一段');
 });
 
+test('任务里写了 /技能名：派出去的这一棒开工说明后面附上这个技能的做法（派给谁都照着做）', () => {
+  const s = prepared('skill-note');
+  const dir = path.join(s.repo, '.agents', 'skills', 'demo-skill');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: demo-skill\ndescription: 演示\n---\n\n先写测试再写代码。\n');
+  s.relay(['init']);
+  s.relay(['task', '做一件事 /demo-skill', '--step', '第一件']);
+  s.relay(['go', 'claude']);
+  const prompts = fs.readdirSync(s.base).filter((f) => f.startsWith('prompt-claude-')).map((f) => fs.readFileSync(path.join(s.base, f), 'utf8'));
+  assert.ok(prompts.some((p) => p.includes('技能「demo-skill」') && p.includes('先写测试再写代码。')), prompts.join('\n---\n').slice(-2000));
+});
+
 test('派活：弱模型出错、没有别的弱模型时停下，写明每位弱模型怎么了；不换强模型干活', () => {
   const s = prepared('dispatch-noweak', { FAKE_CLAUDE_MODE: 'fail' });
   setOrder(s, ['claude', 'codex']);

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { skillNote } from '../core/skills';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,7 +14,7 @@ import { runLlmAgent } from '../core/llm-agent';
 import { killTree, pidAlive } from '../core/proc';
 import { allMembers, orderMembers, readyMembers, spareFirst, type MemberInfo } from '../core/members';
 import { llmName, whoName } from '../core/names';
-import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
+import { BRIEF_REL, fileStamp, handoffFileFor, listHandoffFiles, readHandoff, readReview, readTask, REVIEW_DIR, saveTaskCopy, TASK_REL, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
 import { finalPrompt, planPrompt, reviewPrompt, stepPrompt, workPrompt } from '../core/prompts';
 import { sessionFile, sessionToolOf } from '../core/sessions';
 import { detectQuota, fullUntil, markOk, markQuota, noteError, noteLimits, recentErrors, untilText, type Limit } from '../core/quota';
@@ -522,6 +523,12 @@ class GoRunner {
       prompt = workPrompt({ id, label: who.label, handoff, gateCommand: gate });
     }
     prompt += langNote(this.settings.lang);
+    // 任务里写了 /技能名：附上这个技能的做法（派给谁都照着做）
+    try {
+      prompt += skillNote(root, fs.readFileSync(path.join(root, TASK_REL), 'utf8'));
+    } catch {
+      /* 还没有任务文件 */
+    }
     const timeoutMs = (kind === 'work' ? this.settings.stintTimeoutMin : this.settings.reviewTimeoutMin) * 60_000;
 
     let finalText = '';

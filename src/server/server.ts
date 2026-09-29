@@ -12,6 +12,7 @@ import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, sav
 import { findHarness } from '../core/harness';
 import { copyToClipboard, fillTemplate, openUrl, reveal, runOpener, chooseFolder } from '../core/launch';
 import { projectSessions, readSession, resumeHow, sessionToolOf } from '../core/sessions';
+import { listSkills } from '../core/skills';
 import { loadLedger, markReview, pendingReviews } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
 import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
@@ -388,6 +389,8 @@ export function createServer(opts: ServerOptions): http.Server {
     '/api/file': (q) => readProjectFile(dirOf(q, {}), q.get('path') ?? ''),
     '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
     '/api/models': (q) => modelOptions(q.get('name') ?? ''),
+    // 这个项目能用的技能（输入框打 / 挑）
+    '/api/skills': (q) => ({ skills: listSkills(dirOf(q, {})).map(({ name, description, from }) => ({ name, description, from })) }),
     // 这个项目文件夹里你自己在 Claude Code、Codex 里开的对话（设置里关掉就不列）
     '/api/sessions': (q) => {
       const root = dirOf(q, {});

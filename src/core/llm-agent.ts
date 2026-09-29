@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { agentEnv, checkEnv } from './env';
 import { REDACTED, redactSecrets } from './redact';
-import { errorMessage } from './errors';
+import { RelayError, errorMessage } from './errors';
 import { git } from './git';
 import type { Level } from './harness';
 import { ToolChat, type ToolCall, type ToolDef } from './llm';
@@ -300,6 +300,9 @@ function shell(root: string, cmd: string, timeoutMs: number, shouldStop: () => b
   });
 }
 
+/** 接口报「上下文太长」的几种说法。 */
+const TOO_LONG = /context[ _-]?(length|window)|maximum context|too many tokens|prompt is too long|input is too long|exceeds? the (model|maximum)|超出.{0,6}(上下文|长度)|上下文.{0,4}(过长|超)/i;
+
 export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult> {
   const root = input.cwd;
   const hasGate = !!input.gateCommand.trim();
@@ -343,7 +346,18 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
       const left = input.deadline - Date.now();
       if (left <= 0) return { finalText, steps, stopped: false, timedOut: true };
       steps++;
-      const r = await chat.next(Math.min(180_000, Math.max(10_000, left)));
+      // 不再一次最多等 3 分钟：边写边收，一直在出字就等到这一棒的时限；写长东西时日志里报写了多少
+      let r: Awaited<ReturnType<ToolChat['next']>>;
+      try {
+        r = await chat.next(Math.max(10_000, left), (n) => input.log(`正在写（${n} 字）`));
+      } catch (e) {
+        // 接口说上下文太长（模型的窗口比 40 万字小）：丢掉一半最早的往来再试一次，任务说明一直留着
+        if (!(e instanceof RelayError && e.code === 'llm-http' && TOO_LONG.test(e.message))) throw e;
+        const n = chat.prune(Math.floor(chat.size() / 2));
+        if (!n) throw e;
+        input.log(`上下文超过了模型的窗口，丢掉了最早的 ${n} 轮再试。`);
+        r = await chat.next(Math.max(10_000, input.deadline - Date.now()), (k) => input.log(`正在写（${k} 字）`));
+      }
       if (r.text.trim()) {
         finalText = r.text;
         input.log(`说：${clip(r.text)}`);
@@ -382,7 +396,7 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
     // （2026-09-29 投票时 GLM-5.3 出方案一句话没写，记成了「没有输出」；它投票时说读了很多项目文件，多半是读到步数用完。）
     if (ro && !finalText.trim() && !input.shouldStop() && input.deadline - Date.now() > 10_000) {
       chat.user('文件就看到这里：不要再调用工具，根据已经看到的内容，现在直接回答。');
-      const r = await chat.next(Math.min(180_000, input.deadline - Date.now()));
+      const r = await chat.next(input.deadline - Date.now());
       if (r.text.trim()) finalText = r.text;
     }
   } catch (e) {

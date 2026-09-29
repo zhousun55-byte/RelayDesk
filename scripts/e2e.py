@@ -199,6 +199,25 @@ def main():
             check(page.locator('.thread.sess-head').get_attribute('aria-expanded') == 'false', '工具里的对话：再点一下收起（原地淡出，不整列重画）')
             page.locator('.tab.chat-tab').click()
 
+            # 打 / 挑技能：写任务的输入框也能挑，选了在字里写成「/技能名 」
+            sk = os.path.join(home, '.agents', 'skills', 'demo-skill')
+            os.makedirs(sk, exist_ok=True)
+            with open(os.path.join(sk, 'SKILL.md'), 'w') as f:
+                f.write('---\nname: demo-skill\ndescription: 演示用的技能\n---\n\n先写测试。\n')
+            js('() => { SKILLS.dir = ""; }')
+            page.locator('#left-in').get_by_role('button', name='新任务').first.click()
+            ta = page.locator('.composer textarea')
+            ta.wait_for(timeout=5000)
+            ta.click()
+            ta.fill('')
+            ta.type('按 /demo')
+            page.locator('.menu .mi').filter(has_text='demo-skill').wait_for(timeout=5000)
+            page.keyboard.press('Enter')
+            check(ta.input_value() == '按 /demo-skill ', '打 / 挑技能：写任务时也能挑，选了写成「/技能名」')
+            ta.fill('')
+            page.locator('#left-in .thread').filter(has_text='再加一个导入').click()
+            page.wait_for_timeout(300)
+
             # 群聊：之前发的长话先收起，点「展开」看全文；粘进来很长的一段字存成文件带上，输入框里只有一个小条，点开在页签里看
             page.get_by_role('tab', name='群聊').click()
             page.locator('.me .note').first.wait_for()

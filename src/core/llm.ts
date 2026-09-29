@@ -177,6 +177,73 @@ type J = Record<string, unknown>;
 const o = (v: unknown): J => (v && typeof v === 'object' && !Array.isArray(v) ? (v as J) : {});
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
+/**
+ * 边生成边收（SSE）：只要还在出字就不算卡住——idleMs 这么久一个字都没来才停，总时长只受 deadlineMs 管。
+ * 以前是等整段回完才收，写一篇长文档一次就能等满 3 分钟、超时作废（2026-09-30 GLM-5.3 Flash 派活实测）。
+ * 接口不支持流式、直接回了整段 JSON 的，照旧按整段读。每来一段调一次 onChunk（给日志报进度）。
+ */
+async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: number, onEvent: (e: J) => void): Promise<J | null> {
+  const key = apiKeyOf(spec);
+  if (!key && !isLocalUrl(spec.baseUrl)) throw new RelayError(`没有密钥（${keyWhere(spec)}）。`, 'no-key');
+  const ctrl = new AbortController();
+  let why = '';
+  const stop = (w: string) => {
+    why = w;
+    ctrl.abort();
+  };
+  let idle = setTimeout(() => stop(`${Math.round(idleMs / 1000)} 秒没有回音`), idleMs);
+  const hard = setTimeout(() => stop('超时'), deadlineMs);
+  const poke = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => stop(`${Math.round(idleMs / 1000)} 秒没有回音`), idleMs);
+  };
+  try {
+    let res: Response;
+    try {
+      res = await fetch(endpoint(spec, 'chat'), { method: 'POST', headers: headers(spec, key), body: JSON.stringify({ ...body, stream: true }), signal: ctrl.signal });
+    } catch (e) {
+      throw new RelayError(`连不上 ${spec.baseUrl}（${why || (e instanceof Error ? (e.cause instanceof Error ? e.cause.message : e.message) : String(e))}）。`, 'llm-net');
+    }
+    if (!res.ok) {
+      const text = (await res.text()).slice(0, 300);
+      const code = res.status === 401 || res.status === 403 ? 'llm-auth' : res.status === 429 || res.status >= 500 ? 'llm-busy' : 'llm-http';
+      throw new RelayError(`${spec.baseUrl} 返回 HTTP ${res.status}：${text}`, code);
+    }
+    // 不支持流式：整段 JSON
+    if (!/event-stream/i.test(res.headers.get('content-type') ?? '')) return o(await res.json());
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        poke();
+        buf += dec.decode(value, { stream: true });
+        let i: number;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === '[DONE]') continue;
+          try {
+            onEvent(o(JSON.parse(data)));
+          } catch {
+            /* 一行坏的跳过 */
+          }
+        }
+      }
+    } catch (e) {
+      throw new RelayError(`连不上 ${spec.baseUrl}（${why || (e instanceof Error ? e.message : String(e))}）。`, 'llm-net');
+    }
+    return null;
+  } finally {
+    clearTimeout(idle);
+    clearTimeout(hard);
+  }
+}
+
 /** 一问一答（群聊、投票用）。 */
 export async function chat(spec: ApiSpec, messages: ChatMessage[], opts: { timeoutMs?: number; temperature?: number } = {}): Promise<string> {
   const timeoutMs = opts.timeoutMs ?? 90_000;
@@ -251,29 +318,102 @@ export class ToolChat {
     else this.msgs.push({ role: 'user', content: [{ type: 'text', text }] });
   }
 
-  async next(timeoutMs = 180_000): Promise<{ text: string; calls: ToolCall[] }> {
+  /** Claude 协议一次最多写多少：先要大的（长文档一次写完），接口不收就退回 8192，之后都用它。 */
+  private maxTokens = 32_000;
+  /** 接口收不收 stream_options（OpenAI 协议报用量要它）。 */
+  private streamOptions = true;
+
+  /**
+   * 请模型说下一段。deadlineMs：这一段最多等多久；idleMs：多久一个字都没来算卡住。
+   * onProgress(已写的字数)：边写边报（写长文件时日志里看得到它在干活）。
+   */
+  async next(deadlineMs = 15 * 60_000, onProgress?: (chars: number) => void, idleMs = Number(process.env.RELAY_LLM_IDLE_MS ?? 120_000)): Promise<{ text: string; calls: ToolCall[] }> {
+    const run = async <T>(once: () => Promise<T>): Promise<T> => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await once();
+        } catch (e) {
+          if (attempt >= RETRY_DELAYS_MS.length || !retryable(e)) throw e;
+          await new Promise((r) => setTimeout(r, Number(process.env.RELAY_RETRY_MS ?? RETRY_DELAYS_MS[attempt])));
+        }
+      }
+    };
+    let chars = 0;
+    let told = 0;
+    const grew = (n: number) => {
+      chars += n;
+      if (onProgress && chars - told >= 2000) {
+        told = chars;
+        onProgress(chars);
+      }
+    };
     if (this.spec.format === 'anthropic') {
-      const data = o(
-        await request(
-          this.spec,
-          'chat',
-          {
-            model: this.spec.model,
-            max_tokens: 8192,
-            system: this.system,
-            messages: this.msgs,
-            tools: this.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
-          },
-          timeoutMs
-        )
-      );
-      this.count(data);
-      const content = arr(data.content);
+      const body = () => ({
+        model: this.spec.model,
+        max_tokens: this.maxTokens,
+        system: this.system,
+        messages: this.msgs,
+        tools: this.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
+      });
+      const blocks: J[] = [];
+      const json: string[] = [];
+      const usage: J = {};
+      const onEvent = (e: J) => {
+        if (e.type === 'message_start') Object.assign(usage, o(o(e.message).usage));
+        else if (e.type === 'message_delta') Object.assign(usage, o(e.usage));
+        else if (e.type === 'content_block_start') {
+          const i = Number(e.index);
+          blocks[i] = { ...o(e.content_block) };
+          json[i] = '';
+        } else if (e.type === 'content_block_delta') {
+          const i = Number(e.index);
+          const d = o(e.delta);
+          const b = (blocks[i] ??= { type: 'text', text: '' });
+          if (d.type === 'text_delta') {
+            b.text = String(b.text ?? '') + String(d.text ?? '');
+            grew(String(d.text ?? '').length);
+          } else if (d.type === 'input_json_delta') {
+            json[i] = (json[i] ?? '') + String(d.partial_json ?? '');
+            grew(String(d.partial_json ?? '').length);
+          } else if (d.type === 'thinking_delta') b.thinking = String(b.thinking ?? '') + String(d.thinking ?? '');
+          else if (d.type === 'signature_delta') b.signature = String(b.signature ?? '') + String(d.signature ?? '');
+        }
+      };
+      let whole: J | null;
+      try {
+        whole = await run(() => streamOnce(this.spec, body(), idleMs, deadlineMs, onEvent));
+      } catch (e) {
+        if (!(this.maxTokens > 8192 && e instanceof RelayError && e.code === 'llm-http' && /max_tokens|max tokens|too large|exceed/i.test(e.message))) throw e;
+        this.maxTokens = 8192;
+        blocks.length = 0;
+        json.length = 0;
+        whole = await run(() => streamOnce(this.spec, body(), idleMs, deadlineMs, onEvent));
+      }
+      let content: unknown[];
+      if (whole) {
+        this.count(whole);
+        content = arr(whole.content);
+      } else {
+        this.count({ usage });
+        content = blocks.filter(Boolean).map((b, i) => {
+          if (b.type !== 'tool_use') return b;
+          let input: unknown = {};
+          try {
+            input = json[i] ? JSON.parse(json[i]) : o(b.input);
+          } catch {
+            input = { __bad: json[i] };
+          }
+          return { ...b, input };
+        });
+      }
       this.msgs.push({ role: 'assistant', content });
       const text = content.map((b) => (o(b).type === 'text' ? String(o(b).text ?? '') : '')).join('');
       const calls = content
         .filter((b) => o(b).type === 'tool_use')
-        .map((b) => ({ id: String(o(b).id), name: String(o(b).name), args: o(o(b).input) }));
+        .map((b) => {
+          const input = o(o(b).input);
+          return { id: String(o(b).id), name: String(o(b).name), args: input, ...(typeof input.__bad === 'string' ? { badArgs: input.__bad.slice(0, 500) } : {}) };
+        });
       return { text, calls };
     }
     const body = (withReasoning: boolean) => ({
@@ -281,23 +421,67 @@ export class ToolChat {
       messages: [{ role: 'system', content: this.system }, ...(withReasoning ? this.msgs : this.msgs.map(({ reasoning_content: _r, ...m }) => m))],
       tools: this.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
       temperature: 0.2,
+      ...(this.streamOptions ? { stream_options: { include_usage: true } } : {}),
     });
-    let raw: unknown;
-    try {
-      raw = await request(this.spec, 'chat', body(this.sendReasoning), timeoutMs);
-    } catch (e) {
-      const carried = this.msgs.some((m) => 'reasoning_content' in m);
-      if (!(this.sendReasoning && carried && e instanceof RelayError && e.code === 'llm-http' && /reasoning/i.test(e.message))) throw e;
-      this.sendReasoning = false;
-      raw = await request(this.spec, 'chat', body(false), timeoutMs);
+    let content = '';
+    let reasoning = '';
+    let usage: J = {};
+    const parts: { id?: string; name: string; args: string }[] = [];
+    const onEvent = (e: J) => {
+      if (Object.keys(o(e.usage)).length) usage = o(e.usage);
+      const d = o(o(arr(e.choices)[0]).delta);
+      if (typeof d.content === 'string') {
+        content += d.content;
+        grew(d.content.length);
+      }
+      if (typeof d.reasoning_content === 'string') reasoning += d.reasoning_content;
+      for (const tc of arr(d.tool_calls)) {
+        const t = o(tc);
+        const i = typeof t.index === 'number' ? t.index : parts.length;
+        const p = (parts[i] ??= { name: '', args: '' });
+        if (typeof t.id === 'string' && t.id) p.id = t.id;
+        const f = o(t.function);
+        if (typeof f.name === 'string') p.name += f.name;
+        if (typeof f.arguments === 'string') {
+          p.args += f.arguments;
+          grew(f.arguments.length);
+        }
+      }
+    };
+    const reset = () => {
+      content = '';
+      reasoning = '';
+      usage = {};
+      parts.length = 0;
+    };
+    let whole: J | null;
+    for (let tries = 0; ; tries++) {
+      try {
+        whole = await run(() => streamOnce(this.spec, body(this.sendReasoning), idleMs, deadlineMs, onEvent));
+        break;
+      } catch (e) {
+        if (tries >= 2 || !(e instanceof RelayError && e.code === 'llm-http')) throw e;
+        const carried = this.msgs.some((m) => 'reasoning_content' in m);
+        if (this.streamOptions && /stream_options|include_usage/i.test(e.message)) this.streamOptions = false;
+        else if (this.sendReasoning && carried && /reasoning/i.test(e.message)) this.sendReasoning = false;
+        else throw e;
+        reset();
+      }
     }
-    const data = o(raw);
-    this.count(data);
-    const msg = o(o(arr(data.choices)[0]).message);
-    const rawCalls = arr(msg.tool_calls);
+    let msg: J;
+    let rawCalls: unknown[];
+    if (whole) {
+      this.count(whole);
+      msg = o(o(arr(whole.choices)[0]).message);
+      rawCalls = arr(msg.tool_calls);
+    } else {
+      this.count({ usage });
+      rawCalls = parts.filter(Boolean).map((p, i) => ({ id: p.id ?? `call_${i}`, type: 'function', function: { name: p.name, arguments: p.args || '{}' } }));
+      msg = { content: content || null, ...(reasoning ? { reasoning_content: reasoning } : {}) };
+    }
     const text = typeof msg.content === 'string' ? msg.content : '';
-    const reasoning = typeof msg.reasoning_content === 'string' && msg.reasoning_content ? { reasoning_content: msg.reasoning_content } : {};
-    this.msgs.push({ role: 'assistant', content: msg.content ?? null, ...reasoning, ...(rawCalls.length ? { tool_calls: rawCalls } : {}) });
+    const carry = typeof msg.reasoning_content === 'string' && msg.reasoning_content ? { reasoning_content: msg.reasoning_content } : {};
+    this.msgs.push({ role: 'assistant', content: msg.content ?? null, ...carry, ...(rawCalls.length ? { tool_calls: rawCalls } : {}) });
     const calls: ToolCall[] = rawCalls.map((c, i) => {
       const f = o(o(c).function);
       const raw = String(f.arguments ?? '{}');

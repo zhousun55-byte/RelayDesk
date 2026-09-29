@@ -1,4 +1,5 @@
 import { langNote } from './auto-settings';
+import { skillNote } from './skills';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -286,7 +287,7 @@ function hhmm(ts: string): string {
 
 /** 拼给某个 AI 的发言提示：规则 + 项目背景 + 最近的讨论记录。纯函数。solo = 对比（这一轮别人的回答不给它看）。 */
 export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean }): string {
-  const max = input.maxChars ?? 24_000;
+  const max = input.maxChars ?? 80_000;
   const lines = input.rows
     .filter((r) => !r.error)
     .map((r) => `[${hhmm(r.ts)}] ${r.kind === 'system' ? '（接力台）' : r.who}：${r.text.trim()}`);
@@ -308,7 +309,7 @@ export function buildTalkPrompt(input: { speaker: string; root: string; rows: Ta
       '怎么发言：',
       '- 直接给出你的判断和理由，不客套，不复述别人已经说过的话。',
       '- 可以点名回应别人的观点：同意还是不同意，为什么。你有不同的想法就直说，不要因为对方是更强的模型就附和。',
-      '- 一般控制在 300 字以内；被要求详细时再展开。',
+      '- 说清楚为止：简单的问题几句话，复杂的问题写完整（结论在前，依据、做法在后），不为凑短删掉该说的。',
       '- 消息里用反引号括起来的路径是提到的文件；.relay/uploads/ 下的是人传上来的附件（图片、文档……），需要就自己打开看，图片用你能看图的工具打开。',
       '- 用中文。只输出你要说的话本身。',
     ].join('\n'),
@@ -325,7 +326,7 @@ function cleanReply(text: string): string {
     .replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '')
     .replace(/\r/g, '')
     .trim()
-    .slice(0, 8000);
+    .slice(0, 40_000);
 }
 
 /** 群聊里一个 AI 最多说多久；中途这么久一点动静都没有就当它卡住了（Codex 干活时最长 49 秒不出声）。 */
@@ -473,7 +474,9 @@ async function speakOne(root: string, th: Thread, name: string, rows: TalkRow[],
   try {
     if (!agent) throw new RelayError('名单里没有它', 'no-agent');
     const who = speakerName(agent);
-    const prompt = buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), ...(solo ? { solo: true } : {}) });
+    // 问话里写了 /技能名：附上这个技能的做法
+    const asked = [...rows].reverse().find((r) => r.kind === 'human');
+    const prompt = buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), ...(solo ? { solo: true } : {}) }) + (asked ? skillNote(root, asked.text) : '');
     const text = await askAgent(agent, prompt, root);
     // 问的过程中可能换了模型（比如命令行太旧、换成了它用得了的）：署名按答完之后的算。
     const m = memberModel(agent, loadDetected());

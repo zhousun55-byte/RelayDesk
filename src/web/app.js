@@ -4859,19 +4859,45 @@ function closeSuggest() {
   SUG.items = [];
 }
 
+/** 这个项目能用的技能（打 / 时取一次，换了项目再取）。 */
+const SKILLS = { dir: '', list: [], loading: false };
+
+function loadSkills() {
+  if (SKILLS.loading || SKILLS.dir === S.dir) return;
+  SKILLS.loading = true;
+  api(q('/api/skills'))
+    .then((r) => Object.assign(SKILLS, { dir: S.dir, list: r.skills }))
+    .catch(() => null)
+    .finally(() => {
+      SKILLS.loading = false;
+      updateSuggest();
+    });
+}
+
 function updateSuggest() {
-  if (C.kind !== 'talk' || S.slash) return closeSuggest();
+  if (S.slash) return closeSuggest();
+  const talk = C.kind === 'talk';
   const v = C.ta.value;
   const pos = C.ta.selectionStart;
   const before = v.slice(0, pos);
   let items = [];
   let kind = '';
-  const sl = before.match(/^\/(\S*)$/);
-  const at = before.match(/(^|\s)@([^\s@]*)$/);
+  // 打 /：群聊里行首是接力台的命令；任何地方都能挑技能（写任务时也行）
+  const sl = before.match(/(^|\s)\/([^\s/]*)$/);
+  const at = talk ? before.match(/(^|\s)@([^\s@]*)$/) : null;
   if (sl) {
     kind = 'slash';
-    const qy = sl[1].toLowerCase();
-    items = SLASH.filter((c) => (!c.when || c.when()) && (!qy || c.label.includes(qy) || c.key.startsWith(qy))).map((c) => ({ label: c.label, icon: c.icon, cmd: c }));
+    SUG.start = pos - sl[2].length - 1;
+    const qy = sl[2].toLowerCase();
+    const cmds = talk && !sl[1] && SUG.start === 0 ? SLASH.filter((c) => (!c.when || c.when()) && (!qy || c.label.includes(qy) || c.key.startsWith(qy))).map((c) => ({ label: c.label, icon: c.icon, cmd: c })) : [];
+    loadSkills();
+    const skills = SKILLS.list
+      .filter((k) => !qy || k.name.toLowerCase().includes(qy) || k.description.toLowerCase().includes(qy))
+      .slice(0, qy ? 12 : 8)
+      .map((k) => ({ label: k.name, sub: k.description.length > 48 ? `${k.description.slice(0, 48)}…` : k.description, icon: 'book', skill: k }));
+    if (cmds.length && skills.length) cmds[0].head = T`命令`;
+    if (skills.length) skills[0].head = T`技能`;
+    items = [...cmds, ...skills];
   } else if (at) {
     kind = 'at';
     SUG.start = pos - at[2].length - 1;
@@ -4936,6 +4962,14 @@ function pickSuggest(i) {
     C.ta.value = '';
     if (it.cmd.needsText) S.slash = it.cmd;
     else it.cmd.run();
+  } else if (it.skill) {
+    // 技能：在字里写成「/技能名 」，发给 AI 时接力台附上它的做法
+    const v = C.ta.value;
+    const end = C.ta.selectionStart;
+    const word = `/${it.skill.name} `;
+    C.ta.value = v.slice(0, SUG.start) + word + v.slice(end);
+    C.ta.selectionStart = C.ta.selectionEnd = SUG.start + word.length;
+    autoGrow();
   } else {
     const v = C.ta.value;
     const end = C.ta.selectionStart;
