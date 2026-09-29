@@ -528,7 +528,21 @@ export function createServer(opts: ServerOptions): http.Server {
       const agent = enableProvider(report, str(b.id) ?? '');
       return { agent, members: memberViews() };
     },
-    '/api/settings': (_q, b) => ({ settings: saveAutoSettings(b.settings), members: memberViews() }),
+    '/api/settings': (_q, b) => {
+      const before = autoSettingsSafe().settings.lead;
+      const settings = saveAutoSettings(b.settings);
+      // 选了谁指挥派活：它要做复核、终审，算强（弱模型的复核不算数，不然还得请别的强模型来）
+      if (settings.lead && settings.lead !== before) {
+        const reg = loadRegistry();
+        const a = reg.agents.find((x) => x.name === settings.lead);
+        if (a && memberViews().find((m) => m.name === a.name)?.tier !== 'strong') {
+          a.tier = 'strong';
+          a.tierSet = true;
+          saveRegistry(reg);
+        }
+      }
+      return { settings, members: memberViews() };
+    },
     '/api/members/tier': (_q, b) => {
       const name = str(b.name) ?? '';
       const tier = b.tier === 'strong' ? 'strong' : b.tier === 'weak' ? 'weak' : null;

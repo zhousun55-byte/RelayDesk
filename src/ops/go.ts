@@ -800,7 +800,9 @@ class GoRunner {
             return this.finish('needs-human', `全自动停止：复核两次没过，${why.join('；')}`);
           }
           const authors = pending.map((p) => p.who.member).filter(Boolean) as string[];
-          const reviewer = this.pick('strong', authors) ?? this.pick('strong');
+          // 派活：指挥的那位（算强的话）来复核它派出去的活
+          const lead = dispatch ? this.ready(this.leadName(v)) : null;
+          const reviewer = (lead?.tier === 'strong' && !authors.includes(lead.name) ? lead : null) ?? this.pick('strong', authors) ?? this.pick('strong');
           if (reviewer) {
             await this.runStint(reviewer, 'review', pending);
             continue;

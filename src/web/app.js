@@ -940,7 +940,10 @@ function defaultWorker() {
   return r[0];
 }
 
+/** 点「复核」时请谁：派活页先请指挥的那位（算强的话），别处是强模型里排最前、现在能用的。 */
 function reviewer() {
+  const lead = S.view === 'dispatch' && S.st ? memberByName(S.st.settings.lead) : null;
+  if (lead && lead.tier === 'strong' && lead.canWork && !lead.cooling) return lead;
   return ready().find((m) => m.tier === 'strong') || null;
 }
 
