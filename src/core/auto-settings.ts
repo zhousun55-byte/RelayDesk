@@ -86,18 +86,48 @@ function safeLang(): AutoSettings['lang'] {
   }
 }
 
+/**
+ * 读运行设置。只有文件还不存在时用默认设置；文件在、却读不出来（JSON 写坏了、值不对）就报错，
+ * 不能悄悄换成默认的——派活顺序、权限、时限、要不要终审都会跟着变，你还不知道。
+ */
 export function loadAutoSettings(): AutoSettings {
+  const p = autoSettingsPath();
+  let text: string;
   try {
-    return normalizeAutoSettings(JSON.parse(fs.readFileSync(autoSettingsPath(), 'utf8')));
+    text = fs.readFileSync(p, 'utf8');
   } catch (e) {
-    if (e instanceof RelayError) throw new RelayError(`${autoSettingsPath()} 有问题：${e.message}`, e.code);
-    return defaultAutoSettings();
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return defaultAutoSettings();
+    throw new RelayError(`${p} 读不出来：${(e as Error).message}`, 'bad-settings');
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    throw new RelayError(`${p} 不是完整的 JSON（${(e as Error).message}）：改好它，或者恢复默认（网页「设置 → 运行」、relay settings --reset）`, 'bad-settings');
+  }
+  try {
+    return normalizeAutoSettings(raw);
+  } catch (e) {
+    if (e instanceof RelayError) throw new RelayError(`${p} 有问题：${e.message}`, e.code);
+    throw e;
   }
 }
 
+/** 给人看的地方用（网页、成员名单）：读不出来就先按默认的显示，同时带上原因（网页顶上会提示）。 */
+export function autoSettingsSafe(): { settings: AutoSettings; error?: string } {
+  try {
+    return { settings: loadAutoSettings() };
+  } catch (e) {
+    return { settings: defaultAutoSettings(), error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** 存设置。原来的文件读不出来：先留一份 auto.json.broken，再写新的。 */
 export function saveAutoSettings(raw: unknown): AutoSettings {
   const s = normalizeAutoSettings(raw);
-  fs.mkdirSync(path.dirname(autoSettingsPath()), { recursive: true });
-  fs.writeFileSync(autoSettingsPath(), JSON.stringify(s, null, 2) + '\n');
+  const p = autoSettingsPath();
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  if (fs.existsSync(p) && autoSettingsSafe().error) fs.copyFileSync(p, `${p}.broken`);
+  fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
   return s;
 }

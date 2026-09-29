@@ -293,3 +293,22 @@ test('新装识别：桌面版自带的 Claude Code 排在终端的前面（同�
     process.env.PATH = PATH;
   }
 });
+
+test('运行设置 auto.json 写坏了：直接报出来，不悄悄按默认的派活；给人看的地方先按默认显示并带上原因；存设置时先留一份 .broken；名单先不去重', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const autoS = require('../src/core/auto-settings') as typeof import('../src/core/auto-settings');
+  fs.rmSync(home('auto.json'), { force: true });
+  assert.deepEqual(autoS.loadAutoSettings(), autoS.defaultAutoSettings(), '还没有这个文件：用默认');
+  const broken = '{ "order": ["codex"], "finalReview": false, }';
+  fs.writeFileSync(home('auto.json'), broken);
+  // 以前这里悄悄返回默认设置：派活顺序没了、终审又开了，你还不知道
+  assert.throws(() => autoS.loadAutoSettings(), (e: { code?: string; message: string }) => e.code === 'bad-settings' && /auto\.json 不是完整的 JSON/.test(e.message));
+  const safe = autoS.autoSettingsSafe();
+  assert.equal(safe.settings.finalReview, true);
+  assert.match(safe.error ?? '', /auto\.json 不是完整的 JSON.*恢复默认/);
+  assert.deepEqual(detect.tidyRegistry(null), [], '派活顺序读不出来：名单先不并');
+  assert.equal(autoS.saveAutoSettings({ ...safe.settings, maxStints: 5 }).maxStints, 5);
+  assert.equal(fs.readFileSync(home('auto.json.broken'), 'utf8'), broken, '坏的那份留着');
+  assert.equal(autoS.autoSettingsSafe().error, undefined);
+  fs.rmSync(home('auto.json'), { force: true });
+});

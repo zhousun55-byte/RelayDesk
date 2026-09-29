@@ -346,14 +346,14 @@ export async function gateStint(root: string, id: number, cfg?: RelayConfig, opt
   gatesRunning++;
   try {
     const r = await runGate(root, conf);
-    record({ status: r.status, command: r.command, ...(r.status === 'fail' ? { detail: r.detail.slice(-1500) } : {}) });
+    record({ status: r.status, command: r.command, ...(r.status === 'fail' ? { detail: r.detail.slice(-1500) } : {}), at: nowIso() });
   } catch (e) {
     record({ status: 'error', command: conf.gate.command, detail: `检查没跑起来：${errorMessage(e)}` });
   } finally {
     gatesRunning--;
   }
   if (before && opts.absorb) {
-    const note = absorbGateWrites(root, before, opts.absorb, conf.gate.command);
+    const note = absorbGateWrites(root, before, opts.absorb, conf.gate.command, id);
     if (note) record(undefined, note);
   }
 }
@@ -379,22 +379,24 @@ export function gateWrites(command: string, file: string): boolean {
  * 检查命令跑完、它自己改了项目里的文件：从跑完的那张快照重新算，记一笔「检查命令写的」，不算到哪一棒头上。
  * 只在跑检查之前和账上的起点一样、现在也没人在做的时候这样记（不然会把别人的改动一起吞掉）。
  * generated（盯文件夹时）：改的全是生成的文件、或者检查命令里写明往里写的文件才记。返回给那一棒的说明。
+ * 改到了源码（格式化、自动修复……）：账上记下是哪几个，验收时之前的终审、这次检查都不算现在的代码，要再来一次。
  */
-function absorbGateWrites(root: string, before: string, mode: 'all' | 'generated', command: string): string | undefined {
+function absorbGateWrites(root: string, before: string, mode: 'all' | 'generated', command: string, after: number): string | undefined {
   const v = loadLedger(root);
   if (v.open || v.base !== before) return undefined;
-  const after = takeSnapshot(root, '检查命令跑完').sha;
-  if (after === before) return undefined;
+  const sha = takeSnapshot(root, '检查命令跑完').sha;
+  if (sha === before) return undefined;
   let paths: string[];
   try {
-    paths = snapChanges(root, before, after).map((f) => f.path);
+    paths = snapChanges(root, before, sha).map((f) => f.path);
   } catch {
     return undefined;
   }
   if (!paths.length || (mode === 'generated' && !paths.every((p) => generatedPath(p) || gateWrites(command, p)))) return undefined;
   const list = `${paths.slice(0, 8).join('、')}${paths.length > 8 ? ` 等 ${paths.length} 个` : ''}`;
-  appendLedger(root, { type: 'base', ts: nowIso(), snap: after, why: `检查命令写的文件：${list}` });
-  return `检查命令跑完改了 ${paths.length} 个文件（${list}），算接力台自己的改动，不算到哪一棒头上。`;
+  const source = paths.filter((p) => !generatedPath(p) && !gateWrites(command, p));
+  appendLedger(root, { type: 'base', ts: nowIso(), snap: sha, why: `检查命令写的文件：${list}`, after, ...(source.length ? { files: source.slice(0, 50) } : {}) });
+  return `检查命令跑完改了 ${paths.length} 个文件（${list}），算接力台自己的改动，不算到哪一棒头上。${source.length ? '改到了源码：终审、检查要按改过的再来一次。' : ''}`;
 }
 
 /**

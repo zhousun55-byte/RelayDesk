@@ -63,6 +63,31 @@ test('全自动：终审写的是「有问题，还没修」，不算终审过�
   assert.match(finals[0].reviewFile, /^\.relay\/复核\/终审-第2棒-/);
 });
 
+test('全自动：终审过了之后检查命令改了源码（格式化、自动修复），不说验收通过，按改过的再终审一次；每次都改就停下说清楚', () => {
+  // 检查命令跑到第几次时改 source.js：第 1 次跟在干活那一棒后面，第 2 次跟在终审后面
+  const setup = (name: string, when: string) => {
+    const s = prepared(name);
+    s.write('source.js', 'module.exports = 1;\n');
+    const c = JSON.stringify(path.join(s.base, 'gate-count'));
+    s.write('gate.sh', `n=$(($(cat ${c} 2>/dev/null || echo 0) + 1))\necho $n > ${c}\nif [ ${when} ]; then echo "// n=$n" >> source.js; fi\n`);
+    setOrder(s, ['codex']);
+    s.relay(['init']);
+    s.relay(['config', '--gate', 'sh gate.sh']);
+    s.relay(['task', '做一件事', '--step', '第一件']);
+    return s;
+  };
+  let s = setup('gate-edit-once', '$n -eq 2');
+  let out = s.relay(['auto']);
+  assert.match(out, /验收通过/);
+  assert.deepEqual(s.stints().map((x) => x.kind), ['work', 'final', 'final'], '以前第一次终审之后检查命令改了 source.js，照样说「终审过了，检查通过」');
+  assert.ok(s.journal().some((e) => e.type === 'base' && e.after === 2 && Array.isArray(e.files) && e.files.includes('source.js')));
+
+  s = setup('gate-edit-always', '$n -ge 2');
+  out = s.relay(['auto']);
+  assert.doesNotMatch(out, /验收通过/);
+  assert.match(out, /全自动停止：终审两次没过，终审之后检查命令改了 source\.js/);
+});
+
 test('全自动：开着终审、强模型都在等额度又不等，不会跳过终审直接说完成', () => {
   const s = prepared('final-cooling');
   setOrder(s, ['codex']);

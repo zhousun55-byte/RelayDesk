@@ -112,6 +112,9 @@ const EN = {
   已关闭接力台: 'RelayDesk is closed',
   连不上接力台: "Can't reach RelayDesk",
   配置文件坏了: 'The config file is broken',
+  运行设置坏了: 'Run settings are broken',
+  恢复默认: 'Restore defaults',
+  已恢复默认设置: 'Defaults restored',
   页面: 'Pages',
   接力: 'Relay',
   派活: 'Dispatch',
@@ -531,6 +534,8 @@ const SRV_WORD = {
   官方账号: 'official account',
 };
 
+/** 「a.js、b.js 等 5 个」→「a.js, b.js (5 files)」 */
+const files = (s) => s.replace(/ 等 (\d+) 个$/, ' ($1 files)').replace(/、/g, ', ');
 const brand = (s) => s.replace('智谱', 'Zhipu').replace('小米', 'Xiaomi').replace('通义', 'Qwen').replace('我的', 'My');
 const span = (s) => s.replace(/(\d+) 分钟/g, '$1 min').replace(/(\d+) 秒/g, '$1s');
 const hm = (s) => s.replace(/^明天 /, 'tomorrow ').replace(/^(\d+) 月 (\d+) 日 /, (_, m, d) => `${MONTH[m - 1]} ${d} `);
@@ -549,6 +554,10 @@ const SRV = [
   [/^第 (\d+) 棒读不到改动$/, (_, n) => `Can't read the changes of leg ${n}`],
   [/^第 (\d+) 棒还在进行中$/, (_, n) => `Leg ${n} is still in progress`],
   [/^第 (\d+) 棒改了文件之后还没跑检查$/, (_, n) => `The check has not run since leg ${n} changed files`],
+  [/^终审之后检查命令改了 (.+)$/, (_, f) => `The check command changed ${files(f)} after the final review`],
+  [/^检查命令改了 (.+)，还没按改过的再跑检查$/, (_, f) => `The check command changed ${files(f)}; the check has not run on the changed code yet`],
+  [/^检查命令跑完改了 (\d+) 个文件（(.+)），算接力台自己的改动，不算到哪一棒头上。(改到了源码：终审、检查要按改过的再来一次。)?$/, (_, n, f, src) => `The check command changed ${many(n, 'file')} (${files(f)}); counted as RelayDesk's own change, not any leg's.${src ? ' It changed source code, so the final review and the check run again on the changed code.' : ''}`],
+  [/^(.+) 不是完整的 JSON（(.+)）：改好它，或者恢复默认（网页「设置 → 运行」、relay settings --reset）$/, (_, f, why) => `${f} is not valid JSON (${why}). Fix it, or restore defaults (Settings → Run, or relay settings --reset)`],
   [/^检查没过（第 (\d+) 棒之后）$/, (_, n) => `Check failed (after leg ${n})`],
   [/^第 (\d+) 棒待复核$/, (_, n) => `Leg ${n} needs review`],
   [/^清单 (\d+)\/(\d+) 全部打勾$/, (_, a, b) => `Checklist ${a}/${b} all ticked`],

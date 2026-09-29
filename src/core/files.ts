@@ -110,9 +110,20 @@ export async function saveUpload(root: string, name: string, body: Readable, max
   const d = new Date();
   const two = (n: number) => String(n).padStart(2, '0');
   const stamp = `${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
-  let file = `${stamp}-${stem}${ext}`;
-  for (let i = 2; fs.existsSync(path.join(dir, file)); i++) file = `${stamp}-${stem}-${i}${ext}`;
+  // 先占住名字（wx：已经有了就换下一个），同一分钟传两个同名的文件各得一个名字；
+  // 写到只属于这一次的临时文件里，写完再换上去，两次上传不会写进同一个临时文件。
+  let file = '';
+  for (let i = 1; !file; i++) {
+    const name = `${stamp}-${stem}${i > 1 ? `-${i}` : ''}${ext}`;
+    try {
+      fs.closeSync(fs.openSync(path.join(dir, name), 'wx'));
+      file = name;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || i >= 1000) throw e;
+    }
+  }
   const dest = path.join(dir, file);
+  const tmp = `${dest}.${process.pid}-${Math.random().toString(36).slice(2, 8)}.tmp`;
   let n = 0;
   const cap = new Transform({
     transform(chunk: Buffer, _enc, done) {
@@ -121,10 +132,11 @@ export async function saveUpload(root: string, name: string, body: Readable, max
     },
   });
   try {
-    await pipeline(body, cap, fs.createWriteStream(`${dest}.tmp`));
-    fs.renameSync(`${dest}.tmp`, dest);
+    await pipeline(body, cap, fs.createWriteStream(tmp, { flags: 'wx' }));
+    fs.renameSync(tmp, dest);
   } catch (e) {
-    fs.rmSync(`${dest}.tmp`, { force: true });
+    fs.rmSync(tmp, { force: true });
+    fs.rmSync(dest, { force: true });
     throw e;
   }
   return `${UPLOAD_REL}/${file}`;

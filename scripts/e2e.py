@@ -183,6 +183,19 @@ def main():
             check(menu.get_by_role('menuitem', name='新任务').count() == 1 and menu.get_by_role('menuitem', name='接力本').count() == 1, '中间空白处右键：新任务、接力本这些常用操作')
             page.keyboard.press('Escape')
 
+            # 运行设置 auto.json 写坏了：顶上提示（不悄悄按默认的派活），点「恢复默认」修好，坏的那份留成 auto.json.broken
+            auto = os.path.join(home, '.relay', 'auto.json')
+            with open(auto, 'w') as f:
+                f.write('{ "order": [], }')
+            js('() => refresh(true)')
+            bar = page.locator('.cfg-bad')
+            bar.get_by_text('运行设置坏了').wait_for(timeout=5000)
+            bar.get_by_role('button', name='恢复默认').click()
+            page.wait_for_function('() => document.querySelector(".cfg-bad").hidden', timeout=5000)
+            with open(auto) as f:
+                fixed = json.load(f)
+            check(os.path.exists(auto + '.broken') and fixed.get('order') == [], '运行设置写坏了：顶上提示，点「恢复默认」修好，坏的那份留着')
+
             # 窗口窄于 1180px：右栏自己收起；宽回来自己打开（没改你记下的）
             no_right = '() => document.querySelector(".app").classList.contains("no-right")'
             page.set_viewport_size({'width': 1100, 'height': 800})

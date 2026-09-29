@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadAutoSettings } from '../core/auto-settings';
+import { autoSettingsSafe } from '../core/auto-settings';
 import { detectAll, enableProvider, syncRegistry, type DetectReport } from '../core/detect';
 import { augmentPath } from '../core/env';
 import { allMembers, orderMembers, type MemberInfo } from '../core/members';
@@ -40,7 +40,9 @@ export function printReport(r: DetectReport): void {
 }
 
 export function printTeam(): void {
-  const s = loadAutoSettings();
+  const auto = autoSettingsSafe();
+  if (auto.error) warn(`${auto.error}（下面先按默认设置列）`);
+  const s = auto.settings;
   const list = orderMembers(allMembers(s.level), s.order);
   const fmt = (m: MemberInfo) => `${m.label}${m.model ? `（${m.model}）` : ''}`;
   console.log(c.bold(`成员（权限：${s.level === 'full' ? '不限制' : '只在项目里'}；派活按这个顺序，额度用完的跳过）`));

@@ -4,6 +4,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { saveUpload } from '../src/core/files';
 import { withFakes } from './fakes';
 import { CLI, sandbox, until, type Sandbox } from './helpers';
 
@@ -308,6 +310,27 @@ test('网页接口的安全检查：只认本机地址和本端口，POST 必须
   } finally {
     if (!exited) ui.child.kill();
   }
+});
+
+test('传文件：同一分钟同时传两个同名的，各存各的（以前两次共用一个临时文件：一个成功，另一个换名时报 ENOENT，内容还可能串）', async () => {
+  const s = sandbox('up-race');
+  // 一点一点地来：两次上传一定同时在写
+  const slow = (text: string) =>
+    Readable.from(
+      (async function* () {
+        for (let i = 0; i < 4; i++) {
+          await new Promise((r) => setTimeout(r, 15));
+          yield Buffer.from(text);
+        }
+      })()
+    );
+  const [a, b] = await Promise.all([saveUpload(s.repo, '同名.txt', slow('一')), saveUpload(s.repo, '同名.txt', slow('二'))]);
+  assert.notEqual(a, b);
+  assert.equal(s.read(a), '一一一一');
+  assert.equal(s.read(b), '二二二二');
+  // 传到一半出错（太大）：占的名字和临时文件都收掉，下一个同名的照样用这个名字
+  await assert.rejects(saveUpload(s.repo, '大.bin', slow('xxxx'), 6), (e: { code?: string }) => e.code === 'too-large');
+  assert.deepEqual(fs.readdirSync(path.join(s.repo, '.relay/uploads')).filter((f) => f.endsWith('.tmp') || f.includes('大')), []);
 });
 
 test('网页接口：传文件存进项目的 .relay/uploads（不进 git）；原样读回来给缩略图；别的网站传不了', async () => {

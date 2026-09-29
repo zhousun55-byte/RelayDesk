@@ -1,4 +1,4 @@
-import { countedReviews, statusWord, verdictWord, type LedgerView, type Stint, type Verdict } from './ledger';
+import { countedReviews, statusWord, verdictWord, type BaseEvent, type LedgerView, type Stint, type Verdict } from './ledger';
 import { whoName } from './names';
 import { taskProgress, taskVersion, type TaskDoc } from './notes';
 import { plain } from './cause';
@@ -8,8 +8,8 @@ import { plain } from './cause';
  *
  * 清单打勾只说明「AI 说做完了」。能收工还要：
  * - 每一棒弱模型的活都有强模型复核过，而且结论是没问题 / 已修好 / 已退回（有问题、证据不足、没写清楚都不算）；
- * - 开着终审时，最后一棒干活之后有一次终审：交接成功、实际是强模型、结论通过、终审之后没人再改文件、任务也没改过，而且之后没有算数的终审否决它；
- * - 配了检查命令时，最后一次改动之后按现在配的命令跑过检查，而且通过了；
+ * - 开着终审时，最后一棒干活之后有一次终审：交接成功、实际是强模型、结论通过、终审之后没人再改文件（检查命令改了源码也算）、任务也没改过，而且之后没有算数的终审否决它；
+ * - 配了检查命令时，最后一次改动之后按现在配的命令跑过检查，而且通过了；检查命令自己改了源码的，要再跑一次；
  * - 证据都读得到（配置文件没坏、每一棒的改动都读得到）。读不到就是「没法判断」，不能当成通过；
  * - 文件夹和账本最后记下的样子一致（在接力台之外改过，要等对完账、算进一棒）。
  */
@@ -53,6 +53,11 @@ export interface AcceptInput {
 
 function changed(s: Stint): boolean {
   return !!s.factsError || (s.facts?.files ?? 0) > 0;
+}
+
+/** 检查命令改到的源码：「a.js、b.js」，多了写「等 N 个」。 */
+function fileList(files: string[]): string {
+  return `${files.slice(0, 3).join('、')}${files.length > 3 ? ` 等 ${files.length} 个` : ''}`;
 }
 
 /** 一棒为什么还在待复核（不带「第 N 棒」；普通的待复核返回空）。 */
@@ -106,7 +111,10 @@ export function acceptance(input: AcceptInput): Acceptance {
   // 终审
   const lastWork = [...live].reverse().find((s) => s.kind === 'work');
   const finals = closed.filter((s) => s.kind === 'final' && s.id > (lastWork?.id ?? 0));
-  const changedAfter = (f: Stint) => live.some((x) => x.id > f.id && changed(x));
+  // 检查命令跑完改了源码（格式化、自动修复……）：跟在哪一棒后面跑的就记在哪一棒之后。退回掉的棒后面跑的不算（改动跟着退掉了）。
+  const gateEdits = v.events.filter((e): e is BaseEvent & { after: number; files: string[] } => e.type === 'base' && typeof e.after === 'number' && !!e.files?.length && !dropped.has(e.after));
+  const gateEditAfter = (f: Stint) => gateEdits.find((e) => e.after >= f.id);
+  const changedAfter = (f: Stint) => live.some((x) => x.id > f.id && changed(x)) || !!gateEditAfter(f);
   // 终审之后任务改过（加了步骤、改了要求、勾变了）：它审的不是现在的任务。旧账本没记版本的不比。
   const tv = taskVersion(input.task);
   const taskMoved = (f: Stint) => !!f.taskVer && f.taskVer !== tv;
@@ -128,9 +136,11 @@ export function acceptance(input: AcceptInput): Acceptance {
               ? `终审没留下结论（${whoName(f.who)}）`
               : !FINAL_PASS.has(f.verdict)
                 ? `终审结论「${verdictWord(f.verdict)}」（${whoName(f.who)}）`
-                : changedAfter(f)
+                : live.some((x) => x.id > f.id && changed(x))
                   ? '终审之后文件又改过'
-                  : '终审之后任务改过';
+                  : gateEditAfter(f)
+                    ? `终审之后检查命令改了 ${fileList(gateEditAfter(f)!.files)}`
+                    : '终审之后任务改过';
       final = { required: true, ok: false, ...(f ? { stint: f.id } : {}), text };
       items.push({ kind: 'final', text, ...(f ? { stint: f.id } : {}) });
     }
@@ -145,6 +155,11 @@ export function acceptance(input: AcceptInput): Acceptance {
     // 检查命令改过：以前按旧命令跑的结果不算现在的检查。
     else if (gated.gate!.status !== 'error' && gated.gate!.command.trim() !== input.gateCommand.trim()) gate = { command: input.gateCommand, status: 'stale', stint: gated.id, text: '检查命令改过之后还没跑检查' };
     else if (lastChange && gated.id < lastChange.id) gate = { command: input.gateCommand, status: 'stale', stint: gated.id, text: `第 ${lastChange.id} 棒改了文件之后还没跑检查` };
+    // 检查命令自己改了源码：这次的结果不一定是改过之后的代码的，要按改过的再跑一次（再跑时没再改，就算数）。
+    else if (gated.gate!.status !== 'error' && gateEdits.some((e) => e.after >= gated.id && (!gated.gate!.at || Date.parse(e.ts) >= Date.parse(gated.gate!.at)))) {
+      const e = [...gateEdits].reverse().find((x) => x.after >= gated.id)!;
+      gate = { command: input.gateCommand, status: 'stale', stint: gated.id, text: `检查命令改了 ${fileList(e.files)}，还没按改过的再跑检查` };
+    }
     else if (gated.gate!.status === 'pass') gate = { command: input.gateCommand, status: 'pass', stint: gated.id, text: '检查通过' };
     else if (gated.gate!.status === 'fail') gate = { command: input.gateCommand, status: 'fail', stint: gated.id, text: `检查没过（第 ${gated.id} 棒之后）` };
     else gate = { command: input.gateCommand, status: 'error', stint: gated.id, text: gated.gate!.detail ?? '检查没跑成' };

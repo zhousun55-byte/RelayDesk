@@ -261,6 +261,34 @@ test('验收：清单打勾不等于做完——开着终审却没终审、终�
   assert.equal(acceptance({ ...base, task: notes.parseTask('# 任务\n\n做\n\n## 进度\n\n- [x] 一\n- [ ] 二\n'), ledger: view([work]) }).state, 'working');
 });
 
+test('验收：检查命令跑完改了源码（格式化、自动修复）——之前的终审、这次检查都不算现在的代码；再审、再跑一次没再改才算；只改生成的文件不算', () => {
+  const base = { task: DONE_TASK, gateCommand: 'npm test', finalRequired: true };
+  const work = stint(1, { who: STRONG, review: 'skip', gate: { status: 'pass', command: 'npm test', at: at(3) } });
+  const good = stint(2, { kind: 'final', who: STRONG, review: 'skip', verdict: 'ok', facts: { files: 0, added: 0, removed: 0, paths: [] }, gate: { status: 'pass', command: 'npm test', at: at(6) } });
+  const edit = (after: number, min: number, files?: string[]): LedgerEvent => ({ type: 'base', ts: at(min), snap: `g${min}`, why: '检查命令写的文件', after, ...(files ? { files } : {}) });
+  assert.equal(acceptance({ ...base, ledger: view([work, good]) }).state, 'accepted');
+  // 终审之后检查命令改了 source.js：以前这里说「验收通过：终审过了，检查通过」
+  let a = acceptance({ ...base, ledger: view([work, good], [edit(2, 7, ['source.js'])]) });
+  assert.equal(a.state, 'blocked');
+  assert.equal(a.final.text, '终审之后检查命令改了 source.js');
+  assert.equal(a.gate.status, 'stale');
+  assert.equal(a.gate.text, '检查命令改了 source.js，还没按改过的再跑检查');
+  // 只改了生成的文件（缓存、报告，账上不记 files）：照常通过
+  assert.equal(acceptance({ ...base, ledger: view([work, good], [edit(2, 7)]) }).state, 'accepted');
+  // 干活那一棒后面跑检查时改的：终审审的就是改过的，照常通过
+  assert.equal(acceptance({ ...base, ledger: view([work, good], [edit(1, 4, ['source.js'])]) }).state, 'accepted');
+  // 再终审一次、检查再跑一次没再改：通过
+  const again = stint(3, { kind: 'final', who: STRONG, review: 'skip', verdict: 'ok', facts: { files: 0, added: 0, removed: 0, paths: [] }, gate: { status: 'pass', command: 'npm test', at: at(10) } });
+  assert.equal(acceptance({ ...base, ledger: view([work, good, again], [edit(2, 7, ['source.js'])]) }).state, 'accepted');
+  // 没开终审：只看检查。同一棒上再跑一次检查（在改动之后）就算数
+  const g = { ...base, finalRequired: false };
+  a = acceptance({ ...g, ledger: view([work], [edit(1, 4, ['a.js', 'b.js', 'c.js', 'd.js'])]) });
+  assert.equal(a.gate.text, '检查命令改了 a.js、b.js、c.js 等 4 个，还没按改过的再跑检查');
+  assert.equal(acceptance({ ...g, ledger: view([{ ...work, gate: { status: 'pass', command: 'npm test', at: at(5) } }], [edit(1, 4, ['a.js'])]) }).state, 'accepted');
+  // 跟在退回掉的那一棒后面改的：改动跟着退掉了，不算
+  assert.equal(acceptance({ ...g, ledger: view([work, stint(2, { who: STRONG, review: 'skip', rolledBack: true })], [edit(2, 7, ['a.js'])]) }).state, 'accepted');
+});
+
 test('旧版本没把终审结论记进账本：按时间找回它写的结论文件补上；时间对不上、找到好几份都不乱补', () => {
   const root = tmpDir('legacy-final');
   fs.writeFileSync(path.join(root, 'a.txt'), '1\n');
@@ -459,10 +487,11 @@ test('网页切换项目：A 的请求晚回来也不会显示在 B 里（状态
     while (src[j] !== '}') j++;
     return src.slice(i, j + 1).join('\n');
   };
-  const code = ['q', 'ticket', 'stale', 'fail', 'setOffline', 'refresh', 'loadTalk', 'loadTree', 'loadDetail', 'loadDoc', 'switchProject', 'tabKey'].map(fn).join('\n\n');
+  const code = ['q', 'ticket', 'stale', 'fail', 'setOffline', 'refresh', 'loadTalk', 'loadTree', 'loadDetail', 'loadDoc', 'saveDraft', 'switchProject', 'tabKey'].map(fn).join('\n\n');
   const out: string[] = [];
   const script = `
-let treeKey = '', stintsKey = '', streamThread = null, docSig = '', barSig = '', heroSig = '', tabsSig = '';
+let treeKey = '', stintsKey = '', streamThread = null, docSig = '', barSig = '', heroSig = '', tabsSig = '', draftTimer = null;
+const C = {};
 const detailLoading = new Set();
 const S = { dir: 'A', st: null, gen: 0, seq: {}, talk: { rows: [], votes: [], status: { speaking: [], queue: [] } }, tree: null, treeRev: 0, thread: null, draft: false, fold: false, open: new Set(), detail: new Map(), tabs: [], tab: 0, docs: new Map(), ask: null, files: [], treeOpen: new Set(), treeFilter: '', onlyChanged: false, treeSel: '', offline: false };
 const node = () => ({ replaceChildren() {}, querySelector: () => null, hidden: true });
@@ -496,11 +525,64 @@ ${code}
 })();`;
   await new Promise<void>((resolve, reject) => {
     try {
-      runWeb(script, { setTimeout, URL, URLSearchParams, encodeURIComponent, TypeError, out: (x: string) => out.push(x), done: resolve });
+      runWeb(script, { setTimeout, clearTimeout, URL, URLSearchParams, encodeURIComponent, TypeError, out: (x: string) => out.push(x), done: resolve });
     } catch (e) {
       reject(e);
     }
   });
   assert.deepEqual(JSON.parse(out[0]), ['B', 'B', 'B', 'B.txt', null, null], '以前这里全是 A 的：状态、对话、文件树、第 3 棒详情、README');
   assert.deepEqual(JSON.parse(out[1]), ['B', 'B 的 README', '/api/stint?id=3&dir=B']);
+});
+
+test('网页切换项目：建任务、传文件要连着发几个请求，中途换了项目，后面的不发到新项目（以前 A 的任务会写进 B）；草稿留在 A', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split('\n');
+  const fn = (name: string) => {
+    const i = src.findIndex((l) => new RegExp(`^(async )?function ${name}\\(`).test(l));
+    assert.ok(i >= 0, `app.js 里没有 ${name}`);
+    let j = i;
+    while (src[j] !== '}') j++;
+    return src.slice(i, j + 1).join('\n');
+  };
+  const code = ['pin', 'q', 'fail', 'saveDraft', 'createTask'].map(fn).join('\n\n');
+  const out: string[] = [];
+  const script = `
+let draftTimer = null;
+const S = { dir: 'A', gen: 0, st: { project: { init: false } }, files: [], view: 'relay', autoAfter: true, draft: true, thread: 1 };
+const C = { ta: { value: '做登录页' } };
+const drafts = {};
+const store = { set: (k, v) => (drafts[k] = v) };
+const calls = [];
+async function api(path, body) {
+  calls.push(path + '→' + body.dir);
+  await new Promise((r) => setTimeout(r, 30));
+  return { ok: true };
+}
+const startWork = (path, body) => api(path, body);
+const refresh = async () => {}, loadTalk = async () => {}, loadTree = async () => {}, scrollBottom = () => {}, toast = (t) => out('toast:' + t);
+const move = (ms, to) => setTimeout(() => { saveDraft(); S.gen++; S.dir = to; }, ms);
+${code}
+(async () => {
+  // 甲：接入还没回来就换到 B：任务不发（以前发到了 B），报错不吭声
+  move(10, 'B');
+  await createTask('做登录页\\n- 页面').catch((e) => out('err:' + e.code));
+  out(calls.splice(0).join(' '));
+  // 乙：没换项目：都发给 A
+  Object.assign(S, { dir: 'A', gen: 0, st: { project: { init: true } } });
+  await createTask('做登录页\\n- 页面');
+  out(calls.splice(0).join(' ') + ' draft=' + S.draft);
+  // 丙：任务发出去了才换：任务在 A，不再替 A 开全自动，也不动 B 的页面
+  Object.assign(S, { draft: true, autoAfter: true });
+  move(10, 'B');
+  await createTask('做登录页\\n- 页面');
+  out(calls.splice(0).join(' ') + ' draft=' + S.draft + ' ' + JSON.stringify(drafts));
+  done();
+})();`;
+  await new Promise<void>((resolve, reject) => {
+    try {
+      runWeb(script, { setTimeout, clearTimeout, encodeURIComponent, out: (x: string) => out.push(x), done: resolve });
+    } catch (e) {
+      reject(e);
+    }
+  });
+  assert.deepEqual(out, ['err:moved', '/api/init→A', '/api/task→A /api/auto→A draft=false', '/api/task→A draft=true {"draft:A":"做登录页"}']);
 });

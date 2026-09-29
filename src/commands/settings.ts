@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadAutoSettings, saveAutoSettings, type AutoSettings } from '../core/auto-settings';
+import { defaultAutoSettings, loadAutoSettings, saveAutoSettings, type AutoSettings } from '../core/auto-settings';
 import { loadRelayConfig, saveRelayConfig } from '../core/config';
 import { requireInit } from '../core/ledger';
 import { refreshBrief } from '../ops/track';
@@ -20,7 +20,8 @@ export function settingsCommand(): Command {
     .option('--final', '清单全部打勾后请强模型终审')
     .option('--no-final', '不终审')
     .option('--lang <语言>', 'zh | en：en 时请 AI 用英文写交接、复核和回答（网页上换语言会自动改）')
-    .action((o: { level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean; lang?: string }) => {
+    .option('--reset', '恢复默认设置（原来的文件读不出来时，先留一份 auto.json.broken）')
+    .action((o: { level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean; lang?: string; reset?: boolean }) => {
       const patch: Partial<Record<keyof AutoSettings, unknown>> = {};
       if (o.level !== undefined) patch.level = o.level;
       if (o.order !== undefined) patch.order = o.order;
@@ -30,8 +31,8 @@ export function settingsCommand(): Command {
       if (o.wait !== undefined) patch.waitForQuota = o.wait;
       if (o.final !== undefined) patch.finalReview = o.final;
       if (o.lang !== undefined) patch.lang = o.lang;
-      const changed = Object.keys(patch).length > 0;
-      const s = changed ? saveAutoSettings({ ...loadAutoSettings(), ...patch }) : loadAutoSettings();
+      const changed = !!o.reset || Object.keys(patch).length > 0;
+      const s = changed ? saveAutoSettings({ ...(o.reset ? defaultAutoSettings() : loadAutoSettings()), ...patch }) : loadAutoSettings();
       if (changed) ok('已保存');
       info(`权限：${s.level === 'full' ? '不限制' : '只在项目里'}`);
       info(`派活顺序：${s.order.length ? s.order.join('、') : '强的在前、编程工具在前'}`);

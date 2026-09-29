@@ -35,6 +35,8 @@ export interface GateInfo {
   status: 'pass' | 'fail' | 'error';
   command: string;
   detail?: string;
+  /** 什么时候跑完的（检查命令自己改了源码的话，这之后要再跑一次才算数）。 */
+  at?: string;
 }
 
 /**
@@ -194,6 +196,10 @@ export interface BaseEvent {
   ts: string;
   snap: string;
   why: string;
+  /** 检查命令跑完改的：跟在第几棒后面跑的。 */
+  after?: number;
+  /** 检查命令改了的源码（不是生成的文件、命令里也没写明往里写）：之前的终审、这次检查的结果都不算现在的代码。 */
+  files?: string[];
 }
 
 export type LedgerEvent = InitEvent | StintEvent | RollbackEvent | TaskEvent | BaseEvent;

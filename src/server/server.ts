@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { talkContext } from '../commands/talk';
-import { loadAutoSettings, saveAutoSettings } from '../core/auto-settings';
+import { autoSettingsSafe, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
 import { enableProvider, loadDetected, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
@@ -92,7 +92,7 @@ function ensureDetected(force = false): void {
 // ---- 给网页看的成员 ----
 
 function memberViews() {
-  const s = loadAutoSettings();
+  const s = autoSettingsSafe().settings;
   const now = new Date();
   const report = loadDetected();
   const list = orderMembers(allMembers(s.level, report), s.order);
@@ -286,6 +286,7 @@ export function createServer(opts: ServerOptions): http.Server {
       }
       const w = watching(root);
       const pick = pickFolder(root, !!pv.init);
+      const auto = autoSettingsSafe();
       return {
         version: VERSION,
         build: BUILD,
@@ -293,7 +294,8 @@ export function createServer(opts: ServerOptions): http.Server {
         home: os.homedir(),
         project: pick ? { ...pv, pick: true } : pv,
         members: memberViews(),
-        settings: loadAutoSettings(),
+        settings: auto.settings,
+        ...(auto.error ? { settingsError: auto.error } : {}),
         projects: projectList(pick ? null : root),
         detecting: !!detecting,
         detectedAt: loadDetected()?.at ?? null,

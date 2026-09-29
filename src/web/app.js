@@ -668,13 +668,29 @@ function stale(t) {
   return t.gen !== S.gen || t.dir !== S.dir || S.seq[t.kind] !== t.n;
 }
 
-/** GET 地址带上当前项目。 */
-function q(path) {
-  return S.dir ? `${path}${path.includes('?') ? '&' : '?'}dir=${encodeURIComponent(S.dir)}` : path;
+/**
+ * 要连着发几个请求才算做完的写入（建任务、发消息、传文件）：钉住开始时的项目，每个请求都发给它。
+ * 中途换了项目，后面的请求一律不发（抛 moved，fail 不吭声），也不去动新项目的页面。
+ */
+function pin() {
+  const gen = S.gen;
+  const dir = S.dir;
+  const moved = () => S.gen !== gen || S.dir !== dir;
+  return {
+    dir,
+    moved,
+    api: (path, body = {}) => (moved() ? Promise.reject(Object.assign(new Error('moved'), { code: 'moved' })) : api(path, { ...body, dir: dir || undefined })),
+  };
+}
+
+/** GET 地址带上项目（默认当前的）。 */
+function q(path, dir = S.dir) {
+  return dir ? `${path}${path.includes('?') ? '&' : '?'}dir=${encodeURIComponent(dir)}` : path;
 }
 
 /** 失败的提示：「没能 X：原因」（原因去掉句末的句号）。说法见 docs/设计说明.md「结果怎么说」。 */
 function fail(what, e) {
+  if (e && e.code === 'moved') return;
   const why = tr(String((e && e.message) || e || '').trim().replace(/[。.]+$/, ''));
   toast(what ? T`没能${what}：${why || T`出错`}` : why || T`出错`, { bad: true });
 }
@@ -1749,16 +1765,20 @@ function threadMenuItems(t) {
 /** 删除一段对话：左边不再列出（每一棒的记录、交接、快照都留着），提示里能撤销。 */
 async function hideThread(t) {
   const el = LE.body.querySelector(`.thread[data-id="${t.id}"]`);
+  const p = pin();
   try {
-    await api('/api/thread/hide', { key: t.key, hidden: true });
+    await p.api('/api/thread/hide', { key: t.key, hidden: true });
   } catch (e) {
     return fail(T`删除对话`, e);
   }
+  // 撤销按删的那个项目来（提示还在的时候可能已经换了项目）
+  const undo = { label: T`撤销`, run: () => act(null, () => api('/api/thread/hide', { dir: p.dir || undefined, key: t.key, hidden: false })) };
+  if (p.moved()) return toast(T`已删除对话`, { action: undo });
   if (S.thread === t.id) S.thread = null;
   leave(el);
   if (!still()) await new Promise((r) => setTimeout(r, 160));
   await refresh(true);
-  toast(T`已删除对话`, { action: { label: T`撤销`, run: () => act(null, () => api('/api/thread/hide', { key: t.key, hidden: false })) } });
+  toast(T`已删除对话`, { action: undo });
 }
 
 function projMenuItems(pr) {
@@ -1785,6 +1805,7 @@ async function forget(pr) {
 }
 
 function switchProject(root) {
+  saveDraft();
   S.gen++;
   S.dir = root;
   S.st = null;
@@ -1940,11 +1961,16 @@ function scrollBottom(smooth) {
 function renderCenter() {
   if (!S.st) return;
   show(CE.offline, S.offline);
+  // 项目的配置文件坏了、全机的运行设置读不出来（这时按默认的在显示，派活顺序、终审都可能和你设的不一样）
   const cfgErr = S.st.project.config && S.st.project.config.error;
-  show(CE.cfgBad, !!cfgErr);
-  if (cfgErr && CE.cfgBad.dataset.err !== cfgErr) {
-    CE.cfgBad.dataset.err = cfgErr;
-    CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': cfgErr }, T`配置文件坏了`), h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, T`打开`));
+  const bad = cfgErr || S.st.settingsError;
+  show(CE.cfgBad, !!bad);
+  if (bad && CE.cfgBad.dataset.err !== bad) {
+    CE.cfgBad.dataset.err = bad;
+    const fix = cfgErr
+      ? h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, T`打开`)
+      : h('button', { class: 'btn small', onclick: (e) => act(e.currentTarget, () => api('/api/settings', { settings: { ...S.st.settings, lang: LANG.now } }), T`已恢复默认设置`) }, T`恢复默认`);
+    CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': bad }, cfgErr ? T`配置文件坏了` : T`运行设置坏了`), fix);
   }
   const chat = S.view === 'chat';
   const mode = chat ? chatMode() : centerMode();
@@ -2635,6 +2661,7 @@ function acceptPanel() {
 /** 点任务标题就地改：回车存，Esc 放弃。改的时候定时刷新不动它。 */
 function editTitle() {
   const p = S.st.project;
+  const dir = S.dir;
   const ttl = CE.stream.querySelector('.head .ttl');
   if (!ttl) return;
   S.editingTitle = true;
@@ -2667,7 +2694,7 @@ function editTitle() {
     if (done) return;
     const v = input.value.trim();
     if (!v || v === p.task.title) return finish();
-    await act(null, () => api('/api/task/edit', { op: 'title', text: v }), T`已保存`);
+    await act(null, () => api('/api/task/edit', { dir: dir || undefined, op: 'title', text: v }), T`已保存`);
     finish();
   }
   ttl.replaceWith(input);
@@ -3625,12 +3652,15 @@ function sessionMenuItems(x, inside = false) {
 /** 删除一段群聊：挪进 .relay/已删除的群聊/，提示里能撤销（撤销后是一段存档的群聊）。 */
 async function deleteChat(x) {
   const el = LE.body.querySelector(`.thread[data-id="chat:${x.id}"]`);
+  const p = pin();
   let r;
   try {
-    r = await api('/api/talk/delete', { id: x.id || '' });
+    r = await p.api('/api/talk/delete', { id: x.id || '' });
   } catch (e) {
     return fail(T`删除群聊`, e);
   }
+  const undo = r.id && { label: T`撤销`, run: () => act(null, () => api('/api/talk/restore', { dir: p.dir || undefined, id: r.id })).then(() => loadTalk()) };
+  if (p.moved()) return undo && toast(T`已删除群聊`, { action: undo });
   if ((S.chat || '') === (x.id || '')) {
     S.chat = null;
     S.archive = null;
@@ -3640,7 +3670,7 @@ async function deleteChat(x) {
   streamThread = null;
   await loadTalk();
   renderAll();
-  if (r.id) toast(T`已删除群聊`, { action: { label: T`撤销`, run: () => act(null, () => api('/api/talk/restore', { id: r.id })).then(() => loadTalk()) } });
+  if (undo) toast(T`已删除群聊`, { action: undo });
 }
 
 function selectChat(id) {
@@ -4431,7 +4461,13 @@ function onComposerInput() {
   updateComposer();
   updateSuggest();
   clearTimeout(draftTimer);
-  draftTimer = setTimeout(() => store.set(`draft:${S.dir}`, C.ta.value), 300);
+  draftTimer = setTimeout(saveDraft, 300);
+}
+
+/** 输入框里的字存成这个项目的草稿（换项目前、发出去之前都先存一次，不等 300 毫秒）。 */
+function saveDraft() {
+  clearTimeout(draftTimer);
+  if (C.ta && S.dir) store.set(`draft:${S.dir}`, C.ta.value);
 }
 
 function restoreDraft() {
@@ -4469,9 +4505,11 @@ const fileLabel = (p) => (p.startsWith(UPLOADS) ? basename(p).replace(/^\d{4}-\d
 async function uploadFiles(files) {
   if (!files.length) return;
   if (!C.wrap.isConnected) setView('chat');
+  // 传到开始时的项目里；传完已经换了项目，就不带进新项目的输入框（那个项目里没有这个文件）
+  const p = pin();
   try {
     if (!S.st.project.init) {
-      await api('/api/init', {});
+      await p.api('/api/init', {});
       await refresh(true);
     }
   } catch (e) {
@@ -4479,23 +4517,24 @@ async function uploadFiles(files) {
   }
   await Promise.all(
     files.map(async (f) => {
+      if (p.moved()) return;
       const job = { name: f.name || T`图片` };
       S.uploading.push(job);
       updateComposer();
       try {
-        const r = await fetch(q(`/api/upload?name=${encodeURIComponent(job.name)}`), { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: f });
+        const r = await fetch(q(`/api/upload?name=${encodeURIComponent(job.name)}`, p.dir), { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: f });
         const j = await r.json().catch(() => ({ ok: false, error: T`传不上去（${r.status}）` }));
         if (!j.ok) throw new Error(j.error || T`出错`);
-        if (!S.files.includes(j.path)) S.files.push(j.path);
+        if (!p.moved() && !S.files.includes(j.path)) S.files.push(j.path);
       } catch (e) {
-        fail(T`上传「${job.name}」`, e);
+        if (!p.moved()) fail(T`上传「${job.name}」`, e);
       } finally {
         S.uploading = S.uploading.filter((x) => x !== job);
         updateComposer();
       }
     })
   );
-  C.ta.focus();
+  if (!p.moved()) C.ta.focus();
 }
 
 /**
@@ -4695,7 +4734,12 @@ function pickSuggest(i) {
 async function send() {
   if (C.send.disabled) return;
   const text = C.ta.value.trim();
+  // 钉住这个项目：中途换了项目，后面的不发；草稿先存好，没发出去的回来还在
+  const p = pin();
+  saveDraft();
   const clear = () => {
+    store.set(`draft:${p.dir}`, null);
+    if (p.moved()) return;
     C.ta.value = '';
     S.files = [];
     S.options = [];
@@ -4704,7 +4748,6 @@ async function send() {
     S.askBefore = null;
     S.atUsed = false;
     drawOptions();
-    store.set(`draft:${S.dir}`, null);
     updateComposer();
     // 发出去了：输入框空出来时占位字淡进来，发送键的箭头从底下补上来
     if (!still()) {
@@ -4716,7 +4759,7 @@ async function send() {
   C.send.disabled = true;
   try {
     if (C.kind === 'task') {
-      await createTask(text);
+      await createTask(text, p);
       clear();
       return;
     }
@@ -4727,19 +4770,24 @@ async function send() {
       return;
     }
     const setup = !S.st.project.init;
-    if (setup) await api('/api/init', {});
-    // 在存档的群聊里说话：先把它换回正在用的那一段
-    if (S.chat) {
-      await api('/api/talk/resume', { id: S.chat });
-      S.chat = null;
-      S.archive = null;
-    }
+    const chat = S.chat;
     const ask = [...S.ask].filter((n) => talkers().some((m) => m.name === n));
     // 带上的文件写在最后一段（反引号括起来），AI 按路径打开；网页上画成缩略图和文件小条
     const full = S.files.length ? `${text}${text ? '\n\n' : ''}${S.files.map((f) => `\`${f}\``).join(' ')}` : text;
-    if (S.mode === 'vote') await api('/api/vote/start', { question: full, voters: ask, options: S.options });
-    else await api('/api/talk/say', { text: full, ask, mode: S.mode });
+    const { mode, options } = S;
+    if (setup) await p.api('/api/init', {});
+    // 在存档的群聊里说话：先把它换回正在用的那一段
+    if (chat) {
+      await p.api('/api/talk/resume', { id: chat });
+      if (!p.moved()) {
+        S.chat = null;
+        S.archive = null;
+      }
+    }
+    if (mode === 'vote') await p.api('/api/vote/start', { question: full, voters: ask, options });
+    else await p.api('/api/talk/say', { text: full, ask, mode });
     clear();
+    if (p.moved()) return;
     if (setup) await refresh(true);
     await loadTalk();
     schedule();
@@ -4753,7 +4801,7 @@ async function send() {
 }
 
 /** 第一行是标题；「- 」开头的行是步骤；其余是说明。 */
-async function createTask(text) {
+async function createTask(text, p = pin()) {
   if (!text) return;
   const lines = text.split('\n');
   const steps = [];
@@ -4763,13 +4811,16 @@ async function createTask(text) {
     if (m) steps.push(m[1].trim());
     else if (l.trim()) body.push(l);
   }
-  const p = S.st.project;
-  if (!p.init) await api('/api/init', {});
   const refs = S.files.map((f) => `\`${f}\``).join(' ');
   // 派活页写的任务：全自动用派活（强模型拆、弱模型做）
   const dispatch = S.view === 'dispatch';
-  await api('/api/task', { text: [lines[0].trim(), ...body, refs].filter(Boolean).join('\n'), steps, ...(dispatch ? { mode: 'dispatch' } : {}) });
-  if (S.autoAfter) await startWork('/api/auto', {}).catch((e) => e.code !== 'cancelled' && fail(dispatch ? T`开始派活` : T`开始全自动`, e));
+  const autoAfter = S.autoAfter;
+  if (!S.st.project.init) await p.api('/api/init', {});
+  await p.api('/api/task', { text: [lines[0].trim(), ...body, refs].filter(Boolean).join('\n'), steps, ...(dispatch ? { mode: 'dispatch' } : {}) });
+  // 任务已经建在原来的项目里了；换了项目就不再替它开全自动、不动新项目的页面
+  if (p.moved()) return;
+  if (autoAfter) await startWork('/api/auto', { dir: p.dir || undefined }).catch((e) => e.code !== 'cancelled' && fail(dispatch ? T`开始派活` : T`开始全自动`, e));
+  if (p.moved()) return;
   S.draft = false;
   S.thread = null;
   S.autoAfter = false;
@@ -5384,9 +5435,10 @@ function settingsBody(tab, redraw) {
     const gate = h('input', { class: 'input mono', value: p.config.gate, placeholder: T`例如 npm test`, 'aria-label': T`检查命令` });
     const tags = [...p.config.protectedPaths];
     const tagBox = h('div', { class: 'tags' });
+    const dir = S.dir;
     const saveCfg = async () => {
       try {
-        await api('/api/config/save', { config: { gate: { command: gate.value.trim() }, protectedPaths: tags } });
+        await api('/api/config/save', { dir: dir || undefined, config: { gate: { command: gate.value.trim() }, protectedPaths: tags } });
         mark.flash();
         await refresh();
       } catch (e) {

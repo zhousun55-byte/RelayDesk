@@ -5,7 +5,7 @@ import { scanApps } from './env';
 import { RelayError } from './errors';
 import { checkCommand } from './launch';
 import { findHarness, HARNESSES, harnessForCommand, locateCached, clearLocateCache, type HarnessSpec, type Level, type LoginInfo, type ModelInfo } from './harness';
-import { loadAutoSettings } from './auto-settings';
+import { autoSettingsSafe } from './auto-settings';
 import { apiUsable } from './llm';
 import { appNameOf } from './names';
 import { relayHome } from './paths';
@@ -301,8 +301,11 @@ export function siblingOf(app: AgentConfig, all: AgentConfig[], report: DetectRe
  * 同一个模型、不同工具的不并：常常是两份额度（Cursor 里的 Opus 和 Claude Code 的 Opus），额度用完换人时用得上。
  */
 export function tidyRegistry(report: DetectReport | null = loadDetected()): string[] {
+  // 运行设置读不出来：派活顺序不知道，先不并（不然可能留错了那一位）。
+  const auto = autoSettingsSafe();
+  if (auto.error) return [];
   const reg = loadRegistry();
-  const order = loadAutoSettings().order;
+  const order = auto.settings.order;
   const rank = (a: AgentConfig) => {
     const i = order.indexOf(a.name);
     return i >= 0 ? i : order.length + reg.agents.indexOf(a);
