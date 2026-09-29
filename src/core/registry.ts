@@ -68,6 +68,25 @@ function copyOf(reg: AgentsRegistry): AgentsRegistry {
   return { agents: reg.agents.map((a) => ({ ...a })), ...(reg.removed ? { removed: [...reg.removed] } : {}) };
 }
 
+/**
+ * 识别时用：名单文件读得出来就正常读；读不出来（JSON 坏了、格式不对）不报错，而是把坏的那份挪成 agents.json.broken，
+ * 当作空名单从头识别（识别完会重新写好）。返回名单和坏了的原因（有就说给人看）。
+ */
+export function loadRegistryForDetect(): { reg: AgentsRegistry; recovered?: string } {
+  try {
+    return { reg: loadRegistry() };
+  } catch (e) {
+    const p = registryPath();
+    try {
+      if (fs.existsSync(p)) fs.renameSync(p, `${p}.broken`);
+    } catch {
+      /* 挪不动就算了，下面照样从空的开始 */
+    }
+    cache = null;
+    return { reg: { agents: [] }, recovered: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export function saveRegistry(reg: AgentsRegistry): void {
   const p = registryPath();
   fs.mkdirSync(path.dirname(p), { recursive: true });

@@ -201,6 +201,16 @@ def main():
                 fixed = json.load(f)
             check(os.path.exists(auto + '.broken') and fixed.get('order') == [], '运行设置写坏了：顶上提示，点「恢复默认」修好，坏的那份留着')
 
+            # 成员名单 agents.json 写坏了：顶上提示（不当成没有成员），点「重新识别」修好，坏的那份存成 agents.json.broken
+            agents = os.path.join(home, '.relay', 'agents.json')
+            with open(agents, 'w') as f:
+                f.write('{ "agents": [ 坏 ,,')
+            js('() => refresh(true)')
+            bar.get_by_text('成员名单坏了').wait_for(timeout=5000)
+            bar.get_by_role('button', name='重新识别').click()
+            page.wait_for_function('() => document.querySelector(".cfg-bad").hidden', timeout=15000)
+            check(os.path.exists(agents + '.broken') and os.path.exists(agents), '成员名单写坏了：顶上提示，点「重新识别」修好，坏的那份留着')
+
             # 窗口窄于 1180px：右栏自己收起；宽回来自己打开（没改你记下的）
             no_right = '() => document.querySelector(".app").classList.contains("no-right")'
             page.set_viewport_size({'width': 1100, 'height': 800})

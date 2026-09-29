@@ -113,6 +113,8 @@ const EN = {
   连不上接力台: "Can't reach RelayDesk",
   配置文件坏了: 'The config file is broken',
   运行设置坏了: 'Run settings are broken',
+  成员名单坏了: 'The member list is broken',
+  已重新识别: 'Re-detected',
   恢复默认: 'Restore defaults',
   已恢复默认设置: 'Defaults restored',
   页面: 'Pages',

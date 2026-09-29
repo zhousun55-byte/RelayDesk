@@ -91,7 +91,7 @@ function ensureDetected(force = false): void {
 
 // ---- 给网页看的成员 ----
 
-function memberViews() {
+function memberViewsUnsafe() {
   const s = autoSettingsSafe().settings;
   const now = new Date();
   const report = loadDetected();
@@ -124,6 +124,20 @@ function memberViews() {
     update: (m.harness && report?.harnesses.find((h) => h.id === m.harness)?.model.note) || null,
     agent: m.agent,
   }));
+}
+
+/** 成员名单坏了（agents.json 不是合法 JSON、格式不对）不能让整个网页打不开：列成空的，同时带上原因（网页顶上提示）。 */
+function membersSafe(): { members: ReturnType<typeof memberViewsUnsafe>; error?: string } {
+  try {
+    return { members: memberViewsUnsafe() };
+  } catch (e) {
+    return { members: [], error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** 别的接口只要名单：坏了就给空的（网页顶上另有提示）。 */
+function memberViews() {
+  return membersSafe().members;
 }
 
 /** 家目录、桌面这种大文件夹不能当项目：还没打开过项目时（从「接力台」小程序启动，停在家目录）网页先请你选一个。 */
@@ -182,16 +196,22 @@ function readBody(req: http.IncomingMessage, max = 1_000_000): Promise<Record<st
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let n = 0;
+    let over = false;
     req.on('data', (c: Buffer) => {
+      if (over) return;
       n += c.length;
       if (n > max) {
+        // 太大就不再往内存里收，也不砸断连接（砸断的话网页收不到「请求太大」，只看到断线）：等收完再回。
+        over = true;
+        chunks.length = 0;
+        req.resume();
         reject(new RelayError('请求太大。', 'too-large'));
-        req.destroy();
         return;
       }
       chunks.push(c);
     });
     req.on('end', () => {
+      if (over) return;
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw.trim()) return resolve({});
       try {
@@ -287,13 +307,15 @@ export function createServer(opts: ServerOptions): http.Server {
       const w = watching(root);
       const pick = pickFolder(root, !!pv.init);
       const auto = autoSettingsSafe();
+      const mem = membersSafe();
       return {
         version: VERSION,
         build: BUILD,
         keeper: keeperMode(),
         home: os.homedir(),
         project: pick ? { ...pv, pick: true } : pv,
-        members: memberViews(),
+        members: mem.members,
+        ...(mem.error ? { membersError: mem.error } : {}),
         settings: auto.settings,
         ...(auto.error ? { settingsError: auto.error } : {}),
         projects: projectList(pick ? null : root),
@@ -616,7 +638,8 @@ export function createServer(opts: ServerOptions): http.Server {
         serveStatic(url.pathname, res);
       } catch (e) {
         const known = e instanceof RelayError;
-        send(res, known ? 400 : 500, { ok: false, error: errorMessage(e), code: known ? e.code : 'internal' });
+        const status = !known ? 500 : e.code === 'too-large' ? 413 : 400;
+        send(res, status, { ok: false, error: errorMessage(e), code: known ? e.code : 'internal' });
       }
     })();
   });

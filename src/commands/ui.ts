@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { Command } from 'commander';
 import fs from 'node:fs';
+import { errorMessage } from '../core/errors';
 import { augmentPath } from '../core/launch';
 import { lastProject, rememberProject } from '../core/memory';
 import { anyTalkBusy } from '../core/talk';
@@ -31,6 +32,19 @@ async function pingRelay(port: number): Promise<boolean> {
   }
 }
 
+/**
+ * 后台的活（盯文件夹对账、定时器、子进程回调）出了没接住的错，或者有没接住的 Promise：
+ * 记一行到日志，接力台照常开着。本地就一个用户，服务活着（哪怕这一次没干成）永远好过整个退出、丢掉正在看的页面。
+ * 关服务用的信号（SIGINT 之类）不在这里管。
+ */
+let guarded = false;
+function guardProcess(): void {
+  if (guarded) return;
+  guarded = true;
+  process.on('uncaughtException', (e) => warn(`后台出错（接力台继续开着）：${errorMessage(e)}`));
+  process.on('unhandledRejection', (e) => warn(`后台有没接住的错（接力台继续开着）：${errorMessage(e)}`));
+}
+
 export function uiCommand(): Command {
   return new Command('ui')
     .description('打开接力台（网页）：看进度、派人接着做、全自动、复核、退回、群聊')
@@ -39,6 +53,7 @@ export function uiCommand(): Command {
     .option('--no-open', '只启动，不自动打开浏览器')
     .action(async (folder: string | undefined, opts: { port: string; open: boolean }) => {
       augmentPath();
+      guardProcess();
       let dir = folder ? path.resolve(folder) : findRoot();
       if (!folder && !fs.existsSync(path.join(dir, '.relay', 'journal.jsonl')) && lastProject()) dir = lastProject()!;
       if (fs.existsSync(path.join(dir, '.relay', 'journal.jsonl'))) rememberProject(dir);

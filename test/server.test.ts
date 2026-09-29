@@ -304,11 +304,100 @@ test('网页接口的安全检查：只认本机地址和本端口，POST 必须
     assert.ok(!s.exists('.relay'), '别的网站接入不了');
     const port = (await ui.call('/api/ping')).json;
     assert.equal(port.app, 'relay');
+    // 原型污染：带 __proto__ 的请求体不能污染 Object.prototype
+    await ui.call('/api/init', { dir: s.repo });
+    await ui.call('/api/task/edit', { dir: s.repo, op: 'title', text: 'x', ['__proto__']: { polluted: 1 } });
+    assert.equal(({} as Record<string, unknown>).polluted, undefined, '原型没被污染');
+    // 超大请求体：回 413（不是砸断连接让网页只看到断线）
+    const huge = await new Promise<{ status: number }>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: ui.port, method: 'POST', path: '/api/task', headers: { 'content-type': 'application/json' } }, (res) => {
+        res.resume();
+        resolve({ status: res.statusCode ?? 0 });
+      });
+      req.on('error', reject);
+      req.end(`{"dir":${JSON.stringify(s.repo)},"text":"${'x'.repeat(2_000_000)}"}`);
+    });
+    assert.equal(huge.status, 413, '超大请求体回 413');
+    // 静态资源不能穿越出网页目录
+    const stat = await new Promise<number>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: ui.port, path: '/../../../../etc/passwd' }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.notEqual(stat, 200, '静态资源路径穿越拿不到系统文件');
     const res = await ui.call('/api/quit', {});
     assert.equal(res.json.quitting, true);
     await until(10_000, () => exited, '接力台退出');
   } finally {
     if (!exited) ui.child.kill();
+  }
+});
+
+test('韧性：数据文件坏了、快照仓库被破坏、整个 .relay 被删，接力台都不崩，网页照常打开（坏了的顶上有提示）', async () => {
+  const s = sandbox('srv-res');
+  withFakes(s);
+  s.relay(['detect', '--offline']);
+  const ui = await startUi(s);
+  const relayHome = path.join(s.home, '.relay');
+  const alive = () => ui.child.exitCode === null && ui.child.signalCode === null;
+  const state = () => ui.call(`/api/state${q(s)}`);
+  try {
+    await ui.call('/api/init', { dir: s.repo });
+    await ui.call('/api/task', { dir: s.repo, text: '做一件事', steps: ['第一件'] });
+    fs.writeFileSync(path.join(s.repo, '.relay', 'talk.jsonl'), JSON.stringify({ ts: new Date().toISOString(), kind: 'human', who: '我', text: '问题' }) + String.fromCharCode(10));
+
+    // 一、每个数据文件写坏（坏 JSON、空文件、全是 0 字节）：state / talk 都不 500，服务不崩
+    const files: [string, string, string?][] = [
+      ['agents.json', path.join(relayHome, 'agents.json'), 'membersError'],
+      ['auto.json', path.join(relayHome, 'auto.json'), 'settingsError'],
+      ['detected.json', path.join(relayHome, 'detected.json')],
+      ['quota.json', path.join(relayHome, 'quota.json')],
+      ['journal.jsonl', path.join(s.repo, '.relay/journal.jsonl')],
+      ['config.json', path.join(s.repo, '.relay/config.json')],
+      ['hidden.json', path.join(s.repo, '.relay/hidden.json')],
+      ['talk.jsonl', path.join(s.repo, '.relay/talk.jsonl')],
+    ];
+    for (const [name, p, banner] of files) {
+      const had = fs.existsSync(p) ? fs.readFileSync(p) : null;
+      for (const garbage of ['{ 坏 json ,,', '', String.fromCharCode(0, 0)]) {
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.writeFileSync(p, garbage);
+        const st = await state();
+        const talk = await ui.call(`/api/talk${q(s)}`);
+        assert.notEqual(st.status, 500, `${name} 坏了 state 不该 500`);
+        assert.notEqual(talk.status, 500, `${name} 坏了 talk 不该 500`);
+        if (banner && garbage.startsWith('{')) {
+          assert.equal(st.status, 200, `${name} 坏了网页仍打开`);
+          assert.ok(st.json[banner], `${name} 坏了顶上有提示（${banner}）`);
+        }
+      }
+      if (had) fs.writeFileSync(p, had);
+      else fs.rmSync(p, { force: true });
+      assert.ok(alive(), `${name} 坏了接力台没崩`);
+    }
+    assert.equal((await state()).status, 200, '都改回来后 state 正常');
+
+    // 二、破坏快照仓库（沙盒）：删掉、对象损坏、HEAD 指向不存在 —— 都不崩
+    fs.rmSync(path.join(s.repo, '.relay/snapshots'), { recursive: true, force: true });
+    assert.equal((await state()).status, 200, '删掉快照仓库后 state 仍 200');
+    assert.ok(alive());
+    s.relay(['init']); // 重新接入重建快照仓库
+    fs.writeFileSync(path.join(s.repo, '.relay/snapshots/HEAD'), 'ref: refs/heads/nope');
+    const snap = await ui.call('/api/snap', { dir: s.repo });
+    assert.notEqual(snap.status, 500, '快照 HEAD 坏了对账不 500');
+    assert.ok(alive(), '快照仓库坏了接力台没崩');
+
+    // 三、整个 .relay 被删（误删）：回到「没接入」，网页照常打开
+    fs.rmSync(path.join(s.repo, '.relay'), { recursive: true, force: true });
+    const st = await state();
+    assert.equal(st.status, 200, '.relay 被删后 state 仍 200');
+    assert.equal(st.json.project.init, false, '回到没接入');
+    assert.ok(alive());
+  } finally {
+    ui.child.kill();
   }
 });
 
@@ -379,7 +468,7 @@ test('网页接口：传文件存进项目的 .relay/uploads（不进 git）；�
       req.on('error', reject);
       req.end();
     });
-    assert.equal(big, 400, '太大的文件先看长度就拒绝');
+    assert.equal(big, 413, '太大的文件先看长度就拒绝');
     assert.deepEqual(fs.readdirSync(path.join(s.repo, '.relay', 'uploads')).filter((f) => f.endsWith('.tmp')), [], '没留下半截文件');
   } finally {
     ui.child.kill();

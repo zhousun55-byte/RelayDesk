@@ -312,3 +312,23 @@ test('运行设置 auto.json 写坏了：直接报出来，不悄悄按默认的
   assert.equal(autoS.autoSettingsSafe().error, undefined);
   fs.rmSync(home('auto.json'), { force: true });
 });
+
+test('成员名单 agents.json 写坏了：识别时不报错，把坏的那份存成 agents.json.broken，从头重建；网页读名单时坏了给空的（不崩）', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const registry = require('../src/core/registry') as typeof import('../src/core/registry');
+  const broken = '{ "agents": [ 坏的 ,,';
+  fs.writeFileSync(home('agents.json'), broken);
+  // 直接读：报出来（不悄悄丢掉名单）
+  assert.throws(() => registry.loadRegistry(), (e: { code?: string }) => e.code === 'bad-registry');
+  // 识别用的读法：不报错，坏的挪走，从空的开始
+  const rec = registry.loadRegistryForDetect();
+  assert.deepEqual(rec.reg.agents, []);
+  assert.match(rec.recovered ?? '', /不是合法的 JSON/);
+  assert.equal(fs.readFileSync(home('agents.json.broken'), 'utf8'), broken, '坏的那份留着');
+  assert.ok(!fs.existsSync(home('agents.json')), '坏的已挪走');
+  // 重新识别把名单写回来
+  const h = (id: string, model: string) => ({ id, label: id, vendor: '', version: '1', where: '', login: { state: 'ok' as const, detail: '' }, model: { model, label: model }, workLevels: ['safe' as const], canReview: true, tested: 'yes' as const, loginHint: '' });
+  detect.syncRegistry({ at: '', harnesses: [h('codex', 'gpt-6')], providers: [], apps: [], unknownKeys: [] });
+  assert.ok(registry.loadRegistry().agents.some((a) => a.name === 'codex'), '重新识别后名单重建');
+  fs.rmSync(home('agents.json.broken'), { force: true });
+});

@@ -1984,16 +1984,19 @@ function scrollBottom(smooth) {
 function renderCenter() {
   if (!S.st) return;
   show(CE.offline, S.offline);
-  // 项目的配置文件坏了、全机的运行设置读不出来（这时按默认的在显示，派活顺序、终审都可能和你设的不一样）
+  // 坏了要顶上提示（都是「按默认的在显示，实际可能和你设的不一样」）：项目配置文件、全机运行设置、成员名单
   const cfgErr = S.st.project.config && S.st.project.config.error;
-  const bad = cfgErr || S.st.settingsError;
+  const bad = cfgErr || S.st.settingsError || S.st.membersError;
   show(CE.cfgBad, !!bad);
   if (bad && CE.cfgBad.dataset.err !== bad) {
     CE.cfgBad.dataset.err = bad;
+    const label = cfgErr ? T`配置文件坏了` : S.st.settingsError ? T`运行设置坏了` : T`成员名单坏了`;
     const fix = cfgErr
       ? h('button', { class: 'btn small', onclick: () => openFile('.relay/config.json') }, T`打开`)
-      : h('button', { class: 'btn small', onclick: (e) => act(e.currentTarget, () => api('/api/settings', { settings: { ...S.st.settings, lang: LANG.now } }), T`已恢复默认设置`) }, T`恢复默认`);
-    CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': bad }, cfgErr ? T`配置文件坏了` : T`运行设置坏了`), fix);
+      : S.st.settingsError
+        ? h('button', { class: 'btn small', onclick: (e) => act(e.currentTarget, () => api('/api/settings', { settings: { ...S.st.settings, lang: LANG.now } }), T`已恢复默认设置`) }, T`恢复默认`)
+        : h('button', { class: 'btn small', onclick: (e) => act(e.currentTarget, () => api('/api/detect', {}), T`已重新识别`) }, T`重新识别`);
+    CE.cfgBad.replaceChildren(h('span', { class: 'rd' }), h('span', { class: 'ell', 'data-tip': bad }, label), fix);
   }
   const chat = S.view === 'chat';
   const mode = chat ? chatMode() : centerMode();

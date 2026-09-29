@@ -10,7 +10,7 @@ import { apiUsable } from './llm';
 import { appNameOf } from './names';
 import { relayHome } from './paths';
 import { scanProviders, toApiSpec, type DetectedProvider } from './providers';
-import { agentKind, agentLabel, agentModel, loadRegistry, registryPath, saveRegistry } from './registry';
+import { agentKind, agentLabel, agentModel, loadRegistry, loadRegistryForDetect, registryPath, saveRegistry } from './registry';
 import { sameModel, tierForModel, toolFamily } from './tier';
 import type { AgentConfig } from './types';
 
@@ -181,8 +181,10 @@ function backupRegistryOnce(): void {
  * 从不删人、不改人手填的字段；顺手修掉已知的坏命令（cursor 被 cursor-agent 顶替）。返回做了哪些改动。
  */
 export function syncRegistry(report: DetectReport): string[] {
-  const reg = loadRegistry();
+  const recover = loadRegistryForDetect();
+  const reg = recover.reg;
   const changes: string[] = [];
+  if (recover.recovered) changes.push(`成员名单原来读不出来（${recover.recovered}），坏的那份存成了 agents.json.broken，这次从头识别重建。`);
   const names = new Set(reg.agents.map((a) => a.name));
   // 你删掉的：再识别也不加回来
   const removed = new Set(reg.removed ?? []);
