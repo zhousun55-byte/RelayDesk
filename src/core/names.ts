@@ -78,6 +78,24 @@ export function topModels(names: string[], current: string | undefined, n = 5): 
   return [current, ...same.slice(0, n - 1)];
 }
 
+/** 同一条线：牌子加上版本号以外的字（GPT-6 Sol → gpt|sol，MiMo V2.6 Pro → mimo|pro，Grok 4.7 → grok）。 */
+const lineOf = (name: string) => [vendorOf(name), ...name.split(' ').slice(1).filter((w) => !/\d/.test(w)).map((w) => w.toLowerCase())].join('|');
+
+/**
+ * 同一条线上比现在用的新的那一个（GPT-6 Sol → GPT-6.1 Sol，GLM-5.3 Flash → GLM-5.4 Flash），没有就是 null。
+ * 没写版本号的简称（Claude Opus）本来就跟着最新的走，不提。
+ */
+export function newerInLine(current: string, names: string[]): string | null {
+  if (!/\d/.test(current)) return null;
+  const line = lineOf(current);
+  let best: string | null = null;
+  for (const n of names) {
+    if (n === current || lineOf(n) !== line || newer(versionOf(current), versionOf(n)) <= 0) continue;
+    if (!best || newer(versionOf(best), versionOf(n)) > 0) best = n;
+  }
+  return best;
+}
+
 /** 一棒是谁做的（记下的是「Codex · gpt-6-sol」）给人看的名字：GPT-6 Sol；看不出模型的写工具名。 */
 export function whoName(who: { label: string; model?: string }): string {
   const [tool, ...rest] = who.label.split(' · ');

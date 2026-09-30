@@ -6,7 +6,7 @@ import path from 'node:path';
 import { talkContext } from '../commands/talk';
 import { autoSettingsSafe, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
-import { addModelMembers, enableProvider, loadDetected, modelOptions, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
+import { addModelMembers, enableProvider, loadDetected, modelOptions, newerHints, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
 import { findHarness } from '../core/harness';
@@ -98,6 +98,7 @@ function memberViewsUnsafe() {
   const now = new Date();
   const report = loadDetected();
   const list = orderMembers(allMembers(s.level, report), s.order);
+  const newer = newerHints();
   // 给人看的名字是模型的名字；同一个模型有两位时，后面带上工具
   const nameOf = (m: (typeof list)[number]) => llmName(m.model) || m.label;
   const toolOf = (m: (typeof list)[number]) => toolName(m.harness) ?? (m.kind === 'api' ? '接口' : m.kind === 'app' ? appNameOf(m.agent.cmd) ?? m.label : m.label);
@@ -124,6 +125,8 @@ function memberViewsUnsafe() {
     tested: findHarness(m.harness)?.tested ?? null,
     /** 要升级才用得上最新模型（命令行太旧）：写明怎么升级。别的识别说明不用管，不给。 */
     update: (m.harness && report?.harnesses.find((h) => h.id === m.harness)?.model.note) || null,
+    /** 同一条线上有更新的模型、或者工具说现在这个要停用（只提示，换不换由人定）。 */
+    newer: newer[m.name] ?? null,
     agent: m.agent,
   }));
 }

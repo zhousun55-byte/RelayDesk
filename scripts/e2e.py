@@ -215,6 +215,47 @@ def main():
             page.keyboard.press('Enter')
             check(ta.input_value() == '按 /demo-skill ', '打 / 挑技能：写任务时也能挑，选了写成「/技能名」')
             ta.fill('')
+            # 接力页写任务：行首打 / 出命令和技能；打 @ 出成员（做第一棒）和文件，选了成员是一个小条
+            ta.type('/')
+            page.locator('.menu .mi').first.wait_for(timeout=5000)
+            heads = page.locator('.menu .mh').all_inner_texts()
+            has_cmd = page.locator('.menu .mi').filter(has_text='对账').count() == 1 and page.locator('.menu .mi').filter(has_text='demo-skill').count() == 1
+            check(has_cmd and heads[:2] == ['命令', '技能'], f'接力页写任务：行首打 / 出命令和技能（{heads}）')
+            ta.fill('')
+            page.keyboard.press('Escape')
+            ta.click()
+            ta.type('先看 @')
+            page.locator('.menu .mi').first.wait_for(timeout=5000)
+            first = page.locator('.menu .mi').filter(has_text='做第一棒').first
+            who = first.locator('.grow > span').first.inner_text() if first.count() else ''
+            check(bool(who) and page.locator('.menu .mh').filter(has_text='文件').count() == 1, f'接力页写任务：打 @ 出成员（做第一棒）和文件（{who}）')
+            first.click()
+            chip = page.locator('.composer .attach .chip.who')
+            chip.wait_for(timeout=3000)
+            check(f'{who} 做第一棒' in chip.inner_text() and ta.input_value() == '先看 ' and page.locator('.composer .switch').filter(has_text='全自动').is_hidden(), '接力页写任务：@ 一位成员变成「X 做第一棒」小条（全自动开关收起）')
+            page.screenshot(path=os.path.join(tmp, 'who-chip.png'))
+            chip.get_by_role('button', name='去掉').click()
+            page.wait_for_timeout(200)
+            check(page.locator('.composer .attach .chip.who').count() == 0, '接力页写任务：小条点 × 去掉')
+            ta.fill('')
+            page.keyboard.press('Escape')
+            # 派活页写任务：@ 只列文件（谁指挥、谁干活在下面选）
+            page.get_by_label('页面').get_by_role('tab', name='派活').click()
+            page.wait_for_timeout(500)
+            if page.locator('#left-in').get_by_role('button', name='新任务').count():
+                page.locator('#left-in').get_by_role('button', name='新任务').first.click()
+            ta.wait_for(timeout=5000)
+            ta.click()
+            ta.type('@')
+            page.locator('.menu .mi').first.wait_for(timeout=5000)
+            check(page.locator('.menu .mi').filter(has_text='做第一棒').count() == 0 and page.locator('.menu .mh').all_inner_texts() == ['文件'], '派活页写任务：@ 只列文件')
+            ta.fill('')
+            page.keyboard.press('Escape')
+            page.get_by_label('页面').get_by_role('tab', name='接力').click()
+            page.wait_for_timeout(500)
+            if page.locator('#left-in').get_by_role('button', name='新任务').count():
+                page.locator('#left-in').get_by_role('button', name='新任务').first.click()
+            ta.wait_for(timeout=5000)
             # 设置里的技能：每个三档，点「不用」原地滑过去、存进 auto.json；之后打 / 不再列出它
             page.get_by_role('button', name='设置').click()
             page.locator('.settings').get_by_role('tab', name='技能').click()

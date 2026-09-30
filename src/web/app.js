@@ -4513,7 +4513,8 @@ function updateComposer() {
   C.seg.hidden = task || !!S.slash;
   C.pick.hidden = task || !!S.slash;
   C.plus.hidden = !!S.slash;
-  C.auto.hidden = !task || S.view === 'dispatch';
+  if (S.taskWho && (!task || S.view === 'dispatch' || !memberByName(S.taskWho))) S.taskWho = null;
+  C.auto.hidden = !task || S.view === 'dispatch' || !!S.slash || !!S.taskWho;
   C.auto.setAttribute('aria-checked', String(S.autoAfter));
   C.roles.hidden = !task || S.view !== 'dispatch' || !!S.slash || !members().length;
   if (!C.roles.hidden) drawRoles();
@@ -4540,7 +4541,7 @@ function updateComposer() {
       )
     );
   }
-  C.ta.placeholder = task ? T`要做什么` : S.slash ? S.slash.placeholder : vote ? T`投票的问题` : T`消息`;
+  C.ta.placeholder = S.slash ? S.slash.placeholder : task ? T`要做什么` : vote ? T`投票的问题` : T`消息`;
   // 谁来回答
   const people = talkers();
   if (!S.ask) {
@@ -4555,10 +4556,32 @@ function updateComposer() {
     C.pick.dataset.tip = chosen.length ? chosen.map(memberName).join(T`、`) : T`成员`;
   }
   // 带上的文件：图片是缩略图；正在传的转圈（只在变了的时候重画，缩略图不会每打一个字就重新读）
-  const attSig = JSON.stringify([S.files, S.uploading.map((u) => u.name)]);
+  const attSig = JSON.stringify([S.files, S.uploading.map((u) => u.name), S.taskWho]);
   if (C.attach.dataset.sig !== attSig) {
     C.attach.dataset.sig = attSig;
+    const whoM = S.taskWho ? memberByName(S.taskWho) : null;
     C.attach.replaceChildren(
+      // 写任务时 @ 的那位：发出去后由它做第一棒
+      ...(whoM
+        ? [h(
+            'span',
+            { class: 'chip who', 'data-tip': T`发出去后由 ${memberName(whoM)} 做第一棒` },
+            tile(whoM, 's16', whoM.cooling ? 'cooling' : ''),
+            h('span', { class: 'ell' }, T`${memberName(whoM)} 做第一棒`),
+            h(
+              'button',
+              {
+                class: 'x',
+                'aria-label': T`去掉`,
+                onclick: () => {
+                  S.taskWho = null;
+                  updateComposer();
+                },
+              },
+              icon('x')
+            )
+          )]
+        : []),
       ...S.files.map((f, i) =>
         h(
           'span',
@@ -4599,8 +4622,8 @@ function updateComposer() {
   const asked = [...S.ask].filter((n) => people.some((m) => m.name === n));
   let ok;
   if (S.uploading.length) ok = false;
-  else if (task) ok = !!text;
   else if (S.slash) ok = !S.slash.needsText || !!text;
+  else if (task) ok = !!text;
   else if (vote) ok = !!text && asked.length >= 2;
   else ok = (!!text || S.files.length > 0) && asked.length > 0;
   C.send.disabled = !ok;
@@ -4863,18 +4886,29 @@ function onComposerKey(e) {
 // 斜杠命令和 @：跟着光标弹出来
 
 const idleNow = () => !runState().running && !runState().waiting;
+/** 现在这个任务的「全自动」叫什么：派活页写的任务叫「派活」。 */
+const autoWord = () => (pageOf(threads().at(-1)) === 'dispatch' ? T`派活` : T`全自动`);
+const hasTask = () => !!S.st && !!S.st.project.init && !S.st.project.task.empty;
+
+/**
+ * 打 / 出来的命令（行首打才有）。pages：在哪几页的输入框里列（接力、派活是写新任务的输入框，群聊是说话的输入框）；
+ * 不写就是三页都列。label 可以是函数（跟着现在的任务换说法）。
+ */
 const SLASH = [
-  { key: 'step', label: T`加一步`, icon: 'plus', needsText: true, placeholder: T`这一步`, run: (text) => act(null, () => api('/api/task/edit', { op: 'add', text }), T`已加入清单`) },
-  { key: 'go', label: T`接着做`, icon: 'play', when: () => idleNow() && !!defaultWorker(), run: goDefault },
-  { key: 'auto', label: T`全自动`, icon: 'bolt', when: () => idleNow() && ready().length > 0 && !accepted(), run: () => act(null, () => startWork('/api/auto', {}), T`已开始全自动`) },
+  { key: 'step', label: T`加一步`, icon: 'plus', needsText: true, placeholder: T`这一步`, when: hasTask, run: (text) => act(null, () => api('/api/task/edit', { op: 'add', text }), T`已加入清单`) },
+  { key: 'go', label: T`接着做`, icon: 'play', pages: ['relay', 'chat'], when: () => hasTask() && idleNow() && !!defaultWorker(), run: goDefault },
+  { key: 'auto', label: autoWord, icon: 'bolt', when: () => hasTask() && idleNow() && ready().length > 0 && !accepted(), run: () => act(null, () => startWork('/api/auto', {}), T`已开始${autoWord()}`) },
   { key: 'review', label: T`复核`, icon: 'review', when: () => idleNow() && S.st.project.pending.length > 0 && !!reviewer(), run: reviewNow },
   { key: 'stop', label: T`停止`, icon: 'stop', when: () => !idleNow(), run: stopNow },
-  { key: 'task', label: T`新任务`, icon: 'plus', run: newThread },
+  { key: 'task', label: T`新任务`, icon: 'plus', pages: ['chat'], run: newThread },
+  { key: 'chat', label: T`新群聊`, icon: 'plus', pages: ['chat'], run: newChat },
   { key: 'snap', label: T`对账`, icon: 'sync', run: snapNow },
   { key: 'brief', label: T`接力本`, icon: 'book', run: openBrief },
-  { key: 'edit', label: T`编辑任务`, icon: 'pencil', run: editTaskRaw },
+  { key: 'edit', label: T`编辑任务`, icon: 'pencil', when: hasTask, run: editTaskRaw },
   { key: 'settings', label: T`设置`, icon: 'sliders', run: () => openSettings() },
 ];
+
+const slashLabel = (c) => (typeof c.label === 'function' ? c.label() : c.label);
 
 const SUG = { menu: null, items: [], hot: 0, kind: '', start: 0 };
 
@@ -4907,14 +4941,15 @@ function updateSuggest() {
   const before = v.slice(0, pos);
   let items = [];
   let kind = '';
-  // 打 /：群聊里行首是接力台的命令；任何地方都能挑技能（写任务时也行）
+  // 打 /：行首是接力台的命令（按这一页列）；任何地方都能挑技能。打 @：群聊里是成员和文件，接力页是谁做第一棒和文件，派活页是文件
+  const page = talk ? 'chat' : S.view === 'dispatch' ? 'dispatch' : 'relay';
   const sl = before.match(/(^|\s)\/([^\s/]*)$/);
-  const at = talk ? before.match(/(^|\s)@([^\s@]*)$/) : null;
+  const at = before.match(/(^|\s)@([^\s@]*)$/);
   if (sl) {
     kind = 'slash';
     SUG.start = pos - sl[2].length - 1;
     const qy = sl[2].toLowerCase();
-    const cmds = talk && !sl[1] && SUG.start === 0 ? SLASH.filter((c) => (!c.when || c.when()) && (!qy || c.label.includes(qy) || c.key.startsWith(qy))).map((c) => ({ label: c.label, icon: c.icon, cmd: c })) : [];
+    const cmds = !sl[1] && SUG.start === 0 ? SLASH.filter((c) => (!c.pages || c.pages.includes(page)) && (!c.when || c.when()) && (!qy || slashLabel(c).includes(qy) || c.key.startsWith(qy))).map((c) => ({ label: slashLabel(c), icon: c.icon, cmd: c })) : [];
     loadSkills();
     const skills = SKILLS.list
       .filter((k) => k.mode !== 'off' && (!qy || k.name.toLowerCase().includes(qy) || k.description.toLowerCase().includes(qy)))
@@ -4927,11 +4962,12 @@ function updateSuggest() {
     kind = 'at';
     SUG.start = pos - at[2].length - 1;
     const qy = at[2].toLowerCase();
-    // AI 和文件分成两组，各有一行小标题
-    const ais = talkers()
+    // AI 和文件分成两组，各有一行小标题。接力页写任务时 @ 一位成员 = 发出去后由它做第一棒；派活页谁指挥、谁干活在下面选，只列文件
+    const pool = page === 'chat' ? talkers() : page === 'relay' ? members().filter((m) => m.canWork && m.kind !== 'app') : [];
+    const ais = pool
       .filter((m) => !qy || memberName(m).toLowerCase().includes(qy) || m.name.includes(qy))
       .slice(0, 6)
-      .map((m) => ({ label: memberName(m), sub: m.tool || '', tile: tile(m, 's20'), member: m }));
+      .map((m) => ({ label: memberName(m), sub: page === 'relay' ? T`做第一棒` : m.tool || '', tile: tile(m, 's20', m.cooling ? 'cooling' : ''), member: m }));
     const files = ((S.tree && S.tree.files) || [])
       .filter((f) => !qy || f.toLowerCase().includes(qy))
       .slice(0, qy ? 8 : 4)
@@ -5000,7 +5036,10 @@ function pickSuggest(i) {
     const end = C.ta.selectionStart;
     C.ta.value = v.slice(0, SUG.start) + v.slice(end);
     C.ta.selectionStart = C.ta.selectionEnd = SUG.start;
-    if (it.member) {
+    if (it.member && C.kind === 'task') {
+      // 写任务时 @ 一位成员：发出去后由它做第一棒（只做一棒，不开全自动）
+      S.taskWho = it.member.name;
+    } else if (it.member) {
       // @ 只管这一句：发出去之后换回原来选的人。
       if (!S.atUsed) {
         S.askBefore = new Set(S.ask);
@@ -5028,6 +5067,7 @@ async function send() {
     S.files = [];
     S.options = [];
     S.slash = null;
+    S.taskWho = null;
     if (S.atUsed && S.askBefore) S.ask = S.askBefore;
     S.askBefore = null;
     S.atUsed = false;
@@ -5042,15 +5082,16 @@ async function send() {
   C.send.classList.add('busy');
   C.send.disabled = true;
   try {
-    if (C.kind === 'task') {
-      await createTask(text, p);
-      clear();
-      return;
-    }
+    // 打 / 选了要写字的命令（加一步）：发出去就是做这个命令，哪一页都一样
     if (S.slash) {
       const cmd = S.slash;
       clear();
       await cmd.run(text);
+      return;
+    }
+    if (C.kind === 'task') {
+      await createTask(text, p);
+      clear();
       return;
     }
     const setup = !S.st.project.init;
@@ -5098,17 +5139,21 @@ async function createTask(text, p = pin()) {
   const refs = S.files.map((f) => `\`${f}\``).join(' ');
   // 派活页写的任务：全自动用派活（强模型拆、弱模型做）
   const dispatch = S.view === 'dispatch';
-  // 派活页写的任务发出去就开始派（派活本来就是交给接力台做）；接力页看开关（也可能是要自己在工具里接着做）
-  const autoAfter = dispatch || S.autoAfter;
+  // 派活页写的任务发出去就开始派（派活本来就是交给接力台做）；接力页看开关（也可能是要自己在工具里接着做）；
+  // 接力页 @ 了一位成员：由它做第一棒
+  const who = !dispatch && S.taskWho && memberByName(S.taskWho) ? S.taskWho : null;
+  const autoAfter = !who && (dispatch || S.autoAfter);
   if (!S.st.project.init) await p.api('/api/init', {});
   await p.api('/api/task', { text: [lines[0].trim(), ...body, refs].filter(Boolean).join('\n'), steps, ...(dispatch ? { mode: 'dispatch' } : {}) });
   // 任务已经建在原来的项目里了；换了项目就不再替它开全自动、不动新项目的页面
   if (p.moved()) return;
-  if (autoAfter) await startWork('/api/auto', { dir: p.dir || undefined }).catch((e) => e.code !== 'cancelled' && fail(dispatch ? T`开始派活` : T`开始全自动`, e));
+  if (who) await startWork('/api/go', { who, dir: p.dir || undefined }).catch((e) => e.code !== 'cancelled' && fail(T`开始第一棒`, e));
+  else if (autoAfter) await startWork('/api/auto', { dir: p.dir || undefined }).catch((e) => e.code !== 'cancelled' && fail(dispatch ? T`开始派活` : T`开始全自动`, e));
   if (p.moved()) return;
   S.draft = false;
   S.thread = null;
   S.autoAfter = false;
+  S.taskWho = null;
   await refresh();
   await Promise.all([loadTalk(), loadTree()]);
   scrollBottom();
@@ -6111,7 +6156,8 @@ function membersPane(redraw) {
         'div',
         { class: 'mn' },
         canModel(m) ? h('button', { class: 'mname', 'aria-haspopup': 'menu', 'data-tip': T`换模型`, onclick: (e) => modelMenu(e.currentTarget, m, redraw) }, h('b', null, name), icon('down')) : h('b', null, name),
-        note ? h('small', { 'data-tip': tr(m.update || (!m.canWork && m.why ? m.why : null)) || limitsTip(m) }, note) : null
+        note ? h('small', { 'data-tip': tr(m.update || (!m.canWork && m.why ? m.why : null)) || limitsTip(m) }, note) : null,
+        newerNote(m, redraw)
       ),
       seg,
       h('button', { class: 'icon-btn del', 'aria-label': T`删除 ${name}`, 'data-tip': T`删除`, onclick: () => removeMember(m, row) }, icon('trash'))
@@ -6191,6 +6237,27 @@ function membersPane(redraw) {
 const TESTED_WORD = { partial: T`部分实测`, no: T`没实测` };
 
 /** 成员名字底下一行：在哪个工具里跑（名字就是工具名时不重复写）、实测到什么程度、现在能不能用。 */
+/**
+ * 有更新的模型（同一条线上版本更新的，或者工具说现在这个要停用）：一行灰字，后面是那个模型的名字，点了这一位换成它。
+ * 只提示，不自动换。
+ */
+function newerNote(m, redraw) {
+  const n = m.newer;
+  if (!n) return null;
+  const pick = (e) =>
+    act(e.currentTarget, () => api('/api/members/model', { name: m.name, model: n.model }), T`已换成 ${n.name}`).then((r) => {
+      if (!r) return;
+      if (S.st) S.st.members = r.members;
+      redrawMembers(redraw, m.name);
+    });
+  return h(
+    'small',
+    { class: 'newer' },
+    n.retires ? T`${aheadDay(n.retires)} 停用 · 可换成` : T`有更新的`,
+    h('button', { class: 'link', 'data-tip': T`换成 ${n.name}`, onclick: pick }, n.name)
+  );
+}
+
 function memberNote(m) {
   const name = memberName(m);
   const tool = m.kind === 'app' ? (m.tool && m.tool !== name ? T`${m.tool} 桌面版` : T`桌面程序`) : m.tool && m.tool !== name ? tr(m.tool) : '';
@@ -6218,6 +6285,18 @@ function aheadClock(ts) {
   const n = Math.round((day(d) - day(new Date())) / 86400000);
   const pre = n <= 0 ? '' : n === 1 ? T`明天 ` : n < 7 ? `${[T`周日`, T`周一`, T`周二`, T`周三`, T`周四`, T`周五`, T`周六`][d.getDay()]} ` : T`${d.getMonth() + 1}月${d.getDate()}日 `;
   return pre + clock(ts);
+}
+
+/** 将来的哪一天（不带几点）：今天、明天、一周内写星期，再远写「10月14日」。 */
+function aheadDay(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const n = Math.round((day(d) - day(new Date())) / 86400000);
+  if (n === 0) return T`今天`;
+  if (n === 1) return T`明天`;
+  if (n > 1 && n < 7) return [T`周日`, T`周一`, T`周二`, T`周三`, T`周四`, T`周五`, T`周六`][d.getDay()];
+  return T`${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 /** 删掉一位：它那一行淡出，下面的行滑上来补位。 */

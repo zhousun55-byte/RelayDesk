@@ -39,6 +39,7 @@ const writeJson = (p: string, v: unknown) => {
 /** 模型 id（工具报的、名单里写的、交接里自己写的）→ 给人看的名字。 */
 const NAMES: [string, string][] = [
   ['gpt-6-sol', 'GPT-6 Sol'],
+  ['gpt-6.1-sol', 'GPT-6.1 Sol'],
   ['GPT-6', 'GPT-6'],
   ['gpt-5.3-codex-high-fast', 'GPT-5.3 Codex'],
   ['claude-opus-5-5', 'Claude Opus 5.5'],
@@ -505,4 +506,80 @@ test('DeepSeek Harness 能换的模型：读桌面版设置里现在用的那家
   assert.deepEqual(harness.dshModels(), ['deepseek-flash', 'deepseek-v4-pro'], '只列现在用的那家接口的');
   fs.rmSync(path.join(HOME, '.dsh'), { recursive: true, force: true });
   assert.deepEqual(harness.dshModels(), []);
+});
+
+test('新出的模型：同一条线上更新的（GPT-6 Sol → GPT-6.1 Sol）和工具说要停用的（GPT-5.5 → GPT-5.6 Sol）只提示、不自动换；跟着工具默认走的不提示', async () => {
+  assert.equal(names.llmName('gpt-6.1-sol'), 'GPT-6.1 Sol');
+  assert.equal(names.newerInLine('GPT-6 Sol', ['GPT-6 Luna', 'GPT-6.1 Astra', 'GPT-6.1 Sol', 'GPT-7 Luna']), 'GPT-6.1 Sol', '同一条线（Sol）上版本更新的');
+  assert.equal(names.newerInLine('GLM-5.3 Flash', ['GLM-5.3', 'GLM-5.4', 'GLM-5.4 Flash']), 'GLM-5.4 Flash');
+  assert.equal(names.newerInLine('MiMo V2.6 Pro', ['MiMo V2.7 Flash', 'MiMo V2.7 Pro', 'MiMo V2.8 Pro']), 'MiMo V2.8 Pro', '有好几个更新的取最新');
+  assert.equal(names.newerInLine('GPT-6.1 Sol', ['GPT-6 Sol', 'GPT-5.6 Sol']), null);
+  assert.equal(names.newerInLine('Claude Opus', ['Claude Opus 5.5']), null, '没写版本号的简称本来就跟着最新的走');
+
+  // 假的 codex：终端里 0.157.0；Codex 的模型缓存里有 6.1，5.5 写着要停用
+  const bin = path.join(HOME, 'bin-newer');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\necho "codex-cli 0.157.0"\n');
+  fs.chmodSync(path.join(bin, 'codex'), 0o755);
+  const keepPath = process.env.PATH;
+  process.env.PATH = `${bin}:/usr/bin:/bin`;
+  harness.clearLocateCache();
+  writeJson(path.join(HOME, '.codex', 'models_cache.json'), {
+    models: [
+      { slug: 'gpt-6.1-sol', visibility: 'list', priority: 1 },
+      { slug: 'gpt-6-sol', visibility: 'list', priority: 3 },
+      { slug: 'gpt-5.6-sol', visibility: 'list', priority: 5 },
+      { slug: 'gpt-5.5', visibility: 'list', priority: 13, upgrade: { model: 'gpt-5.6-sol', migration_markdown: 'GPT-5.5 retires', retirement_at: '2026-10-14T00:00:00Z' } },
+    ],
+  });
+  writeJson(home('detected.json'), { at: '', harnesses: [], providers: [], apps: [], unknownKeys: [] });
+  writeJson(home('auto.json'), { order: [] });
+  writeJson(home('agents.json'), {
+    agents: [
+      { name: 'codex', kind: 'cli', cmd: 'codex', tier: 'strong', harness: 'codex', model: 'gpt-6-sol' },
+      { name: 'codex-old', kind: 'cli', cmd: 'codex', tier: 'strong', harness: 'codex', model: 'gpt-5.5' },
+    ],
+  });
+  try {
+    await detect.refreshNewerHints();
+    assert.deepEqual(detect.newerHints(), {
+      codex: { model: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' },
+      'codex-old': { model: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', retires: '2026-10-14T00:00:00Z' },
+    });
+    assert.equal(registry.loadRegistry().agents.find((a) => a.name === 'codex')?.model, 'gpt-6-sol', '不自动换');
+    // 名单里已经有一位在用 6.1：不再提示另一位换过去（同一个工具不会有两位一样的）
+    writeJson(home('agents.json'), {
+      agents: [
+        { name: 'codex', kind: 'cli', cmd: 'codex', tier: 'strong', harness: 'codex', model: 'gpt-6-sol' },
+        { name: 'codex-61', kind: 'cli', cmd: 'codex', tier: 'strong', harness: 'codex', model: 'gpt-6.1-sol' },
+        { name: 'codex-default', kind: 'cli', cmd: 'codex', tier: 'strong', harness: 'codex' },
+      ],
+    });
+    detect.staleNewerHints();
+    await detect.refreshNewerHints();
+    assert.deepEqual(detect.newerHints(), {}, '跟着工具默认走的（没写模型）也不提示');
+
+    // 用哪个 codex：ChatGPT 桌面版自带的更新就用它（终端里的不动），不比终端里的新就用终端里的
+    const desk = path.join(HOME, 'ChatGPT-codex');
+    const deskAt = (v: string) => {
+      fs.writeFileSync(desk, `#!/bin/sh\necho "codex-cli ${v}"\n`);
+      fs.chmodSync(desk, 0o755);
+      harness.clearLocateCache();
+    };
+    process.env.RELAY_CODEX_DESKTOP = desk;
+    deskAt('0.159.0');
+    const loc = harness.findHarness('codex')!.locate()!;
+    assert.deepEqual([loc.where, loc.version], [desk, '0.159.0']);
+    assert.match(loc.note ?? '', /ChatGPT 桌面版自带的 codex 0\.159\.0.*终端里的 codex 0\.157\.0 没动/);
+    deskAt('0.150.0');
+    assert.equal(harness.findHarness('codex')!.locate()!.where, path.join(bin, 'codex'));
+    deskAt('0.157.0');
+    assert.equal(harness.findHarness('codex')!.locate()!.where, path.join(bin, 'codex'), '一样新用终端里的');
+  } finally {
+    process.env.PATH = keepPath;
+    delete process.env.RELAY_CODEX_DESKTOP;
+    harness.clearLocateCache();
+    fs.rmSync(path.join(HOME, '.codex'), { recursive: true, force: true });
+    fs.rmSync(home('detected.json'), { force: true });
+  }
 });

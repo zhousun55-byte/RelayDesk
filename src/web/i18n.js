@@ -505,6 +505,15 @@ const EN = {
   '复核第 {} 棒': 'Reviewing leg {}',
   '，输入里 {} 读的缓存': ', {} of input from cache',
   '（缓存 {}）': ' ({} cached)',
+  做第一棒: 'takes the first leg',
+  '发出去后由 {} 做第一棒': '{} takes the first leg once sent',
+  '{} 做第一棒': '{} takes the first leg',
+  开始第一棒: 'start the first leg',
+  有更新的: 'Newer:',
+  '{} 停用 · 可换成': 'Retires {} · switch to',
+  '换成 {}': 'Switch to {}',
+  今天: 'today',
+  明天: 'tomorrow',
 };
 
 /** 界面上的字：`T\`第 ${n} 棒\``。 */

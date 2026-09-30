@@ -103,6 +103,8 @@ export interface HarnessSpec {
   limits?(root: string, sinceMs: number): Limit[] | null;
   /** 能换哪些模型（不花额度：它自己的 models 命令、模型缓存、简称）。这回列不出来是 null；根本列不了的工具不写。 */
   models?(loc: Located): Promise<string[] | null>;
+  /** 工具自己说的「这个模型要停用、换成哪个」（Codex 模型缓存里的 upgrade）：模型 → 建议换成的、停用时间。 */
+  upgrades?(): Record<string, { model: string; at?: string }>;
 }
 
 // ---- 小工具 ----
@@ -168,6 +170,21 @@ function codexModels(): string[] {
     .filter((m) => m.visibility !== 'hide' && strOf(m.slug))
     .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0))
     .map((m) => strOf(m.slug)!);
+}
+
+/** Codex 模型缓存里写着要停用的模型（upgrade：换成哪个、哪天停用）。 */
+function codexUpgrades(): Record<string, { model: string; at?: string }> {
+  const list = readJson(path.join(home(), '.codex', 'models_cache.json'))?.models;
+  const out: Record<string, { model: string; at?: string }> = {};
+  if (!Array.isArray(list)) return out;
+  for (const x of list) {
+    const m = obj(x);
+    const up = obj(m.upgrade);
+    const slug = strOf(m.slug);
+    const to = strOf(up.model);
+    if (slug && to && to !== slug) out[slug] = { model: to, ...(strOf(up.retirement_at) ? { at: strOf(up.retirement_at)! } : {}) };
+  }
+  return out;
 }
 
 export function firstVersion(text: string): string {
@@ -550,6 +567,38 @@ function locateOfficial(): Located | null {
 }
 
 /**
+ * ChatGPT 桌面版自己带着一份 codex 命令行（Contents/Resources/codex-cli/bin/codex，跟着桌面版更新），
+ * 常常比终端里装的新：新模型（比如 GPT-6.1 Sol）要新版命令行才认。走的是同一个 ~/.codex 登录和设置。
+ * RELAY_CODEX_DESKTOP 可以指定别的位置（测试用）。
+ */
+export function desktopCodex(): string | null {
+  const custom = process.env.RELAY_CODEX_DESKTOP;
+  if (!custom && (process.platform !== 'darwin' || !scanApps())) return null;
+  const tail = ['Contents', 'Resources', 'codex-cli', 'bin', 'codex'];
+  for (const bin of custom ? [custom] : [path.join('/Applications', 'ChatGPT.app', ...tail), path.join(home(), 'Applications', 'ChatGPT.app', ...tail)]) {
+    try {
+      fs.accessSync(bin, fs.constants.X_OK);
+      if (fs.statSync(bin).isFile()) return bin;
+    } catch {
+      /* 没装桌面版 */
+    }
+  }
+  return null;
+}
+
+/** 用哪个 codex：终端里的和 ChatGPT 桌面版自带的，哪个新用哪个（一样新用终端里的）；终端里的一点不动。 */
+function locateCodex(): Located | null {
+  const term = locateBin('codex');
+  const desk = desktopCodex();
+  if (!desk) return term;
+  const v = run([desk, '--version']);
+  const dv = firstVersion(v.out || v.err);
+  if ((v.code !== 0 && !v.out) || !/^\d+\.\d+/.test(dv)) return term;
+  if (term && !olderThan(term.version, dv)) return term;
+  return { exec: [desk], version: dv, where: desk, note: `用的是 ChatGPT 桌面版自带的 codex ${dv}（跟着桌面版更新，同一个登录）${term ? `；终端里的 codex ${term.version} 没动` : ''}。` };
+}
+
+/**
  * Claude Code 用你的官方账号（claude.ai 登录）。你把 Claude Code 默认接到了别家模型（比如 DeepSeek）时，
  * 同一个 claude 命令其实是两位：默认的（别家模型，多半算弱）和官方账号（Opus，算强）。
  * 官方账号：照常读你的用户设置，只把接别家模型的那几项盖掉（officialSettings）、去掉 ANTHROPIC_* 这些变量，就走 claude.ai 登录；默认用最新的 Opus。
@@ -606,7 +655,7 @@ const codex: HarnessSpec = {
   canReview: true,
   tested: 'yes',
   loginHint: '在终端运行 codex login。',
-  locate: () => locateBin('codex'),
+  locate: () => locateCodex(),
   login(loc) {
     if (envValue('OPENAI_API_KEY')) return { state: 'ok', detail: '用环境变量 OPENAI_API_KEY' };
     const r = run([...loc.exec, 'login', 'status'], 20_000);
@@ -635,6 +684,7 @@ const codex: HarnessSpec = {
   },
   limits: (root, sinceMs) => codexSessionLimits(root, sinceMs),
   models: async () => codexModels(),
+  upgrades: () => codexUpgrades(),
 };
 
 /**

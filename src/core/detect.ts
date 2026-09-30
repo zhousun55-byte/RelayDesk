@@ -7,7 +7,7 @@ import { checkCommand } from './launch';
 import { findHarness, HARNESSES, harnessForCommand, locateCached, clearLocateCache, shownModel, type HarnessSpec, type Level, type LoginInfo, type ModelInfo } from './harness';
 import { autoSettingsSafe } from './auto-settings';
 import { apiUsable, listModels } from './llm';
-import { appNameOf, llmName, modelChoices, topModels } from './names';
+import { appNameOf, llmName, modelChoices, newerInLine, topModels } from './names';
 import { relayHome } from './paths';
 import { scanProviders, toApiSpec, type DetectedProvider } from './providers';
 import { agentKind, agentLabel, agentModel, loadRegistry, loadRegistryForDetect, normalizeAgent, registryPath, saveRegistry } from './registry';
@@ -87,6 +87,8 @@ export function loadDetected(): DetectReport | null {
 function saveDetected(r: DetectReport): void {
   fs.mkdirSync(path.dirname(detectedPath()), { recursive: true });
   fs.writeFileSync(detectedPath(), JSON.stringify(r, null, 2) + '\n');
+  // 重新识别过（可能换了命令行、出了新模型）：提示也重新列
+  staleNewerHints();
 }
 
 export function detectHarness(spec: HarnessSpec): HarnessReport | null {
@@ -445,6 +447,69 @@ export async function modelOptions(name: string): Promise<{ listed: boolean; mod
   return { listed: true, models };
 }
 
+/** 有更新的模型：成员名 → 建议换成的（model 是调用时用的名字，name 给人看；retires = 工具说现在这个哪天停用）。 */
+export interface NewerHint {
+  model: string;
+  name: string;
+  retires?: string;
+}
+
+const hints = { at: 0, busy: false, list: {} as Record<string, NewerHint> };
+const HINTS_TTL = 6 * 3600_000;
+
+/**
+ * 现在知道的「有更新的模型」。只看自己写定了模型的成员：没写的跟着工具的默认走，工具换了它就换了。
+ * 过了 6 小时在后台重新列一次（各家列模型不花额度）；一个都不自动换，换不换由人定。
+ */
+export function newerHints(): Record<string, NewerHint> {
+  if (!hints.busy && Date.now() - hints.at > HINTS_TTL) void refreshNewerHints();
+  return hints.list;
+}
+
+/** 名单或模型变了：下次读提示时重新列。 */
+export function staleNewerHints(): void {
+  hints.at = 0;
+}
+
+export async function refreshNewerHints(): Promise<void> {
+  if (hints.busy) return;
+  hints.busy = true;
+  try {
+    const reg = loadRegistry();
+    const report = loadDetected();
+    const out: Record<string, NewerHint> = {};
+    for (const a of reg.agents) {
+      const kind = agentKind(a);
+      const pinned = kind === 'api' ? a.api?.model : kind === 'cli' ? a.model?.trim() : undefined;
+      if (!pinned) continue;
+      let opts: Awaited<ReturnType<typeof modelOptions>>;
+      try {
+        opts = await modelOptions(a.name);
+      } catch {
+        continue;
+      }
+      if (!opts.listed) continue;
+      const free = opts.models.filter((m) => !m.added && !m.current);
+      // 工具自己说这个模型要停用、换成哪个（Codex 的模型缓存）：按它说的
+      const up = kind === 'cli' ? harnessOf(a)?.upgrades?.()[pinned] : undefined;
+      const to = up ? free.find((m) => m.id === up.model) : undefined;
+      if (up && to) {
+        out[a.name] = { model: to.id, name: to.name, ...(up.at ? { retires: up.at } : {}) };
+        continue;
+      }
+      const n = newerInLine(llmName(memberModel(a, report)), free.map((m) => m.name));
+      const o = n ? free.find((m) => m.name === n) : undefined;
+      if (o) out[a.name] = { model: o.id, name: o.name };
+    }
+    hints.list = out;
+    hints.at = Date.now();
+  } catch {
+    hints.at = Date.now();
+  } finally {
+    hints.busy = false;
+  }
+}
+
 /** 模型名会原样交给工具的命令行：空格、引号、shell 符号一律不收。 */
 function checkModelName(model: string): void {
   if (!/^[^\s"'`$&|;<>\\^%!]{1,80}$/.test(model)) throw new RelayError(`模型名「${model.slice(0, 40)}」不对：不能有空格、引号和 $ & | ; 这类符号`, 'bad-agent');
@@ -468,6 +533,7 @@ export function setMemberModel(name: string, raw: string): AgentConfig {
   delete a.tierSet;
   a.tier = tierForModel(shown) === 'strong' ? 'strong' : 'weak';
   saveRegistry(reg);
+  staleNewerHints();
   return a;
 }
 
@@ -517,7 +583,10 @@ export function addModelMembers(from: string, models: string[]): AgentConfig[] {
     const agent = normalizeAgent({ ...rest, name: n, tier: tierForModel(shown) === 'strong' ? 'strong' : 'weak', ...(kind === 'api' ? { api: { ...a.api, model } } : { model }) });
     added.push(agent);
   }
-  if (added.length) saveRegistry({ ...reg, agents: [...reg.agents, ...added] });
+  if (added.length) {
+    saveRegistry({ ...reg, agents: [...reg.agents, ...added] });
+    staleNewerHints();
+  }
   return added;
 }
 
