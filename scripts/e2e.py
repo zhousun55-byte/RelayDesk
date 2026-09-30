@@ -107,6 +107,14 @@ def main():
             page.wait_for_function('() => typeof PAPER !== "undefined" && PAPER.w > 0')
             js = page.evaluate
 
+            # 新开的网页：先是这个文件夹的新任务（不停在上次那个任务上）；同一个页签里刷新，停在原来看的地方
+            check(js('() => S.draft && centerMode() === "new"'), '新开的网页：中间是新任务')
+            page.get_by_text('再加一个导入').first.click()
+            page.wait_for_timeout(600)
+            page.reload()
+            page.wait_for_function('() => typeof PAPER !== "undefined" && PAPER.w > 0 && S.st')
+            check(js('() => !S.draft && centerMode() === "thread"'), '同一个页签里刷新：不跳回新任务')
+
             # 切页：点「派活」「群聊」「接力」，滑块跟着按下，纸扫一道换成那一页的
             for name, kind in [('派活', 'dispatch'), ('群聊', 'chat'), ('接力', 'relay')]:
                 page.get_by_role('tab', name=name).click()

@@ -7006,6 +7006,19 @@ function renderAll() {
   buildComposer();
   paperInk();
   buildRight();
+  // 新开的网页（不是在同一个页签里刷新、换语言、换新版）：先是这个文件夹的新任务，不停在上次那个任务上
+  let fresh = false;
+  try {
+    fresh = !sessionStorage.getItem('relay.opened');
+    sessionStorage.setItem('relay.opened', '1');
+  } catch {
+    /* 拿不到就当新开的 */
+    fresh = true;
+  }
+  if (fresh) {
+    if (S.view === 'chat') store.set('view', (S.view = 'relay'));
+    S.draft = true;
+  }
   await refresh();
   if (S.st) S.treeOpen = new Set(store.json(`open:${S.st.project.root}`, []));
   await Promise.all([loadTalk(), loadTree()]);
