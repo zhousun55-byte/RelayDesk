@@ -214,7 +214,7 @@ def main():
             os.makedirs(cdir, exist_ok=True)
             with open(os.path.join(cdir, 'desk-000001.jsonl'), 'w') as f:
                 for row in [
-                    {'type': 'user', 'cwd': real, 'entrypoint': 'claude-desktop', 'message': {'role': 'user', 'content': '导出做成 CSV 吗'}},
+                    {'type': 'user', 'cwd': real, 'entrypoint': 'claude-desktop', 'message': {'role': 'user', 'content': '导出做成 CSV 吗' + '，顺带看一下 `python3 -m unittest discover` 为什么很慢' * 3}},
                     {'type': 'assistant', 'cwd': real, 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': '做成 CSV'}, {'type': 'tool_use', 'name': 'Read', 'input': {'file_path': 'README.md'}}]}},
                 ]:
                     f.write(json.dumps(row, ensure_ascii=False) + '\n')
@@ -222,9 +222,15 @@ def main():
             js('() => { S.sessions.at = 0; return loadSessions(); }')
             page.locator('.thread.sess-head').wait_for(timeout=5000)
             page.locator('.thread.sess-head').click()
-            page.locator('.thread.sess').filter(has_text='导出做成 CSV 吗').click()
-            page.locator('.sess .sm.ai').wait_for(timeout=5000)
-            check(page.locator('.sess .sm.user').inner_text() == '导出做成 CSV 吗' and page.locator('.sess .sm.tool').inner_text() == 'Read：README.md', '工具里的对话：左边收成一行，点开看全文（人说的、AI 答的、用了什么工具）')
+            row = page.locator('.thread.sess').filter(has_text='导出做成 CSV 吗')
+            row.wait_for(timeout=3000)
+            page.wait_for_timeout(400)
+            box = js('''() => { const r = document.querySelector('.thread.sess'), t = r.querySelector('.t'); const a = r.getBoundingClientRect(), b = t.getBoundingClientRect();
+              return { h: Math.round(a.height), dir: getComputedStyle(r).flexDirection, inside: b.left >= a.left - 1 && b.right <= a.right + 1, ell: t.scrollWidth > t.clientWidth }; }''')
+            check(box['h'] <= 40 and box['dir'] == 'row' and box['inside'] and box['ell'], f'工具里的对话：标题太长时一行、末尾省略，不跑出左边（{box}）')
+            row.click()
+            page.locator('.sess-log .sm.ai').wait_for(timeout=5000)
+            check(page.locator('.sess-log .sm.user').inner_text().startswith('导出做成 CSV 吗') and page.locator('.sess-log .sm.tool').inner_text() == 'Read：README.md', '工具里的对话：左边收成一行，点开看全文（人说的、AI 答的、用了什么工具）')
             page.locator('.thread.sess-head').click()
             page.wait_for_function('() => !document.querySelector(".thread.sess")', timeout=3000)
             check(page.locator('.thread.sess-head').get_attribute('aria-expanded') == 'false', '工具里的对话：再点一下收起（原地淡出，不整列重画）')
@@ -239,19 +245,6 @@ def main():
             page.locator('#left-in').get_by_role('button', name='新任务').first.click()
             ta = page.locator('.composer textarea')
             ta.wait_for(timeout=5000)
-            # 空白页的几种开头：点「修问题」填进格式、〔〕那截选中；接着打字换掉它；删空了几种开头回来
-            starts = page.locator('.hero .starts')
-            is_off = '() => document.querySelector(".hero .starts").classList.contains("off")'
-            ta.fill('')
-            check(starts.locator('.start').all_inner_texts() == ['看懂项目', '修问题', '加功能'] and starts.locator('.fmt').count() == 1, '写新任务：输入框底下三种开头和一行格式说明')
-            page.screenshot(path=os.path.join(tmp, 'starters.png'))
-            starts.get_by_role('button', name='修问题').click()
-            sel = js('() => { const t = document.querySelector(".composer textarea"); return t.value.slice(t.selectionStart, t.selectionEnd); }')
-            check(ta.input_value().startswith('修好：') and sel == '〔哪里、出了什么问题〕' and js(is_off), f'点「修问题」：填进格式，要换的那截选中（{sel}），几种开头淡掉')
-            page.keyboard.type('导出的 CSV 乱码')
-            check(ta.input_value().startswith('修好：导出的 CSV 乱码\n- 找到原因'), '接着打字：换掉选中的那截')
-            ta.fill('')
-            check(not js(is_off), '删空了：几种开头回来')
             ta.click()
             ta.fill('')
             ta.type('按 /demo')

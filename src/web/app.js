@@ -2166,64 +2166,13 @@ function renderHero(mode) {
           )
         )
       : h('div', { class: 'under', hidden: true });
-    CE.hero.replaceChildren(heroBar(), h('div', { class: 'hero-in' }, head, notice, C.wrap, starters(chat), under));
-    syncStarters();
+    CE.hero.replaceChildren(heroBar(), h('div', { class: 'hero-in' }, head, notice, C.wrap, under));
   } else if (C.wrap.parentNode !== CE.hero.querySelector('.hero-in')) {
     const inner = CE.hero.querySelector('.hero-in');
-    inner.insertBefore(C.wrap, inner.querySelector('.starts'));
+    inner.insertBefore(C.wrap, inner.querySelector('.under'));
   }
   syncHeroBar();
   setComposerKind(chat ? 'talk' : 'task');
-}
-
-/**
- * 空白页输入框底下的几种开头：点一下填进一段写好格式的字，〔〕里要换的那一截选中，接着打字就换掉。
- * 写任务：第一行是任务，「- 」开头的每一行是一步。群聊：顺手切到对应的方式。打了字就淡掉，删空了再回来。
- */
-const STARTERS = {
-  task: [
-    { label: T`看懂项目`, icon: 'book', text: T`读懂这个项目，写一份说明\n- 主要的文件夹各管什么\n- 怎么运行、怎么测试\n- 容易出错的地方` },
-    { label: T`修问题`, icon: 'review', text: T`修好：〔哪里、出了什么问题〕\n- 找到原因\n- 改好，补一个测试` },
-    { label: T`加功能`, icon: 'plus', text: T`加上：〔要什么功能〕\n- 列出要改的文件\n- 做好，补测试` },
-  ],
-  talk: [
-    { label: T`问看法`, icon: 'chat', mode: 'turn', text: T`〔一个方案或问题〕\n最大的风险在哪，怎么改？` },
-    { label: T`比做法`, icon: 'list', mode: 'solo', text: T`〔要做的事〕\n各写一种做法，说清利弊。` },
-    { label: T`投票定`, icon: 'ballot', mode: 'vote', text: T`〔要定下的事〕选哪个？` },
-  ],
-};
-
-function starters(chat) {
-  const list = STARTERS[chat ? 'talk' : 'task'];
-  return h(
-    'div',
-    { class: 'starts' },
-    h(
-      'div',
-      { class: 'start-row' },
-      list.map((st, i) =>
-        h('button', { class: 'start', type: 'button', style: `--i:${i}`, onclick: () => useStarter(st) }, icon(st.icon), st.label)
-      )
-    ),
-    chat ? null : h('small', { class: 'fmt' }, T`第一行是任务，「- 」开头的每一行是一步`)
-  );
-}
-
-function useStarter(st) {
-  if (st.mode) S.mode = st.mode;
-  C.ta.value = st.text;
-  C.ta.focus();
-  const a = st.text.indexOf('〔');
-  const b = st.text.indexOf('〕', a);
-  if (a >= 0 && b > a) C.ta.setSelectionRange(a, b + 1);
-  else C.ta.setSelectionRange(st.text.length, st.text.length);
-  onComposerInput();
-}
-
-/** 输入框里有字、或者选了 / 命令：几种开头淡掉（位置留着，下面的不跳）。 */
-function syncStarters() {
-  const el = CE.hero && CE.hero.querySelector('.starts');
-  if (el) el.classList.toggle('off', !!C.ta.value.trim() || !!S.slash);
 }
 
 /** 空白页顶上：收起了的侧栏在这里留一颗按钮。和下面的内容分开画，收放侧栏时只有按钮淡进淡出。 */
@@ -4263,7 +4212,7 @@ async function resumeSession(sess) {
 
 /** 对话正文：人说的、AI 答的、用了什么工具（一行灰字）。 */
 function sessionBody(data) {
-  const list = h('div', { class: 'sess' });
+  const list = h('div', { class: 'sess-log' });
   if (data.cut) list.append(h('div', { class: 'empty-note' }, T`只留了最近的一截`));
   if (!data.messages.length) list.append(h('div', { class: 'empty-note' }, T`还没人开口`));
   // 每一问上面写时间（不是今天的带日期），好按时间找
@@ -4727,7 +4676,6 @@ function updateComposer() {
   else if (vote) ok = !!text && asked.length >= 2;
   else ok = (!!text || S.files.length > 0) && asked.length > 0;
   C.send.disabled = !ok;
-  syncStarters();
   autoGrow();
   syncSegs(C.box);
 }

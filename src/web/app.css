@@ -2888,57 +2888,6 @@ button.busy::after {
   font-size: 16px;
   padding: 15px 18px 6px;
 }
-/* 空白页输入框底下的几种开头：一枚接一枚升上来；打了字淡掉，位置留着 */
-.starts {
-  display: grid;
-  gap: 8px;
-  transition: opacity 0.2s var(--ease), transform 0.24s var(--ease), visibility 0s;
-}
-.starts.off {
-  opacity: 0;
-  transform: translateY(-3px);
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.16s var(--ease), transform 0.2s var(--ease), visibility 0s 0.2s;
-}
-.start-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.start {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 32px;
-  padding: 0 13px 0 11px;
-  border-radius: 8px;
-  background: var(--slip);
-  box-shadow: inset 0 0 0 1px var(--hair), var(--shadow-slip);
-  font-size: 13px;
-  color: var(--ink-2);
-  animation: rise 0.36s calc(0.08s + var(--i, 0) * 50ms) var(--ease) backwards;
-  transition: box-shadow 0.18s, color 0.14s, transform 0.22s var(--ease);
-}
-.start svg {
-  width: 14px;
-  height: 14px;
-  color: var(--ink-3);
-}
-.start:hover {
-  color: var(--ink);
-  transform: translateY(-1px);
-  box-shadow: inset 0 0 0 1px var(--rule), 0 14px 24px -18px rgba(0, 0, 0, 0.3);
-}
-.start:active {
-  transform: translateY(0) scale(0.98);
-}
-.starts .fmt {
-  padding-left: 2px;
-  font-size: 12px;
-  color: var(--ink-3);
-  animation: rise 0.36s 0.24s var(--ease) backwards;
-}
 .hero .under {
   display: flex;
   justify-content: flex-end;
@@ -4215,18 +4164,18 @@ button.busy::after {
 }
 
 /* ---------- 工具里的对话：人说的靠右一块浅灰，AI 答的照常排，用了什么工具一行灰字 ---------- */
-.sess {
+.sess-log {
   display: flex;
   flex-direction: column;
   gap: 10px;
   max-width: 760px;
   padding: 4px 0 32px;
 }
-.sess .sm.user {
+.sess-log .sm.user {
   align-self: flex-end;
   max-width: 82%;
 }
-.sess .sm.user .note {
+.sess-log .sm.user .note {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   padding: 8px 12px;
@@ -4234,10 +4183,10 @@ button.busy::after {
   background: var(--fog);
   font-size: 13.5px;
 }
-.sess .sm.ai {
+.sess-log .sm.ai {
   font-size: 13.5px;
 }
-.sess .sm.tool {
+.sess-log .sm.tool {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4262,13 +4211,13 @@ button.busy::after {
   color: var(--ink-2);
 }
 
-.sess .sm.user {
+.sess-log .sm.user {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 3px;
 }
-.sess .sm.user .cap {
+.sess-log .sm.user .cap {
   font: 11px/1 var(--mono);
   color: var(--ink-4);
 }
