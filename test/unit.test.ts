@@ -390,6 +390,9 @@ test('交接：认出身份、状态、各节；只建了空模板的不算写�
   // DeepSeek 派活时的真实写法（2026-09-27 派活大任务）：开头是范围和读了什么，以前挑成「只做了第 2 步……」
   const scoped = parseHandoff('# 交接：DeepSeek Harness · deepseek-flash\n\n## 做了什么\n\n- 开工先读 `.relay/接力本.md`、`.relay/任务.md`。\n- 我是弱模型，按接力本要求跳过「先复核」，直接做第 3 步。\n- 只做了第 2 步「行内 Markdown」，没碰后面的步骤。\n- 新建 `markdown.py`：`html_escape` 和 `render_inline`。\n');
   assert.equal(scoped.summary, '新建 `markdown.py`：`html_escape` 和 `render_inline`。');
+  // 2026-09-30 派活实测：GLM-5.3、DeepSeek 开头写「接第 N 步」「按派活说明跳过「先复核」」，以前挑成这一句
+  const took = parseHandoff('# 交接：智谱接口 · glm-5.3\n\n## 做了什么\n\n- 接第 2 步（div）。本棒是强模型，按派活说明跳过「先复核」一节，没动 `.relay/复核/`。\n- 按派活说明，弱模型跳过「先复核」一节，不复核别的棒。\n- `calc.py`：新增 `div`，除以 0 往 stderr 写一句、返回 1。\n');
+  assert.equal(took.summary, '`calc.py`：新增 `div`，除以 0 往 stderr 写一句、返回 1。');
 });
 
 test('复核结论：认出复核的是第几棒、结论是哪一种', () => {
