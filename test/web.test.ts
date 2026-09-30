@@ -227,6 +227,33 @@ result = [ends(t0), ends(t1)];`,
   assert.deepEqual(run(null, { ...oldGo, mode: 'single', status: 'stopped', result: '已停止。' }), [[], []], '只做一棒停了：那一棒的小条上写了，不画终点');
 });
 
+test('网页：换掉的任务有换掉那一刻的验收，终点画它（不再挂当时全自动的结果）；换掉时还没做完的不画终点，清单只能看', () => {
+  const code = ['msOf', 'rangeOf', 'inRange', 'pageThreads', 'accepted', 'streamItems'].map(pick).join('\n\n');
+  const run = (accept: unknown) => {
+    const ctx: Record<string, unknown> = {};
+    runWeb(
+      `
+const t0 = { id: 't0', title: '旧任务', from: '2026-09-25T13:30:00Z', to: '2026-09-25T14:07:00Z', stints: [], items: [{ text: '一', done: true }], accept: ${JSON.stringify(accept)} };
+const t1 = { id: 't1', title: '新任务', from: '2026-09-25T14:07:00Z', to: null, stints: [], current: true };
+const go = { id: 'g1', mode: 'auto', status: 'done', startedAt: '2026-09-25T13:42:00Z', updatedAt: '2026-09-25T13:49:00Z', result: '验收通过：清单 1/1' };
+const S = { st: { project: { task: { title: '新任务', body: '', items: [] }, threads: [t0, t1], lastRollback: null, protocol: 'ok', go, acceptance: { state: 'working', headline: '', items: [] } } }, talk: { status: { speaking: [], queue: [] } }, dismissed: '' };
+const threads = () => S.st.project.threads;
+const threadStints = () => [];
+const looks = { key: '' };
+${code}
+result = streamItems(t0).filter((it) => it.stop).map((it) => String(it.key).split(':')[0]);`,
+      ctx
+    );
+    return JSON.parse(JSON.stringify(ctx.result)) as string[];
+  };
+  assert.deepEqual(run({ state: 'accepted', headline: '验收通过：清单 1/1 全部打勾', items: [] }), ['acc'], '换掉那一刻的验收');
+  assert.deepEqual(run({ state: 'working', headline: '清单 0/1', items: [] }), [], '换掉时还没做完：不画终点');
+  assert.deepEqual(run(null), ['res'], '旧版账本没记：还看当时全自动的结果');
+  assert.match(pick('pastChecklist'), /class: 'checks past'/);
+  assert.doesNotMatch(pick('pastChecklist'), /onclick/, '旧清单只能看，不能勾');
+  assert.match(pick('verdictEl'), /a && !past \? h\('button'/, '旧任务的终点不能点开现在的验收');
+});
+
 test('网页交接单：交接的每一节是一行（做了、没做完、拿不准、验证），「状态」写在右上角；没按格式写的整篇放一行', () => {
   const code = ['SECTION', 'handoffForm'].map(pick).join('\n\n');
   const run = (text: string) => {

@@ -219,18 +219,20 @@ export function restoreTaskChecks(root: string, oldRaw: string): { unchecked: st
   return { unchecked, checked };
 }
 
-/** 存档里旧任务的标题（按存档的先后）。 */
-export function archivedTaskTitles(root: string): string[] {
+/** 存档里的旧任务（原文，按存档的先后）。 */
+export function archivedTasks(root: string): string[] {
   let raw = '';
   try {
     raw = fs.readFileSync(path.join(root, DONE_TASKS_REL), 'utf8');
   } catch {
     return [];
   }
-  return raw
-    .replace(/\r/g, '')
-    .split(/\n---\n/)
-    .slice(1)
+  return raw.replace(/\r/g, '').split(/\n---\n/).slice(1);
+}
+
+/** 存档里旧任务的标题（按存档的先后）。 */
+export function archivedTaskTitles(root: string): string[] {
+  return archivedTasks(root)
     .map((block) => parseTask(block).title)
     .filter(Boolean);
 }

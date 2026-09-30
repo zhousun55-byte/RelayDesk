@@ -1679,6 +1679,19 @@ button.busy::after {
   box-shadow: none;
   color: var(--paper);
 }
+/* 换掉的任务：清单只能看，不加悬停、按下的效果 */
+.checks.past li:hover {
+  background: none;
+}
+.checks.past .box:hover {
+  box-shadow: inset 0 0 0 1.5px var(--ink-4);
+}
+.checks.past li.done .box:hover {
+  box-shadow: none;
+}
+.checks.past .box:active {
+  transform: none;
+}
 /* 刚打上的勾：方框落一下，勾一笔画出来（只在点的那一下，重画出来的不再画） */
 .checks li.ticked .box {
   animation: land 0.42s var(--pop);

@@ -12,6 +12,7 @@ import { ensureSnapRepo, takeSnapshot } from '../core/snap';
 import { setThreadHidden } from './hidden';
 import { withLock } from './lock';
 import { markBase, refreshBrief } from './track';
+import { acceptanceNow } from './view';
 
 /**
  * 接入：让一个文件夹开始接力。可以重复执行（缺什么补什么）。
@@ -133,10 +134,31 @@ export function newTask(root: string, text: string, items: string[] = [], mode?:
 
 function switchTask(root: string, t: string, items: string[], mode?: 'dispatch'): void {
   const before = readTask(root);
+  // 旧任务被换掉那一刻的清单和验收记下来：网页上翻回旧任务，清单、打的勾和「验收通过」都还在
+  const prevCopy = before.empty ? undefined : saveTaskCopy(root);
+  let prevAccept: { state: string; headline: string; items: { text: string }[] } | undefined;
+  if (!before.empty) {
+    try {
+      const a = acceptanceNow(root, loadLedger(root), before);
+      prevAccept = { state: a.state, headline: a.headline, items: a.items.map((x) => ({ text: x.text })) };
+    } catch {
+      /* 算不出来就不记，网页上只是没有终点 */
+    }
+  }
   const doc = setTask(root, t, items);
   const snap = takeSnapshot(root, '换任务').sha;
   const taskCopy = saveTaskCopy(root);
-  appendLedger(root, { type: 'task', ts: new Date().toISOString(), title: doc.title, snap, prev: before.empty ? '' : before.title, ...(taskCopy ? { taskCopy } : {}), ...(mode ? { mode } : {}) });
+  appendLedger(root, {
+    type: 'task',
+    ts: new Date().toISOString(),
+    title: doc.title,
+    snap,
+    prev: before.empty ? '' : before.title,
+    ...(taskCopy ? { taskCopy } : {}),
+    ...(mode ? { mode } : {}),
+    ...(prevCopy ? { prevCopy } : {}),
+    ...(prevAccept ? { prevAccept } : {}),
+  });
   refreshBrief(root);
 }
 

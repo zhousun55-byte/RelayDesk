@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { acceptance, pendingWhy, type Acceptance, type AcceptInput } from '../core/acceptance';
 import { loadAutoSettings } from '../core/auto-settings';
-import { countedReviews, KIND_WORD, loadLedger, statusWord, stintTitle, taskChanges, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
-import { archivedTaskTitles, handoffFilled, readHandoff, readReview, readTask, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
+import { countedReviews, KIND_WORD, loadLedger, statusWord, stintTitle, taskChanges, tierWord, verdictWord, type LedgerView, type Stint, type TaskEvent } from '../core/ledger';
+import { archivedTasks, archivedTaskTitles, handoffFilled, parseTask, readHandoff, readReview, readTask, readTaskCopy, taskComplete, taskProgress, type TaskDoc, type TaskItem } from '../core/notes';
 import { whoName } from '../core/names';
 import { protocolState } from '../core/protocol';
 import { untilText } from '../core/quota';
@@ -71,6 +71,10 @@ export interface ThreadView {
   key: string;
   /** 在左边删掉了（只是不列出，棒和账本都还在）。 */
   hidden?: boolean;
+  /** 被换掉的任务：换掉那一刻的清单（每一步、打没打勾）。正在做的那一段看 project.task。 */
+  items?: { text: string; done: boolean }[];
+  /** 被换掉的任务：换掉那一刻的验收（旧版账本没记）。 */
+  accept?: { state: string; headline: string; items: { text: string }[] };
 }
 
 export interface ProjectView {
@@ -195,6 +199,7 @@ export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadVie
     { from: v.init.ts, title: first },
     ...changes.map((e, i) => ({ from: e.ts, title: i === last - 1 ? task.title || e.title : changes[i + 1].prev || e.title, ...(e.mode ? { mode: e.mode } : {}) })),
   ];
+  const finals = finalTasks(root, changes, spans);
   const out: ThreadView[] = [];
   const hidden = hiddenThreads(root);
   let carry: string | null = null;
@@ -225,9 +230,45 @@ export function threadsOf(root: string, v: LedgerView, task: TaskDoc): ThreadVie
       key: sp.from,
       // 正在做的那一段不按这个藏（删它走 init.ts 的 deleteTask：清单一起清空，它就不是正在做的了）
       ...(!current && hidden.has(sp.from) ? { hidden: true } : {}),
+      ...(!current && finals[i]?.length ? { items: finals[i] } : {}),
+      ...(!current && changes[i]?.prevAccept ? { accept: changes[i].prevAccept } : {}),
     });
   });
   return out;
+}
+
+/**
+ * 每一段被换掉时清单的样子（第 i 段被 changes[i] 换掉）：换任务时存的副本（prevCopy）、删除任务时存的（deleted）；
+ * 旧版账本两样都没有，就从「做完的任务」存档里对——存档按换任务的先后追加，从后往前按标题对齐，对不上就不再往前对。
+ */
+function finalTasks(root: string, changes: TaskEvent[], spans: { title: string }[]): ({ text: string; done: boolean }[] | undefined)[] {
+  const itemsOf = (raw: string | null) => (raw === null ? undefined : parseTask(raw).items.map((x) => ({ text: x.text, done: x.done })));
+  const out = changes.map((e) => itemsOf(readTaskCopy(root, e.prevCopy ?? e.deleted)));
+  if (changes.every((e) => e.prevCopy || e.deleted || e.prev === '')) return out;
+  const blocks = archivedTasks(root);
+  let j = blocks.length - 1;
+  for (let i = changes.length - 1; i >= 0 && j >= 0; i--) {
+    const e = changes[i];
+    // 删除任务、旧任务是空的：换的时候没存档
+    if (e.deleted || e.prev === '') continue;
+    const block = parseTask(blocks[j]);
+    if (block.title !== (e.prev ?? spans[i].title)) break;
+    j--;
+    if (!out[i]) out[i] = block.items.map((x) => ({ text: x.text, done: x.done }));
+  }
+  return out;
+}
+
+/** 这个任务现在的验收（网页顶上、线路终点用；换任务时记下旧任务那一刻的）。 */
+export function acceptanceNow(root: string, v: LedgerView, t: TaskDoc): Acceptance {
+  const { cfg, error: configError } = projectConfigSafe(root);
+  let finalRequired = true;
+  try {
+    finalRequired = loadAutoSettings().finalReview;
+  } catch {
+    /* 全自动的设置坏了：按要终审算 */
+  }
+  return accepted(root, v, { ledger: v, task: t, gateCommand: cfg.gate.command.trim(), ...(configError ? { configError } : {}), finalRequired });
 }
 
 /** 上一次对指纹的结果（网页一秒问好几次，git status 不用每次都跑）。 */
@@ -260,12 +301,6 @@ export function projectView(root: string): ProjectView {
   const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
   const views = v.stints.map((x) => toView(x, dropped, liveSummary(root, x)));
   const lr = v.lastRollback;
-  let finalRequired = true;
-  try {
-    finalRequired = loadAutoSettings().finalReview;
-  } catch {
-    /* 全自动的设置坏了：按要终审算 */
-  }
   const undone = !!lr && v.events.some((e) => e.type === 'rollback' && e.restored?.length && new Date(e.ts).getTime() > new Date(lr.ts).getTime());
   return {
     root,
@@ -279,7 +314,7 @@ export function projectView(root: string): ProjectView {
     stints: [...views].reverse(),
     lastRollback: lr && !lr.restored ? { ts: lr.ts, label: lr.label, dropped: lr.dropped, undone, ...(lr.left?.length ? { left: lr.left } : {}), ...(lr.interrupted ? { interrupted: true } : {}), ...(lr.task ? { task: { unchecked: lr.task.unchecked, ...(lr.task.missing ? { missing: true } : {}) } } : {}) } : null,
     config: { gate: cfg.gate.command, protectedPaths: cfg.protectedPaths, ...(configError ? { error: configError } : {}) },
-    acceptance: accepted(root, v, { ledger: v, task: t, gateCommand: cfg.gate.command.trim(), ...(configError ? { configError } : {}), finalRequired }),
+    acceptance: acceptanceNow(root, v, t),
     threads: threadsOf(root, v, t),
   };
 }

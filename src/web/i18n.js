@@ -387,6 +387,8 @@ const EN = {
   采纳: 'Adopt',
   '每一票 · {}': 'Every vote · {}',
   '（{} 张弃权）': (n) => ` (${n} abstained)`,
+  做完了: 'Done',
+  没做: 'Not done',
   '投 {}': 'voted {}',
   '弃权{}': 'abstained{}',
   '已投方案 {}': 'Voted for {}',

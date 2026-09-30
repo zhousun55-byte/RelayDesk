@@ -3047,7 +3047,7 @@ function streamItems(t) {
   const n = pageThreads().indexOf(t) + 1;
   if (title) {
     // 正在改标题：定时刷新不重画它
-    items.push({ key: `task:${t.id}`, at: -Infinity, keep: latest && S.editingTitle, sig: JSON.stringify(latest ? [title, p.task.body, p.task.items, p.task.rules, t.from, n] : [title, t.from, n]), make: () => headEl(t, latest) });
+    items.push({ key: `task:${t.id}`, at: -Infinity, keep: latest && S.editingTitle, sig: JSON.stringify(latest ? [title, p.task.body, p.task.items, p.task.rules, t.from, n] : [title, t.from, n, t.items]), make: () => headEl(t, latest) });
   }
   // 这一棒变了（交接写完了、有了复核……）：展开的全文也要重新取，不能一直显示第一次展开时的样子。
   const stints = threadStints(t);
@@ -3064,11 +3064,13 @@ function streamItems(t) {
   const g = p.go;
   // 全自动当时做完了，后来退回、加了一步：验收已经不是「通过」，那句「验收通过」不能再挂在终点上。
   const outdated = g && g.status === 'done' && latest && !!p.acceptance && !accepted();
-  const res = g && g.mode === 'auto' && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && !outdated && S.dismissed !== g.id && inRange(rangeOf(t), msOf(g.startedAt || g.updatedAt)) ? g : null;
-  const a = latest && p.acceptance && p.acceptance.state !== 'working' ? p.acceptance : null;
+  // 更早的任务：换掉那一刻记下的验收（旧版账本没记，就看当时全自动的结果）；换掉时还没做完的，清单上看得出来，不画终点
+  const a = latest ? (p.acceptance && p.acceptance.state !== 'working' ? p.acceptance : null) : t.accept && t.accept.state !== 'working' ? t.accept : null;
+  // 记下了换掉那一刻的验收（哪怕那时还没做完）：以它为准，当时全自动的结果可能已经过时了
+  const res = !(!latest && t.accept) && g && g.mode === 'auto' && g.result && ['done', 'needs-human', 'failed', 'stopped'].includes(g.status) && !outdated && S.dismissed !== g.id && inRange(rangeOf(t), msOf(g.startedAt || g.updatedAt)) ? g : null;
   if (res || a) {
     const last = stints.length ? Math.max(...stints.map((s) => msOf(s.endedAt || s.startedAt))) : msOf(t.from);
-    items.push({ key: res ? `res:${res.id}:${res.status}` : `acc:${t.id}`, at: res ? msOf(res.updatedAt) || Infinity : last + 1, stop: true, sig: JSON.stringify([res && res.result, a && [a.state, a.headline, a.items]]), make: () => verdictEl(res, a) });
+    items.push({ key: res ? `res:${res.id}:${res.status}` : `acc:${t.id}`, at: res ? msOf(res.updatedAt) || Infinity : last + 1, stop: true, sig: JSON.stringify([res && res.result, a && [a.state, a.headline, a.items]]), make: () => verdictEl(res, a, !latest) });
   }
   items.sort((a, b) => a.at - b.at);
   if (latest && p.protocol !== 'ok') items.push({ key: `proto:${p.protocol}`, sig: p.protocol, make: protocolLine });
@@ -3210,9 +3212,25 @@ function headEl(t, latest) {
     h('div', { class: 'cap' }, dayClock(t.from)),
     latest ? h('h2', { class: 'ttl', role: 'button', tabindex: '0', 'data-tip': T`改标题`, html: inline(esc(title)), onclick: editTitle, onkeydown: (e) => e.key === 'Enter' && editTitle() }) : h('h2', { class: 'ttl', html: inline(esc(title)) }),
     sub ? h('p', { class: 'sub' }, sub.length > 400 ? `${sub.slice(0, 400)}…` : sub) : null,
-    latest ? checklist(task) : null,
+    latest ? checklist(task) : t.items && t.items.length ? pastChecklist(t.items) : null,
     latest && task.rules ? h('details', { class: 'rules' }, h('summary', { class: 'link' }, T`约定`), h('div', { class: 'doc-md', html: md(task.rules) })) : null,
     latest ? iconBtn(T`编辑任务`, 'pencil', editTaskRaw, '', 'edit') : null
+  );
+}
+
+/** 换掉的任务：换掉那一刻的清单，只能看（勾是那时候的样子），右键能复制一步。 */
+function pastChecklist(items) {
+  return h(
+    'ul',
+    { class: 'checks past' },
+    items.map((it) =>
+      h(
+        'li',
+        { class: it.done ? 'done' : null, oncontextmenu: (e) => ctx(e, [{ label: T`复制`, icon: 'copy', run: () => copyToast(it.text) }]) },
+        h('span', { class: 'box', role: 'img', 'aria-label': it.done ? T`做完了` : T`没做` }, icon('check')),
+        h('span', { class: 'step' }, h('span', { html: inline(esc(it.text)) }))
+      )
+    )
   );
 }
 
@@ -3408,7 +3426,8 @@ function rollbackLine(rb) {
  * 线路的终点：和别的站一样大的圆圈（通过了是实心的），旁边一行字说结果、一行说还差什么。
  * 最新的任务看验收；更早的任务没有验收记录，就写当时全自动的结果。
  */
-function verdictEl(g, a) {
+/** past：换掉的任务那一刻的验收，只能看（点开是现在这个任务的验收，不能挂在旧任务上）。 */
+function verdictEl(g, a, past = false) {
   const state = a ? a.state : { done: 'accepted', 'needs-human': 'blocked', failed: 'failed', stopped: 'stopped' }[g.status];
   const [ic, title] = { accepted: ['check', T`验收通过`], blocked: ['warn', a ? T`验收没过` : T`全自动停止`], unknown: ['unknown', T`没法验收`], failed: ['warn', T`全自动出错`], stopped: ['stop', T`全自动已停止`] }[state];
   const why = a ? (a.state === 'accepted' ? tr(a.headline.replace(/^验收通过：/, '')) : a.items.map((i) => tr(i.text)).join(T`；`)) : tr(g.result.replace(/^(验收通过|验收没过|没法验收|全自动停止|全自动已停止)：/, ''));
@@ -3417,7 +3436,7 @@ function verdictEl(g, a) {
     'div',
     { class: `stop verdict ${state}` },
     h('span', { class: 'no', 'aria-hidden': 'true' }, ic === 'unknown' ? '?' : icon(ic)),
-    a ? h('button', { class: 'vt', 'aria-haspopup': 'dialog', onclick: acceptPanel }, body) : h('div', { class: 'vt' }, body),
+    a && !past ? h('button', { class: 'vt', 'aria-haspopup': 'dialog', onclick: acceptPanel }, body) : h('div', { class: 'vt' }, body),
     why ? h('p', { class: 'why' }, why) : null,
     g ? h('span', { class: 'cap' }, [clock(g.updatedAt), g.mode === 'auto' ? (g.dispatch ? T`派活` : T`全自动`) : '', g.stints && g.stints.length ? T`${g.stints.length} 棒` : '', lasted(g.startedAt, g.updatedAt), tokenSplit(g.stints || [])].filter(Boolean).join(' · ')) : null,
     g

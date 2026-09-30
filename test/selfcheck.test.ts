@@ -842,3 +842,26 @@ test('右键删除：群聊挪进 .relay/已删除的群聊/、左边不再列�
   assert.throws(() => init.restoreTask(root, id2), /撤销不了/);
   assert.deepEqual(shape(), [['第一个任务', false, false], ['第二个任务', false, true], ['第三个任务', true, false]]);
 });
+
+test('换了新任务：旧任务那一段还带着换掉那一刻的清单（打没打勾）和验收；旧版账本没记的，从「做完的任务」存档里对回清单', () => {
+  const { root } = project('past-task', '做导出', ['写导出函数', '写测试']);
+  notes.editTask(root, { op: 'toggle', index: 0, done: true });
+  init.newTask(root, '做导入', ['读文件']);
+  init.newTask(root, '做筛选');
+  const past = () => view.projectView(root).threads.map((t) => [t.title, t.current, t.items ?? null, t.accept?.state ?? null]);
+  const want = [
+    ['做导出', false, [{ text: '写导出函数', done: true }, { text: '写测试', done: false }], 'working'],
+    ['做导入', false, [{ text: '读文件', done: false }], 'working'],
+    ['做筛选', true, null, null],
+  ];
+  assert.deepEqual(past(), want);
+  assert.match(view.projectView(root).threads[0].accept!.headline, /清单 1\/2/);
+  // 旧版账本：换任务那一笔没有 prevCopy、prevAccept，清单照样从存档里对回来（验收那时没记，就没有）
+  const file = path.join(root, '.relay', 'journal.jsonl');
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+  fs.writeFileSync(file, lines.map((e) => JSON.stringify({ ...e, prevCopy: undefined, prevAccept: undefined })).join('\n') + '\n');
+  assert.deepEqual(past(), want.map(([title, cur, items]) => [title, cur, items, null]));
+  // 存档对不上（有人手改了存档）：不乱配，那几段就没有清单
+  fs.writeFileSync(path.join(root, '.relay', '做完的任务.md'), '# 做完的任务\n\n---\n\n# 任务\n\n别的任务\n\n## 进度\n\n- [x] 别的一步\n');
+  assert.deepEqual(past().map((t) => t[2]), [null, null, null]);
+});

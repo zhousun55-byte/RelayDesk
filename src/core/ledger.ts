@@ -196,6 +196,10 @@ export interface TaskEvent {
   deleted?: string;
   /** 撤销删除任务：撤销的是哪一笔（那一笔的时间）。这一删一撤两笔都不算换任务。 */
   undo?: string;
+  /** 被换掉的旧任务最后的样子（任务清单副本编号）：网页上翻回旧任务，清单和打的勾还在。旧版账本没有。 */
+  prevCopy?: string;
+  /** 被换掉那一刻旧任务的验收（网页上旧任务线路的终点）。旧版账本没有。 */
+  prevAccept?: { state: string; headline: string; items: { text: string }[] };
 }
 
 /** 账上算数的换任务：删除任务又撤销了的，那两笔都不算（像没删过一样）。 */
