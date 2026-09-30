@@ -2166,13 +2166,64 @@ function renderHero(mode) {
           )
         )
       : h('div', { class: 'under', hidden: true });
-    CE.hero.replaceChildren(heroBar(), h('div', { class: 'hero-in' }, head, notice, C.wrap, under));
+    CE.hero.replaceChildren(heroBar(), h('div', { class: 'hero-in' }, head, notice, C.wrap, starters(chat), under));
+    syncStarters();
   } else if (C.wrap.parentNode !== CE.hero.querySelector('.hero-in')) {
     const inner = CE.hero.querySelector('.hero-in');
-    inner.insertBefore(C.wrap, inner.querySelector('.under'));
+    inner.insertBefore(C.wrap, inner.querySelector('.starts'));
   }
   syncHeroBar();
   setComposerKind(chat ? 'talk' : 'task');
+}
+
+/**
+ * 空白页输入框底下的几种开头：点一下填进一段写好格式的字，〔〕里要换的那一截选中，接着打字就换掉。
+ * 写任务：第一行是任务，「- 」开头的每一行是一步。群聊：顺手切到对应的方式。打了字就淡掉，删空了再回来。
+ */
+const STARTERS = {
+  task: [
+    { label: T`看懂项目`, icon: 'book', text: T`读懂这个项目，写一份说明\n- 主要的文件夹各管什么\n- 怎么运行、怎么测试\n- 容易出错的地方` },
+    { label: T`修问题`, icon: 'review', text: T`修好：〔哪里、出了什么问题〕\n- 找到原因\n- 改好，补一个测试` },
+    { label: T`加功能`, icon: 'plus', text: T`加上：〔要什么功能〕\n- 列出要改的文件\n- 做好，补测试` },
+  ],
+  talk: [
+    { label: T`问看法`, icon: 'chat', mode: 'turn', text: T`〔一个方案或问题〕\n最大的风险在哪，怎么改？` },
+    { label: T`比做法`, icon: 'list', mode: 'solo', text: T`〔要做的事〕\n各写一种做法，说清利弊。` },
+    { label: T`投票定`, icon: 'ballot', mode: 'vote', text: T`〔要定下的事〕选哪个？` },
+  ],
+};
+
+function starters(chat) {
+  const list = STARTERS[chat ? 'talk' : 'task'];
+  return h(
+    'div',
+    { class: 'starts' },
+    h(
+      'div',
+      { class: 'start-row' },
+      list.map((st, i) =>
+        h('button', { class: 'start', type: 'button', style: `--i:${i}`, onclick: () => useStarter(st) }, icon(st.icon), st.label)
+      )
+    ),
+    chat ? null : h('small', { class: 'fmt' }, T`第一行是任务，「- 」开头的每一行是一步`)
+  );
+}
+
+function useStarter(st) {
+  if (st.mode) S.mode = st.mode;
+  C.ta.value = st.text;
+  C.ta.focus();
+  const a = st.text.indexOf('〔');
+  const b = st.text.indexOf('〕', a);
+  if (a >= 0 && b > a) C.ta.setSelectionRange(a, b + 1);
+  else C.ta.setSelectionRange(st.text.length, st.text.length);
+  onComposerInput();
+}
+
+/** 输入框里有字、或者选了 / 命令：几种开头淡掉（位置留着，下面的不跳）。 */
+function syncStarters() {
+  const el = CE.hero && CE.hero.querySelector('.starts');
+  if (el) el.classList.toggle('off', !!C.ta.value.trim() || !!S.slash);
 }
 
 /** 空白页顶上：收起了的侧栏在这里留一颗按钮。和下面的内容分开画，收放侧栏时只有按钮淡进淡出。 */
@@ -3236,7 +3287,7 @@ function checklist(task) {
   );
 }
 
-function talkRow(r) {
+function talkRow(r, live) {
   if (r.kind === 'human') {
     const { body, files } = splitFiles(r.text);
     return h(
@@ -3247,8 +3298,8 @@ function talkRow(r) {
       files.length ? h('div', { class: 'att' }, files.map(fileEl)) : null
     );
   }
-  if (r.kind === 'system') return h('div', { class: 'sys' }, r.text);
-  return aiRow(r);
+  if (r.kind === 'system') return h('div', { class: 'sys' }, tr(r.text));
+  return aiRow(r, false, live);
 }
 
 /** 长回答（超过 14 行或 900 字）先收起，点「展开」看全文：高度从收起的样子长开。 */
@@ -3292,15 +3343,62 @@ function quoteInto(text) {
   C.ta.setSelectionRange(C.ta.value.length, C.ta.value.length);
 }
 
-function aiRow(r, compact) {
+function aiRow(r, compact, live) {
   const name = nameOf(r.who, r.model);
+  // 总结：名字后面写「总结」；有「结论」一行、还没采纳的，可以采纳（写进任务的约定）
+  const d = r.summary ? chatData() : null;
+  const adopted = !!d && d.rows.some((x) => x.adopt === r.ts);
+  const canAdopt = !!r.summary && live && !adopted && /^\s*[#*\-\s]*结论\s*[：:]/m.test(r.text);
   return h(
     'div',
-    { class: 'ai', oncontextmenu: (e) => ctx(e, msgMenuItems(r.text)) },
+    { class: `ai${r.summary ? ' summary' : ''}`, oncontextmenu: (e) => ctx(e, msgMenuItems(r.text)) },
     h('span', { class: 'who-tile', 'data-tip': memberByName(r.agent) ? memberTip(memberByName(r.agent)) : name }, tile({ agent: r.agent, label: r.who, model: r.model })),
-    h('div', null, h('div', { class: 'who' }, h('b', null, name), h('span', { class: 'time' }, compact ? clock(r.ts) : dayClock(r.ts))), ...foldable(h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) }), r.text)),
+    h(
+      'div',
+      null,
+      h('div', { class: 'who' }, h('b', null, name), r.summary ? h('span', { class: 'tag' }, adopted ? T`总结 · 已采纳` : T`总结`) : null, h('span', { class: 'time' }, compact ? clock(r.ts) : dayClock(r.ts))),
+      ...foldable(h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) }), r.text),
+      canAdopt ? h('div', { class: 'sum-acts' }, h('button', { class: 'btn small primary', 'data-tip': T`把「结论」写进任务的约定`, onclick: (e) => act(e.currentTarget, () => api('/api/talk/adopt', { ts: r.ts }), T`已写进任务的约定`).then(loadTalk) }, T`采纳`)) : null
+    ),
     compact ? null : h('div', { class: 'hover-acts' }, iconBtn(T`复制`, 'copy', () => copyToast(r.text)))
   );
+}
+
+/** 请谁总结：派活指挥的那位能说话就是它，不然是能说话的强模型里排最前的，再不然是第一位。 */
+function summarizer() {
+  const people = talkers().filter((m) => !m.cooling);
+  return people.find((m) => m.name === S.st.settings.lead) || people.find((m) => m.tier === 'strong') || people[0] || null;
+}
+
+/** 最后一问之后有两份以上回答、还没总结、没人在说：可以总结。 */
+function canSummarize(d = chatData()) {
+  if (!d || S.chat) return false;
+  const rows = d.rows || [];
+  const at = rows.map((r) => r.kind).lastIndexOf('human');
+  if (at < 0) return false;
+  const after = rows.slice(at + 1);
+  const st = d.status;
+  return after.filter((r) => r.kind === 'ai' && !r.error && !r.summary).length >= 2 && !after.some((r) => r.summary) && !(st && (st.speaking.length || st.queue.length));
+}
+
+function summarizeWith(m, btn) {
+  if (!m) return toast(T`没有能总结的成员`, { bad: true });
+  return act(btn || null, () => api('/api/talk/summary', { who: m.name }), T`${memberName(m)} 在总结`).then(loadTalk);
+}
+
+/** 一问答完：底下一行「总结」，点了选请谁总结（默认的那位在最前）。 */
+function summaryBar() {
+  const pick = (e) => {
+    const first = summarizer();
+    const people = talkers().filter((m) => !m.cooling);
+    const list = first ? [first, ...people.filter((m) => m.name !== first.name)] : people;
+    openMenu(
+      e.currentTarget,
+      list.map((m) => ({ label: memberName(m), sub: tr(m.tool) || '', tile: tile(m, 's20'), run: () => summarizeWith(m) })),
+      { side: 'top' }
+    );
+  };
+  return h('div', { class: 'sum-bar' }, h('button', { class: 'btn small line', 'aria-haspopup': 'menu', 'data-tip': T`把这几份回答并成一份：结论、一致的、分歧、建议、下一步`, onclick: pick }, icon('review'), T`总结`));
 }
 
 function roundBox(rows) {
@@ -3314,7 +3412,7 @@ function typingLine(st) {
     { class: 'typing' },
     h('span', { class: 'tiles' }, st.speaking.map((x) => tile({ agent: x.agent, label: x.label })), st.queue.map((x) => tile({ agent: x.agent, label: x.label }, '', 'cooling'))),
     h('span', { class: 'dots' }, h('i'), h('i'), h('i')),
-    names.length ? T`${names.join(T`、`)} 正在输入` : T`排队中`
+    st.summing ? T`${nameOf(st.speaking.find((x) => x.agent === st.summing)?.label || st.summing)} 正在总结` : names.length ? T`${names.join(T`、`)} 正在输入` : T`排队中`
   );
 }
 
@@ -3875,13 +3973,14 @@ function chatItems(d, live) {
         items.push({ key: `round:${r.round}`, at: msOf(r.ts), group: g, make: () => roundBox(g.rows) });
       }
       g.rows.push(r);
-    } else items.push({ key: `r:${r.ts}:${r.who}`, at: msOf(r.ts), sig: JSON.stringify([r.text, r.error, looks.key]), make: () => talkRow(r) });
+    } else items.push({ key: `r:${r.ts}:${r.who}`, at: msOf(r.ts), sig: JSON.stringify([r.text, r.error, looks.key, r.summary && d.rows.some((x) => x.adopt === r.ts), live]), make: () => talkRow(r, live) });
   }
   for (const it of items) if (it.group) it.sig = JSON.stringify([it.group.rows.map((r) => [r.ts, r.text, r.error]), looks.key]);
   for (const v of d.votes) items.push({ key: `v:${v.id}`, at: voteBorn(v), sig: JSON.stringify([v, live, looks.key]), make: () => voteCard(v, live) });
   items.sort((a, b) => a.at - b.at);
   const st = d.status;
   if (st && (st.speaking.length || st.queue.length)) items.push({ key: 'typing', sig: JSON.stringify([st, looks.key]), make: () => typingLine(st) });
+  else if (live && canSummarize(d)) items.push({ key: 'sum-bar', sig: looks.key, make: summaryBar });
   return items;
 }
 
@@ -4553,7 +4652,8 @@ function updateComposer() {
     C.pick.dataset.sig = askSig;
     const chosen = people.filter((m) => S.ask.has(m.name));
     C.pick.replaceChildren(chosen.length ? stack(chosen, (m) => (m.cooling ? 'cooling' : ''), 6) : h('span', { class: 'none' }, T`成员`), icon('down', 'caret'));
-    C.pick.dataset.tip = chosen.length ? chosen.map(memberName).join(T`、`) : T`成员`;
+    // 名字点开就看得到：停上去只写几位
+    C.pick.dataset.tip = chosen.length ? T`${chosen.length} 位回答` : T`成员`;
   }
   // 带上的文件：图片是缩略图；正在传的转圈（只在变了的时候重画，缩略图不会每打一个字就重新读）
   const attSig = JSON.stringify([S.files, S.uploading.map((u) => u.name), S.taskWho]);
@@ -4627,6 +4727,7 @@ function updateComposer() {
   else if (vote) ok = !!text && asked.length >= 2;
   else ok = (!!text || S.files.length > 0) && asked.length > 0;
   C.send.disabled = !ok;
+  syncStarters();
   autoGrow();
   syncSegs(C.box);
 }
@@ -4902,6 +5003,7 @@ const SLASH = [
   { key: 'stop', label: T`停止`, icon: 'stop', when: () => !idleNow(), run: stopNow },
   { key: 'task', label: T`新任务`, icon: 'plus', pages: ['chat'], run: newThread },
   { key: 'chat', label: T`新群聊`, icon: 'plus', pages: ['chat'], run: newChat },
+  { key: 'sum', label: T`总结`, icon: 'review', pages: ['chat'], when: () => canSummarize(), run: () => summarizeWith(summarizer()) },
   { key: 'snap', label: T`对账`, icon: 'sync', run: snapNow },
   { key: 'brief', label: T`接力本`, icon: 'book', run: openBrief },
   { key: 'edit', label: T`编辑任务`, icon: 'pencil', when: hasTask, run: editTaskRaw },
@@ -5989,6 +6091,7 @@ function settingsBody(tab, redraw) {
       setRow(T`额度用完时等恢复`, T`所有 AI 的额度都用完时，等最早恢复的那一位接着做；关掉就直接停下。`, sw('waitForQuota', T`额度用完时等恢复`)),
       setRow(T`做完后终审`, T`清单全部打勾后，由强模型把整件事从头再走一遍，过了才算完成。`, sw('finalReview', T`做完后终审`)),
       setRow(T`边做边复核`, T`派活时，干活的做下一步，指挥的同时只看不改地复核上一步；有问题就在清单里插一步去改。会多用一些强模型的额度。`, sw('sideReview', T`边做边复核`)),
+      setRow(T`卡住的那一步交给指挥`, T`派活时，弱模型在同一步上没做下去（换过人还不行，或者没人可换），这一步由指挥的那位做，做完接着交给弱模型。关掉就停在这一步。`, sw('escalate', T`卡住的那一步交给指挥`)),
       setSec(T`对话`),
       setRow(T`接着同一段对话`, T`同一个任务里，一位成员的下一棒顺着它上一棒在工具里的那段话说下去，一个任务在工具里就是一整段对话。关掉则每棒另起一段，token 用得少。`, sw('sameThread', T`接着同一段对话`)),
       setRow(T`列出工具里的对话`, T`接力页左边列出在这个文件夹里、用 Claude Code 和 Codex 开过的对话，点开是全文。别的文件夹不读。`, sw('showSessions', T`列出工具里的对话`)),
@@ -6323,37 +6426,30 @@ function field(label, input) {
   return h('label', { class: 'field' }, h('span', null, label), input);
 }
 
-/** 添加成员的弹窗：几个输入框加强弱，点「添加」存进名单。 */
-function addSheet(title, inputs, agentOf, redraw) {
+/**
+ * 添加成员的弹窗：几个输入框加强弱，点「添加」存进名单。top：放在输入框上面的（识别到的程序）。
+ * 返回 setTier（按挑的程序换强弱）和「添加」按钮（核实过才能点）。
+ */
+function addSheet(title, inputs, agentOf, redraw, top = null) {
   let tier = 'weak';
+  const setTier = (t) => {
+    tier = t;
+    for (const b of seg.querySelectorAll(':scope > button')) b.setAttribute('aria-pressed', String(b.dataset.t === tier));
+    syncSegs(layer);
+  };
   const seg = h(
     'div',
     { class: 'seg' },
-    ['strong', 'weak'].map((t) =>
-      h(
-        'button',
-        {
-          'aria-pressed': String(tier === t),
-          'data-t': t,
-          onclick: () => {
-            tier = t;
-            for (const b of seg.querySelectorAll(':scope > button')) b.setAttribute('aria-pressed', String(b.dataset.t === tier));
-            syncSegs(layer);
-          },
-        },
-        t === 'strong' ? T`强` : T`弱`
-      )
-    )
+    ['strong', 'weak'].map((t) => h('button', { 'aria-pressed': String(tier === t), 'data-t': t, onclick: () => setTier(t) }, t === 'strong' ? T`强` : T`弱`))
   );
+  const save = h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, () => api('/api/workers/save', { agent: { ...agentOf(), tier, tierSet: true } }), T`已添加`).then((r) => r && (close(), redraw())) }, T`添加`);
   const close = sheet({
     title,
-    body: h('div', null, inputs.map(([label, input]) => field(label, input)), h('div', { class: 'field' }, h('span', null, T`强弱`), seg)),
-    foot: [
-      h('button', { class: 'btn ghost', onclick: () => close() }, T`取消`),
-      h('button', { class: 'btn primary', onclick: (e) => act(e.currentTarget, () => api('/api/workers/save', { agent: { ...agentOf(), tier, tierSet: true } }), T`已添加`).then((r) => r && (close(), redraw())) }, T`添加`),
-    ],
+    body: h('div', null, top, inputs.map(([label, input]) => field(label, input)), h('div', { class: 'field' }, h('span', null, T`强弱`), seg)),
+    foot: [h('button', { class: 'btn ghost', onclick: () => close() }, T`取消`), save],
   });
   syncSegs(layer);
+  return { setTier, save };
 }
 
 function addApiSheet(redraw) {
@@ -6372,21 +6468,96 @@ function addApiSheet(redraw) {
   );
 }
 
+/**
+ * 添加桌面程序：上面是识别到的（这台电脑上装着、核实过、还没加的），点一个就把程序、名字、强弱填好；
+ * 自己写程序名时有提示，并当场核对这台电脑上有没有这个程序，没有就加不了（接力台后台存之前还会再核实一次）。
+ */
 function addAppSheet(redraw) {
-  const name = h('input', { class: 'input', placeholder: 'trae' });
-  const app = h('input', { class: 'input', placeholder: 'Trae' });
-  addSheet(
+  const app = h('input', { class: 'input', placeholder: 'Trae', list: 'relay-app-names', autocomplete: 'off', spellcheck: 'false' });
+  const name = h('input', { class: 'input', placeholder: 'trae', spellcheck: 'false' });
+  const names = h('datalist', { id: 'relay-app-names' });
+  const check = h('small', { class: 'app-check' });
+  const hint = h('small', { class: 'app-check' });
+  const picks = h('div', { class: 'app-picks', hidden: true });
+  let data = null;
+  let named = false;
+  let lastKnown = null;
+  const slug = (x) =>
+    x
+      .trim()
+      .replace(/\.app$/i, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  const ctl = addSheet(
     T`添加桌面程序`,
     [
+      [T`程序`, h('div', null, app, names, check, hint)],
       [T`名字`, name],
-      [T`程序`, app],
     ],
     () => {
-      const a = app.value.trim();
-      return { name: name.value.trim(), label: a, kind: 'app', cmd: `open -a ${/\s/.test(a) ? `"${a}"` : a} {{dir}}` };
+      const a = app.value.trim().replace(/\.app$/i, '');
+      const k = data ? data.known.find((x) => x.name.toLowerCase() === a.toLowerCase()) : null;
+      return { name: name.value.trim() || slug(a), label: k ? k.label : a, kind: 'app', cmd: `open -a ${/\s/.test(a) ? `"${a}"` : a} {{dir}}` };
     },
-    redraw
+    redraw,
+    picks
   );
+  // 程序名对上这台电脑上的程序才能添加；读不到程序列表（不是 macOS）就不拦，存的时候后台再核实
+  const verify = () => {
+    const v = app.value.trim().replace(/\.app$/i, '');
+    const hit = data && data.all.length ? data.all.find((x) => x.name.toLowerCase() === v.toLowerCase()) : null;
+    const known = data ? data.known.find((k) => k.name.toLowerCase() === v.toLowerCase()) : null;
+    // 名字没手动改过：认得的程序用它的成员名，别的按程序名写
+    if (!named) name.value = known ? known.id : slug(v);
+    for (const b of picks.querySelectorAll('.pick')) b.setAttribute('aria-pressed', String(!!known && b.dataset.app === known.name));
+    const checkable = !!data && data.all.length > 0;
+    swapText(check, !v || !checkable ? '' : hit ? T`这台电脑上有：${hit.path}` : T`这台电脑上没有叫「${v}」的程序`);
+    check.classList.toggle('bad', !!v && checkable && !hit);
+    swapText(hint, known ? tr(known.hint) : '');
+    // 写出一个认得的程序：强弱跟着它（只在刚对上的那一下，之后手动改的不再盖掉）
+    if (known && known !== lastKnown) ctl.setTier(known.tier);
+    lastKnown = known;
+    ctl.save.disabled = !v || (checkable && !hit);
+  };
+  ctl.save.disabled = true;
+  app.addEventListener('input', verify);
+  name.addEventListener('input', () => (named = !!name.value.trim()));
+  api('/api/apps')
+    .then((r) => {
+      data = r;
+      names.replaceChildren(...r.all.map((x) => h('option', { value: x.name })));
+      const free = r.known.filter((k) => !k.added);
+      if (free.length) {
+        picks.replaceChildren(
+          h('span', { class: 'cap' }, T`识别到的`),
+          ...free.map((k) =>
+            h(
+              'button',
+              {
+                class: 'chip pick',
+                type: 'button',
+                'data-tip': k.path,
+                'data-app': k.name,
+                'aria-pressed': 'false',
+                onclick: () => {
+                  app.value = k.name;
+                  named = false;
+                  verify();
+                },
+              },
+              icon('check'),
+              k.name
+            )
+          )
+        );
+        show(picks, true);
+        if (!still()) [...picks.children].forEach((el, i) => el.animate([{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 260, delay: stagger(i), easing: EASE.ease, fill: 'backwards' }));
+      }
+      verify();
+    })
+    .catch(() => verify());
+  setTimeout(() => app.focus(), 60);
 }
 
 /**

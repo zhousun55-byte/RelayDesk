@@ -135,6 +135,9 @@ function fakeScript(name: 'claude' | 'codex'): string {
     "    own=$(sed -n 's/.*其中方案 \\([A-L]\\) 是你自己出的.*/\\1/p' \"$P\" | head -1)",
     '    pick=A; [ "$own" = A ] && pick=B',
     '    say "投票：$pick\\n理由：$NAME 觉得这个更稳"',
+    // 总结：照格式写五节
+    "  elif grep -q '现在写总结' \"$P\"; then",
+    '    say "结论：$NAME 觉得先做导出\\n一致的：都同意先做导出\\n分歧：无\\n建议：先做 CSV\\n下一步：写导出函数"',
     "  elif grep -q '请给出你的方案' \"$P\"; then",
     '    say "$NAME 的方案：先做最小能用的版本\\n理由：快，出问题好退回"',
     "  elif grep -q '这一轮是「对比」' \"$P\"; then",
@@ -202,6 +205,12 @@ function fakeScript(name: 'claude' | 'codex'): string {
     `  [ -n "$R" ] && printf '# 复核：第 %s 棒终审\\n\\n- 复核人：%s\\n- 结论：%s\\n' "$SELF" "$WHO" "\${FAKE_FINAL_VERDICT:-没问题}" > "$R"`,
     `  [ -n "$H" ] && printf '# 交接：%s\\n\\n- 状态：全部完成\\n\\n## 做了什么\\n\\n- 终审过了，整件事没问题\\n' "$WHO" > "$H"`,
     '  say "终审完了"',
+    '  exit 0',
+    'fi',
+    // stuck-b：派到「建 b.txt」这一步就写「卡住了」，别的步照常做
+    'if [ "$MODE" = stuck-b ] && grep -q "建 b.txt" "$P"; then',
+    `  [ -n "$H" ] && mkdir -p "$(dirname "$H")" && printf '# 交接：%s\\n\\n- 状态：卡住了\\n\\n## 做了什么\\n\\n- 没做成\\n\\n## 没做完 / 下一步\\n\\n- 这一步照写的做不通\\n' "$WHO" > "$H"`,
+    '  say "这一步做不下去"',
     '  exit 0',
     'fi',
     'echo "$NAME 干了一步" >> work.txt',

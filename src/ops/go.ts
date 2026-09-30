@@ -31,7 +31,8 @@ import { applyReviews, closeStint, gateStint, projectConfig, projectConfigSafe, 
  * 派活（任务是在「派活」页写的）：强模型先把任务拆成小步，干活只派弱模型、一棒一步。中途不停下来复核：
  * 「边做边复核」打开时，弱模型做下一步的同时，指挥的强模型只看不改地复核做完的那几步（结论接力台代写，
  * 有问题就在清单里插一步去改），不占干活的时间；关掉时和以前一样，清单做完后终审的强模型一起复核。
- * 弱模型都用不了时不换强模型干活，等额度或停下。
+ * 弱模型都用不了时不换强模型干活，等额度或停下；只有某一步弱模型确实做不下去（卡住了、连着两棒没推进），
+ * 才请指挥的强模型做这一步，做完接着交给弱模型（「卡住的那一步交给指挥」，默认开）。
  * 一棒一棒都记在账本里，所以随时能停、能接着跑。
  */
 
@@ -334,6 +335,9 @@ class GoRunner {
   private handover = '';
   /** 上一棒临时出错、下一棒点名再派的那位。 */
   private retryNext: string | null = null;
+  /** 派活：每一步（按原话）弱模型没做下去的次数；谁卡在哪一步上（那一步做成了，它就能接着干后面的）。 */
+  private readonly stepFails = new Map<string, number>();
+  private readonly stuckOn = new Map<string, string>();
   /** 派活时正在边做边复核的那一件（同时只有一件）。 */
   private side: SideJob | null = null;
   private sideHandle: RunHandle | null = null;
@@ -1170,7 +1174,19 @@ class GoRunner {
         // 上一棒临时出错的那位：点名再派它一次（按顺序挑会把刚出过错的排到后面）
         const again = this.retryNext ? this.ready(this.retryNext) : null;
         this.retryNext = null;
-        const w = again ?? (dispatch ? this.ready(this.crewName(v)) ?? this.pick('weak') : this.pick('any'));
+        let w = again ?? (dispatch ? this.ready(this.crewName(v)) ?? this.pick('weak') : this.pick('any'));
+        const step = dispatch ? nextStep(task) : undefined;
+        // 派活：同一步弱模型没做下去——两次，或者一次而且没有别的弱模型可换——请指挥的做这一步（学 smartplan：失败了才升级，不凭感觉）
+        const fails = step ? (this.stepFails.get(step.text) ?? 0) : 0;
+        let escalated = false;
+        if (dispatch && step && this.settings.escalate && (fails >= 2 || (fails >= 1 && !w))) {
+          const lead = this.ready(this.leadName(v)) ?? this.pick('strong');
+          if (lead) {
+            w = lead;
+            escalated = true;
+            this.handover = `接手原因：清单第 ${step.index} 步弱模型${fails >= 2 ? `做了 ${fails} 次` : ''}没做下去，请指挥的 ${nameOf(lead)} 做这一步；做完接着交给弱模型。`;
+          }
+        }
         if (!w && dispatch) {
           // 弱模型都用不了：按「等额度」等最早恢复的弱模型，或者停下。不换强模型干活，也不复核（做到哪写在页面上，复核你来点）。
           const c = this.earliestCooling('weak');
@@ -1184,12 +1200,29 @@ class GoRunner {
           return this.end('needs-human', `全自动停止：没有能派活的成员，都没额度或没登录${failed ? `；这次出错的：${failed}` : ''}`);
         }
         const before = taskProgress(task).done;
-        // 派活：做完、还没复核的几棒，趁这一棒干活的时候请指挥的只看不改地复核
-        this.startSide(v);
-        const o = await this.runStint(w, 'work', [], dispatch ? nextStep(task) : undefined);
+        // 派活：做完、还没复核的几棒，趁这一棒干活的时候请指挥的只看不改地复核（指挥的自己在做这一步时不同时复核）
+        if (!escalated) this.startSide(v);
+        const o = await this.runStint(w, 'work', [], step);
         stints++;
         if (o.stint.status === 'stopped') continue;
         if (o.stint.status === 'quota') continue;
+        if (escalated && step) {
+          const moved = o.changed || taskProgress(readTask(this.root)).done > before;
+          if (o.stint.status !== 'failed' && moved) {
+            // 这一步做成了：卡在这一步上的弱模型接着干后面的
+            this.stepFails.delete(step.text);
+            for (const [name, at] of [...this.stuckOn]) {
+              if (at !== step.text) continue;
+              this.stuckOn.delete(name);
+              this.failed.delete(name);
+              this.strikes.delete(name);
+            }
+            continue;
+          }
+          if (o.stint.status === 'failed' && TRANSIENT.test(o.error ?? '')) continue;
+          const said = o.error ? `：${clip(plain(o.error), 160)}` : o.handoff?.next ? `，原话：${clip(plain(o.handoff.next), 200)}` : '';
+          return this.end('needs-human', `全自动停止：清单第 ${step.index} 步弱模型没做下去，指挥的 ${nameOf(w)} 也没做成${said}`);
+        }
         if (o.stint.status === 'failed' && !o.changed) {
           // 临时的错（连不上、超时、服务器忙）先原地再派它一次；连着两次、或者不是临时的，这次不再派它，按设置里的顺序换下一位
           const n = (this.strikes.get(w.name) ?? 0) + 1;
@@ -1210,7 +1243,11 @@ class GoRunner {
           idle++;
           if (o.handoff?.state === 'stuck' || idle >= 2) {
             if (dispatch) {
-              // 派活：这位弱模型这次不再派，换别的弱模型。
+              // 派活：这位弱模型这次不再派，换别的弱模型；记下卡在哪一步（这一步没人做得下去就请指挥的做）。
+              if (step) {
+                this.stepFails.set(step.text, (this.stepFails.get(step.text) ?? 0) + 1);
+                this.stuckOn.set(w.name, step.text);
+              }
               this.failed.add(w.name);
               this.handover = `接手原因：${nameOf(w)} ${o.handoff?.state === 'stuck' ? '说做不下去了' : '连着两棒没推进'}，按设置里的顺序换人。`;
               idle = 0;

@@ -4,8 +4,8 @@ import { RelayError } from '../core/errors';
 import { loadLedger, requireInit } from '../core/ledger';
 import { readTask, taskProgress } from '../core/notes';
 import { canTalk, findAgent, loadRegistry } from '../core/registry';
-import { archiveTalk, checkSpeakers, readTalk, resumeTalk, say, speakerName, talkPath, talkSessions, type TalkContext, type TalkRow } from '../core/talk';
-import { adoptOption, castHumanVote, readVotes, startVote, type Vote } from '../core/vote';
+import { adoptSummary, archiveTalk, checkSpeakers, readTalk, resumeTalk, say, speakerName, summarize, talkPath, talkSessions, type TalkContext, type TalkRow } from '../core/talk';
+import { adoptOption, appendRule, castHumanVote, readVotes, startVote, type Vote } from '../core/vote';
 import { refreshBrief } from '../ops/track';
 import { c, info, ok } from './print';
 import { findRoot } from './relay';
@@ -36,7 +36,16 @@ const nameOf = (n: string) => {
 
 function rowText(r: TalkRow): string {
   if (r.kind === 'system' || r.error) return c.dim(r.text);
-  return `${c.bold(r.kind === 'human' ? '我' : r.who)}：${r.text}`;
+  return `${c.bold(r.kind === 'human' ? '我' : r.summary ? `${r.who}（总结）` : r.who)}：${r.text}`;
+}
+
+/** 请谁总结：说了就是它；没说就是能参加群聊的强模型里排最前的，再没有就是第一位。 */
+function summarizer(opt?: string): string {
+  if (opt) return opt;
+  const all = loadRegistry().agents.filter(canTalk);
+  const pick = all.find((a) => a.tier === 'strong') ?? all[0];
+  if (!pick) throw new RelayError('没有能参加群聊的 AI。', 'no-speaker');
+  return pick.name;
 }
 
 /** 一次投票：每个方案几票、谁出的（投完才揭晓），每一票的理由。 */
@@ -81,8 +90,26 @@ export function talkCommand(): Command {
     .option('--clear', '新群聊（正在用的这段存档）')
     .option('--list', '列出存档的群聊')
     .option('--resume <序号>', '接着一段存档的群聊（--list 里的序号，或者它的名字）')
-    .action(async (words: string[], opts: { ask?: string; solo?: boolean; clear?: boolean; list?: boolean; resume?: string }) => {
+    .option('--sum [名字]', '总结：请一位把最后一问的几份回答并成一份（不写名字就是排最前的强模型）')
+    .option('--adopt-sum', '采纳最近一条总结：把它的「结论」写进任务的约定')
+    .action(async (words: string[], opts: { ask?: string; solo?: boolean; clear?: boolean; list?: boolean; resume?: string; sum?: string | boolean; adoptSum?: boolean }) => {
       const root = findRoot();
+      if (opts.sum) {
+        const before = readTalk(root, 100000).length;
+        const r = summarize(root, summarizer(typeof opts.sum === 'string' ? opts.sum : undefined), talkContext(root));
+        console.log(c.dim(`请 ${nameOf(r.queued)} 总结……`));
+        await r.done;
+        for (const row of readTalk(root, 100000).slice(before)) console.log(`\n${rowText(row)}`);
+        return;
+      }
+      if (opts.adoptSum) {
+        const last = [...readTalk(root, 100000)].reverse().find((x) => x.summary);
+        if (!last) throw new RelayError('这段群聊里还没有总结。', 'no-summary');
+        const row = adoptSummary(root, last.ts, (line) => appendRule(root, line, '群聊总结定下'));
+        if (loadLedger(root).init) refreshBrief(root);
+        ok(row.text);
+        return;
+      }
       if (opts.clear) {
         const to = archiveTalk(root);
         ok(to ? `已开始新群聊，原来那段存档为 ${to}` : '已开始新群聊');

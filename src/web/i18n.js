@@ -150,6 +150,20 @@ const EN = {
   新建群聊: 'start a new chat',
   识别中: 'Detecting',
   '{} 位 AI': (n) => many(n, 'AI', 'AIs'),
+  '{} 位回答': (n) => `${many(n, 'member')} answering`,
+  看懂项目: 'Understand the project',
+  修问题: 'Fix a bug',
+  加功能: 'Add a feature',
+  问看法: 'Get opinions',
+  比做法: 'Compare approaches',
+  投票定: 'Decide by vote',
+  '读懂这个项目，写一份说明\n- 主要的文件夹各管什么\n- 怎么运行、怎么测试\n- 容易出错的地方': 'Read this project and write a guide\n- What each main folder is for\n- How to run and test it\n- Where things tend to break',
+  '修好：〔哪里、出了什么问题〕\n- 找到原因\n- 改好，补一个测试': 'Fix: 〔where, and what goes wrong〕\n- Find the cause\n- Fix it and add a test',
+  '加上：〔要什么功能〕\n- 列出要改的文件\n- 做好，补测试': 'Add: 〔which feature〕\n- List the files to change\n- Build it and add tests',
+  '〔一个方案或问题〕\n最大的风险在哪，怎么改？': '〔a plan or a question〕\nWhat is the biggest risk, and how to fix it?',
+  '〔要做的事〕\n各写一种做法，说清利弊。': '〔the job〕\nEach write one approach, with its pros and cons.',
+  '〔要定下的事〕选哪个？': '〔the decision〕Which one?',
+  '第一行是任务，「- 」开头的每一行是一步': 'First line is the task; each line starting with "- " is a step',
   '未接入 · {}': 'Not connected · {}',
   '{} · 派活': '{} · Dispatch',
   接入: 'Connect',
@@ -514,6 +528,20 @@ const EN = {
   '换成 {}': 'Switch to {}',
   今天: 'today',
   明天: 'tomorrow',
+  卡住的那一步交给指挥: 'Hand a stuck step to the lead',
+  识别到的: 'Found',
+  '这台电脑上有：{}': 'On this computer: {}',
+  '这台电脑上没有叫「{}」的程序': 'No app named "{}" on this computer',
+  '派活时，弱模型在同一步上没做下去（换过人还不行，或者没人可换），这一步由指挥的那位做，做完接着交给弱模型。关掉就停在这一步。':
+    'While dispatching, if weak models fail the same step (even after switching, or with nobody to switch to), the lead does that step, then hands the rest back to the weak models. Off: stop at that step.',
+  总结: 'Summary',
+  '总结 · 已采纳': 'Summary · adopted',
+  '把「结论」写进任务的约定': 'Write its conclusion into the task rules',
+  已写进任务的约定: 'Written into the task rules',
+  没有能总结的成员: 'No member can summarize',
+  '{} 在总结': '{} is summarizing',
+  '{} 正在总结': '{} is summarizing',
+  '把这几份回答并成一份：结论、一致的、分歧、建议、下一步': 'Merge these answers into one: conclusion, agreement, disagreement, advice, next step',
 };
 
 /** 界面上的字：`T\`第 ${n} 棒\``。 */
@@ -544,6 +572,19 @@ const CJK = /[㐀-鿿]/;
 
 /** 整句对照：状态、结论、强弱、常见的提示。 */
 const SRV_WORD = {
+  '手动接着做时打开它；接力台调度时可以用它的 Token Plan 接口（同意之后）。': 'Opened when continuing by hand; RelayDesk can use its Token Plan API once allowed.',
+  '手动接着做时打开它；接力台调度时用 Claude Code。': 'Opened when continuing by hand; RelayDesk runs Claude Code.',
+  '手动接着做时打开它；接力台调度时用 Codex 命令行。': 'Opened when continuing by hand; RelayDesk runs the Codex CLI.',
+  '手动接着做时打开它；接力台调度时用 Codex。': 'Opened when continuing by hand; RelayDesk runs Codex.',
+  '手动接着做时打开它；接力台调度时用 Cursor Agent（同一个账号、同样的模型）。': 'Opened when continuing by hand; RelayDesk runs Cursor Agent (same account, same models).',
+  '手动接着做时打开它；接力台调度时用 agy 命令行。': 'Opened when continuing by hand; RelayDesk runs the agy CLI.',
+  '手动接着做时打开它；接力台调度时用它自带的命令行内核。': 'Opened when continuing by hand; RelayDesk runs its bundled CLI core.',
+  '手动接着做时打开它；接力台调度时用它自带的无界面模式（同一个登录、同一个模型）。': 'Opened when continuing by hand; RelayDesk runs its bundled headless mode (same login, same model).',
+  '手动接着做时打开它。': 'Opened when continuing by hand.',
+  '最后一问还没有两份回答，用不着总结': 'The last question has fewer than two answers; nothing to summarize',
+  '这条总结已经采纳过了': 'This summary was already adopted',
+  '这条总结没写「结论」': 'This summary has no conclusion line',
+  '没有这条总结': 'No such summary',
   没说清是哪个技能: 'Unclear which skill',
   进行中: 'In progress',
   已交接: 'Handed off',
@@ -621,6 +662,9 @@ const hm = (s) => s.replace(/^明天 /, 'tomorrow ').replace(/^(\d+) 月 (\d+) �
 
 /** 句式：[正则, 换成什么]；函数拿到的分组已经可以再套 tr。 */
 const SRV = [
+  [/^这台电脑上找不到「(.+)」$/, (_, a) => `"${a}" is not on this computer`],
+  [/^采纳了 (.+) 的总结，写进了任务的约定：(.+)$/s, (_, who, line) => `Adopted ${who}'s summary into the task rules: ${line}`],
+  [/^(.+) 没有总结出来：(.+)$/s, (_, who, why) => `${who} could not summarize: ${tr(why)}`],
   [/^(.+)：等 (.+) ((?:明天 |\d+ 月 \d+ 日 )?\d\d:\d\d 恢复)$/, (_, why, who, t) => `${tr(why)}: waiting for ${tr(who)}, ${tr(t)}`],
   [/^((?:明天 |\d+ 月 \d+ 日 )?\d\d:\d\d) 恢复$/, (_, t) => `back ${hm(t)}`],
   [/^待复核 · (.+)$/, (_, w) => `Needs review · ${tr(w)}`],

@@ -318,7 +318,7 @@ export function adoptOption(root: string, id: string, key: string): Vote {
 }
 
 /** 往任务的「约定」一节里加一条（没有这一节就加上）。 */
-export function appendRule(root: string, line: string): void {
+export function appendRule(root: string, line: string, how = '群聊投票定下'): void {
   const p = path.join(root, TASK_REL);
   let raw = '';
   try {
@@ -326,7 +326,7 @@ export function appendRule(root: string, line: string): void {
   } catch {
     raw = '# 任务\n\n';
   }
-  const item = `- ${line.trim()}（${stampLocal(new Date()).slice(0, 16)} 群聊投票定下）`;
+  const item = `- ${line.trim()}（${stampLocal(new Date()).slice(0, 16)} ${how}）`;
   const lines = raw.split('\n');
   const at = lines.findIndex((l) => /^##\s+.*(约定|规矩|备注|决定)/.test(l));
   if (at < 0) {

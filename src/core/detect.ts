@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -52,7 +53,7 @@ export interface DetectReport {
 const APPS: { name: string; id: string; label: string; tier: 'strong' | 'weak'; hint: string }[] = [
   { name: 'Cursor', id: 'cursor', label: 'Cursor', tier: 'weak', hint: '手动接着做时打开它；接力台调度时用 Cursor Agent（同一个账号、同样的模型）。' },
   { name: 'ZCode', id: 'zcode', label: 'ZCode', tier: 'weak', hint: '手动接着做时打开它；接力台调度时用它自带的命令行内核。' },
-  { name: 'Xiaomi MiMo', id: 'mimo', label: 'MiMo', tier: 'weak', hint: '手动接着做时打开它；接力台调度时可以用它的 Token Plan 接口（要你同意）。' },
+  { name: 'Xiaomi MiMo', id: 'mimo', label: 'MiMo', tier: 'weak', hint: '手动接着做时打开它；接力台调度时可以用它的 Token Plan 接口（同意之后）。' },
   { name: 'ChatGPT', id: 'chatgpt', label: 'ChatGPT', tier: 'strong', hint: '手动接着做时打开它；接力台调度时用 Codex。' },
   { name: 'Claude', id: 'claude-app', label: 'Claude', tier: 'strong', hint: '手动接着做时打开它；接力台调度时用 Claude Code。' },
   { name: 'Codex', id: 'codex-app', label: 'Codex 桌面版', tier: 'strong', hint: '手动接着做时打开它；接力台调度时用 Codex 命令行。' },
@@ -65,10 +66,96 @@ const APPS: { name: string; id: string; label: string; tier: 'strong' | 'weak'; 
   { name: 'DeepSeek Harness', id: 'deepseek-harness-app', label: 'DeepSeek Harness 桌面版', tier: 'weak', hint: '手动接着做时打开它；接力台调度时用它自带的无界面模式（同一个登录、同一个模型）。' },
 ];
 
+/** 识别到的桌面程序：程序包在、而且读得出它的标识（CFBundleIdentifier）才算装着——空文件夹、坏了的不算。 */
 function findApps(): AppReport[] {
+  return APPS.filter((a) => findAppBundle(a.name)).map((a) => ({ name: a.name, hint: a.hint }));
+}
+
+/** 桌面程序放在哪几个文件夹（RELAY_APPS_DIRS 可以指定，测试用）。不是 macOS、或者关了扫描：不找。 */
+function appDirs(): string[] {
+  const custom = process.env.RELAY_APPS_DIRS;
+  if (custom) return custom.split(path.delimiter).filter(Boolean);
   if (process.platform !== 'darwin' || !scanApps()) return [];
-  const dirs = ['/Applications', path.join(os.homedir(), 'Applications')];
-  return APPS.filter((a) => dirs.some((d) => fs.existsSync(path.join(d, `${a.name}.app`)))).map((a) => ({ name: a.name, hint: a.hint }));
+  return ['/Applications', '/Applications/Utilities', path.join(os.homedir(), 'Applications')];
+}
+
+/** 程序包的标识：Info.plist 里的 CFBundleIdentifier（文字格式直接读，二进制格式交给系统的 plutil）。读不出来是 null。 */
+function bundleIdOf(app: string): string | null {
+  const plist = path.join(app, 'Contents', 'Info.plist');
+  let text = '';
+  try {
+    text = fs.readFileSync(plist).toString('utf8');
+  } catch {
+    return null;
+  }
+  const m = text.match(/<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/);
+  if (m) return m[1].trim();
+  if (process.platform !== 'darwin') return null;
+  const r = spawnSync('/usr/bin/plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', plist], { encoding: 'utf8', timeout: 3000 });
+  return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null;
+}
+
+/** 按名字找这台电脑上的程序（不分大小写，可以带 .app）：找到了、核实过标识才算。 */
+export function findAppBundle(name: string): { path: string; bundleId: string } | null {
+  const want = `${name.trim().replace(/\.app$/i, '')}.app`.toLowerCase();
+  if (want === '.app') return null;
+  for (const d of appDirs()) {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(d);
+    } catch {
+      continue;
+    }
+    const hit = names.find((n) => n.toLowerCase() === want);
+    if (!hit) continue;
+    const p = path.join(d, hit);
+    const bundleId = bundleIdOf(p);
+    if (bundleId) return { path: p, bundleId };
+  }
+  return null;
+}
+
+/** 能不能核实桌面程序（macOS 上开着扫描，或者测试指定了文件夹）。 */
+export function canCheckApps(): boolean {
+  return appDirs().length > 0;
+}
+
+export interface DesktopApps {
+  /** 认得的、这台电脑上装着（核实过）的：建议的成员名、强弱、说明、在名单里是哪一位（没加是 null）。 */
+  known: { name: string; id: string; label: string; tier: 'strong' | 'weak'; hint: string; path: string; bundleId: string; added: string | null }[];
+  /** 这几个文件夹里所有程序（写程序名时提示用）。 */
+  all: { name: string; path: string }[];
+}
+
+/** 添加桌面程序时给人挑的：认得的（核实过、写明加没加）和这台电脑上所有的程序。 */
+export function desktopApps(): DesktopApps {
+  const all = new Map<string, { name: string; path: string }>();
+  for (const d of appDirs()) {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(d);
+    } catch {
+      continue;
+    }
+    for (const n of names) {
+      if (!/\.app$/i.test(n) || n.startsWith('.')) continue;
+      const name = n.replace(/\.app$/i, '');
+      if (!all.has(name.toLowerCase())) all.set(name.toLowerCase(), { name, path: path.join(d, n) });
+    }
+  }
+  let agents: AgentConfig[] = [];
+  try {
+    agents = loadRegistry().agents;
+  } catch {
+    /* 名单坏了：都当没加 */
+  }
+  const addedBy = (app: string) => agents.find((a) => appNameOf(agentKind(a) === 'app' ? a.cmd : a.app)?.toLowerCase() === app.toLowerCase())?.name ?? null;
+  const known = APPS.flatMap((a) => {
+    if (!all.has(a.name.toLowerCase())) return [];
+    const b = findAppBundle(a.name);
+    return b ? [{ name: a.name, id: a.id, label: a.label, tier: a.tier, hint: a.hint, path: b.path, bundleId: b.bundleId, added: addedBy(a.name) }] : [];
+  });
+  return { known, all: [...all.values()].sort((x, y) => x.name.localeCompare(y.name)).slice(0, 600) };
 }
 
 export function detectedPath(): string {

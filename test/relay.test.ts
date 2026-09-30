@@ -602,6 +602,30 @@ test('群聊：讨论（轮流说）、对比（同时答）；投票不投自�
   for (const b of last.ballots) assert.notEqual(last.options.find((o: { key: string }) => o.key === b.choice).author, b.voter, '不投自己');
 });
 
+test('群聊总结：最后一问有两份以上回答才总结；回答去掉名字按 A、B 标；采纳后「结论」写进任务的约定，只能采纳一次', () => {
+  const s = prepared('talk-sum');
+  s.relay(['init', '做滤镜']);
+  s.relay(['talk', '先做哪个？', '--ask', 'claude,codex']);
+  const out = s.relay(['talk', '--sum', 'codex']);
+  assert.match(out, /（总结）：结论：codex 觉得先做导出/);
+  const prompt = fs
+    .readdirSync(s.base)
+    .filter((f) => f.startsWith('prompt-codex-'))
+    .map((f) => fs.readFileSync(path.join(s.base, f), 'utf8'))
+    .find((p) => p.includes('现在写总结'))!;
+  assert.ok(prompt.includes('【A】') && prompt.includes('【B】'), '回答按 A、B 标');
+  assert.ok(prompt.indexOf('怎么总结') < prompt.indexOf('人问的是') && prompt.indexOf('【A】') < prompt.indexOf('你是「'), '不变的在前');
+  assert.doesNotMatch(prompt, /DeepSeek V4 Flash：/, '不带是谁说的');
+  const rows = s.read('.relay/talk.jsonl').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(rows.filter((r) => r.summary).length, 1);
+  assert.match(s.relay(['talk', '--adopt-sum']), /采纳了 .* 的总结，写进了任务的约定：codex 觉得先做导出/);
+  assert.match(s.read('.relay/任务.md'), /- codex 觉得先做导出（.* 群聊总结定下）/);
+  assert.match(s.relay(['talk', '--adopt-sum'], true), /已经采纳过了/);
+  // 最后一问只有一份回答：用不着总结
+  s.relay(['talk', '再问一句', '--ask', 'claude']);
+  assert.match(s.relay(['talk', '--sum'], true), /还没有两份回答/);
+});
+
 test('派活（边做边复核关着）：强模型先拆成小步，弱模型一棒做一步，中途不复核，做完后终审一起复核；强模型一直没干活；每一棒记下 token 用量', () => {
   const s = prepared('dispatch');
   setOrder(s, ['claude', 'codex'], { sideReview: false });
@@ -709,6 +733,33 @@ test('派活时干活的那位临时出错（连不上）：先原地再派它�
   assert.deepEqual(works.slice(0, 2).map((x) => [x.who.member, x.status]), [['claude', 'failed'], ['claude', 'handed']], '还是它，不换成别人');
   assert.match(s.read(works[1].log), /接手原因：上一棒出错（.*ECONNRESET.*），像是临时的，原地再来一次/);
   assert.ok(works.every((x) => x.who.member !== 'codex'), '强模型没干活');
+});
+
+test('派活卡住的那一步交给指挥：弱模型在第二步写「卡住了」、又没别的弱模型可换，指挥的做这一步，后面的步还是弱模型做；关掉就停在这一步', () => {
+  const s = prepared('dispatch-escalate', { FAKE_CLAUDE_MODE: 'stuck-b' });
+  setOrder(s, ['claude', 'codex']);
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  assert.match(s.relay(['auto']), /✓ 验收通过：清单 4\/4 全部打勾/);
+  const works = s.stints().filter((x) => x.kind === 'work');
+  assert.deepEqual(
+    works.map((x) => [x.who.member, x.step?.index, x.handoff && /卡住了/.test(s.read(x.handoff)) ? 'stuck' : 'ok']),
+    [
+      ['claude', 1, 'ok'],
+      ['claude', 2, 'stuck'],
+      ['codex', 2, 'ok'],
+      ['claude', 3, 'ok'],
+      ['claude', 4, 'ok'],
+    ]
+  );
+  assert.match(s.read(works[2].log), /接手原因：清单第 2 步弱模型没做下去，请指挥的 .* 做这一步；做完接着交给弱模型/);
+
+  const off = prepared('dispatch-escalate-off', { FAKE_CLAUDE_MODE: 'stuck-b' });
+  setOrder(off, ['claude', 'codex'], { escalate: false });
+  off.relay(['init']);
+  off.relay(['task', '--dispatch', '做一件大事']);
+  assert.match(off.relay(['auto', '--no-wait']), /全自动停止：没有能用的弱模型/);
+  assert.ok(off.stints().filter((x) => x.kind === 'work').every((x) => x.who.member === 'claude'), '关掉时强模型不干活');
 });
 
 test('派活边做边复核查出问题：清单里下一步前面插一步「按复核改好」，干活的人接着就改；改完的那一棒也复核', () => {

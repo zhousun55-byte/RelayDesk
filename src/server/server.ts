@@ -6,7 +6,7 @@ import path from 'node:path';
 import { talkContext } from '../commands/talk';
 import { autoSettingsSafe, saveAutoSettings } from '../core/auto-settings';
 import { saveRelayConfig } from '../core/config';
-import { addModelMembers, enableProvider, loadDetected, modelOptions, newerHints, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
+import { addModelMembers, canCheckApps, desktopApps, enableProvider, findAppBundle, loadDetected, modelOptions, newerHints, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
 import { findHarness } from '../core/harness';
@@ -22,8 +22,8 @@ import { isInside } from '../core/paths';
 import { untilText } from '../core/quota';
 import { agentKind, findAgent, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
-import { archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
-import { adoptOption, castHumanVote, readVotes, startVote } from '../core/vote';
+import { adoptSummary, archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, summarize, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
+import { adoptOption, appendRule, castHumanVote, readVotes, startVote } from '../core/vote';
 import { goActive, startGo, stopGo } from '../ops/go';
 import { setThreadHidden } from '../ops/hidden';
 import { checkRoot, deleteTask, initProject, liveProjects, newTask, restoreTask } from '../ops/init';
@@ -394,6 +394,8 @@ export function createServer(opts: ServerOptions): http.Server {
     '/api/models': (q) => modelOptions(q.get('name') ?? ''),
     // 这个项目能用的技能（输入框打 / 挑）
     // 技能：接入过的项目连同项目里的；别的文件夹（还没打开项目时）只列这台电脑上的，不读那个文件夹
+    // 添加桌面程序时挑：认得的（核实过）和这台电脑上所有的程序
+    '/api/apps': () => desktopApps(),
     '/api/skills': (q) => {
       const root = dirOf(q, {});
       const modes = autoSettingsSafe().settings.skills;
@@ -593,7 +595,13 @@ export function createServer(opts: ServerOptions): http.Server {
       setCrew(str(b.name) ?? '', str(b.crew) ?? '');
       return { members: memberViews() };
     },
-    '/api/workers/save': (_q, b) => ({ agent: upsertAgent(b.agent, str(b.originalName)) }),
+    // 桌面程序：核实这台电脑上真有这个程序（程序包在、读得出标识）才收
+    '/api/workers/save': (_q, b) => {
+      const a = b.agent && typeof b.agent === 'object' ? (b.agent as Record<string, unknown>) : {};
+      const app = a.kind === 'app' && typeof a.cmd === 'string' ? appNameOf(a.cmd) : undefined;
+      if (app && canCheckApps() && !findAppBundle(app)) throw new RelayError(`这台电脑上找不到「${app}」`, 'no-app');
+      return { agent: upsertAgent(b.agent, str(b.originalName)) };
+    },
     '/api/workers/delete': (_q, b) => {
       removeAgent(str(b.name) ?? '');
       return {};
@@ -645,6 +653,20 @@ export function createServer(opts: ServerOptions): http.Server {
     '/api/talk/resume': (q, b) => {
       resumeTalk(dirOf(q, b), str(b.id) ?? '');
       return {};
+    },
+    // 总结：请一位把最后一问的几份回答并成一份（回答还在说的，说完再总结）
+    '/api/talk/summary': (q, b) => {
+      const root = dirOf(q, b);
+      const r = summarize(root, str(b.who) ?? '', talkContext(root));
+      r.done.catch(() => undefined);
+      return { queued: r.queued };
+    },
+    // 采纳一条总结：它的「结论」写进任务的约定
+    '/api/talk/adopt': (q, b) => {
+      const root = dirOf(q, b);
+      const row = adoptSummary(root, str(b.ts) ?? '', (line) => appendRule(root, line, '群聊总结定下'));
+      if (loadLedger(root).init) refreshBrief(root);
+      return { row };
     },
     '/api/vote/start': (q, b) => {
       const root = dirOf(q, b);

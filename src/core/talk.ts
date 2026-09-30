@@ -34,6 +34,10 @@ export interface TalkRow {
   round?: string;
   /** 这句话后面是怎么请 AI 回答的：turn 讨论（轮流说）/ solo 对比（同时答）。 */
   mode?: TalkMode;
+  /** 这一条是总结：把最后一问的几份回答并成一份（学 llm-council 的主持人收尾）。 */
+  summary?: boolean;
+  /** 这一条说的是「采纳了哪条总结」（那条总结的时间）。 */
+  adopt?: string;
 }
 
 /** turn = 讨论：轮流说（后面的看得到前面的）；solo = 对比：同时问，互相看不到，回答并排放。 */
@@ -88,6 +92,8 @@ export function readTalk(root: string, limit = 400, p = talkPath(root)): TalkRow
       ...(r.error ? { error: true } : {}),
       ...(typeof r.round === 'string' ? { round: r.round } : {}),
       ...(r.mode === 'turn' || r.mode === 'solo' ? { mode: r.mode } : {}),
+      ...(r.summary === true ? { summary: true } : {}),
+      ...(typeof r.adopt === 'string' ? { adopt: r.adopt } : {}),
     });
   }
   return out.slice(-limit);
@@ -115,6 +121,10 @@ interface Round {
   running: Promise<void> | null;
   /** 排队的「对比」轮：同一轮的人一起问。 */
   soloQueue: { id: string; names: string[] }[];
+  /** 排队总结的人：前面的回答都说完了才总结。 */
+  summaryQueue: string[];
+  /** 正在总结的那一位。 */
+  summing: string | null;
 }
 
 export interface Thread {
@@ -440,7 +450,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
 }
 
 /** 一段群聊里谁在说、谁在排队。 */
-export function talkStatus(file: string): { current: { agent: string; label: string; since: string } | null; speaking: { agent: string; label: string }[]; queue: { agent: string; label: string }[] } {
+export function talkStatus(file: string): { current: { agent: string; label: string; since: string } | null; speaking: { agent: string; label: string }[]; queue: { agent: string; label: string }[]; summing?: string } {
   const r = threads.get(path.resolve(file))?.round;
   const lab = (n: string) => {
     const a = findAgent(n);
@@ -451,7 +461,8 @@ export function talkStatus(file: string): { current: { agent: string; label: str
   return {
     current: first ? { ...first, since: r?.since ?? '' } : null,
     speaking,
-    queue: [...(r?.queue ?? []), ...(r?.soloQueue ?? []).flatMap((q) => q.names)].map((n) => ({ agent: n, label: lab(n) })),
+    queue: [...(r?.queue ?? []), ...(r?.soloQueue ?? []).flatMap((q) => q.names), ...(r?.summaryQueue ?? [])].map((n) => ({ agent: n, label: lab(n) })),
+    ...(r?.summing ? { summing: r.summing } : {}),
   };
 }
 
@@ -528,11 +539,22 @@ async function runRound(root: string, th: Thread, r: Round, context: () => TalkC
       continue;
     }
     const name = r.queue.shift();
-    if (!name) break;
-    r.current.add(name);
+    if (name) {
+      r.current.add(name);
+      r.since = new Date().toISOString();
+      await speakOne(root, th, name, readTalk(root, Infinity, th.file), context);
+      r.current.delete(name);
+      continue;
+    }
+    // 回答都说完了：再总结
+    const sum = r.summaryQueue.shift();
+    if (!sum) break;
+    r.current.add(sum);
+    r.summing = sum;
     r.since = new Date().toISOString();
-    await speakOne(root, th, name, readTalk(root, Infinity, th.file), context);
-    r.current.delete(name);
+    await summarizeOne(root, th, sum, context);
+    r.summing = null;
+    r.current.delete(sum);
   }
 }
 
@@ -562,7 +584,7 @@ export function say(root: string, text: string, ask: string[], context: () => Ta
     releaseThread(th);
     return { row, queued: [], done: th.round?.running ?? Promise.resolve() };
   }
-  const r = (th.round ??= { queue: [], current: new Set(), since: null, running: null, soloQueue: [] });
+  const r = (th.round ??= newRound());
   if (mode === 'solo') r.soloQueue.push({ id: `solo-${Date.now().toString(36)}`, names });
   else for (const n of names) if (!r.queue.includes(n) && !r.current.has(n)) r.queue.push(n);
   r.running ??= runRound(root, th, r, context).finally(() => {
@@ -570,6 +592,104 @@ export function say(root: string, text: string, ask: string[], context: () => Ta
     releaseThread(th);
   });
   return { row, queued: names, done: r.running };
+}
+
+function newRound(): Round {
+  return { queue: [], current: new Set(), since: null, running: null, soloQueue: [], summaryQueue: [], summing: null };
+}
+
+/** 最后一问（人说的最后一句）和它之后的回答（没回上来的、总结不算）。 */
+export function lastAsk(rows: TalkRow[]): { ask: TalkRow; answers: TalkRow[]; summed: boolean } | null {
+  const at = rows.map((r) => r.kind).lastIndexOf('human');
+  if (at < 0) return null;
+  const after = rows.slice(at + 1);
+  return { ask: rows[at], answers: after.filter((r) => r.kind === 'ai' && !r.error && !r.summary), summed: after.some((r) => r.summary) };
+}
+
+/** 一份回答最多带多少字进总结（全文在记录文件里）。 */
+const SUMMARY_ANSWER_CHARS = 12_000;
+
+/**
+ * 请一位做总结的提示（纯函数）。学 llm-council：回答去掉名字、按 A、B、C 标，免得偏向谁；
+ * 学 council-of-high-intelligence：分歧和少数意见要留着，最后写一件马上能做的事。
+ * 顺序也按「不变的在前」：规矩 → 问题 → 回答 → 任务状态、你是谁。
+ */
+export function buildSummaryPrompt(input: { speaker: string; root: string; ask: string; answers: string[]; context?: TalkContext }): string {
+  const t = input.context?.task;
+  const mark = (i: number) => String.fromCharCode(65 + (i % 26)) + (i >= 26 ? String(Math.floor(i / 26)) : '');
+  const clipA = (a: string) => (a.length > SUMMARY_ANSWER_CHARS ? `${a.slice(0, SUMMARY_ANSWER_CHARS)}\n…（后面还有，全文在这段群聊的记录里）` : a);
+  const parts = [
+    '你在「接力台」的一场多 AI 讨论里做总结。',
+    `项目文件夹：${input.root}（可以读里面的文件核对，但不要修改任何文件，也不要执行会改变东西的命令）。`,
+    [
+      '怎么总结：',
+      '- 下面几份回答去掉了名字，按 A、B、C 标。不要猜是谁写的，也不要因为谁的模型更强就偏向谁：按道理和证据判断，拿不准的打开项目里的文件核对。',
+      '- 只写下面五节，每节简短，节名照写：',
+      '结论：一句话。定不下来就写定不下来，以及还差什么才能定。',
+      '一致的：几份回答都同意的，每条一行。',
+      '分歧：每条写清各方的说法和理由（用 A、B 这样的标号）；有道理的少数意见要留着，不要为了一致抹掉。',
+      '建议：怎么做、为什么。',
+      '下一步：一件马上能做的事。',
+      '- 用中文。只根据这些回答和项目里的文件，不要编。',
+    ].join('\n'),
+    `人问的是：\n${input.ask.trim()}`,
+    input.answers.map((a, i) => `【${mark(i)}】\n${clipA(a.trim())}`).join('\n\n'),
+    t ? `当前任务：${t.title}\n任务状态：${t.phaseText}` : '现在没有进行中的任务。',
+    `你是「${input.speaker}」，现在写总结。`,
+  ];
+  return redactSecrets(parts.join('\n\n'));
+}
+
+async function summarizeOne(root: string, th: Thread, name: string, context: () => TalkContext): Promise<void> {
+  const agent = findAgent(name);
+  try {
+    if (!agent) throw new RelayError('名单里没有它', 'no-agent');
+    const last = lastAsk(readTalk(root, Infinity, th.file));
+    if (!last || last.answers.length < 2) throw new RelayError('最后一问不到两份回答', 'no-round');
+    const prompt = buildSummaryPrompt({ speaker: speakerName(agent), root, ask: last.ask.text, answers: last.answers.map((a) => a.text), context: safeContext(context) }) + skillNote(root, last.ask.text);
+    const text = await askAgent(agent, prompt, root);
+    const m = memberModel(agent, loadDetected());
+    appendTalk(root, { kind: 'ai', who: speakerName(agent), agent: agent.name, ...(m ? { model: m } : {}), text, summary: true }, th.file);
+  } catch (e) {
+    appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agent ? speakerName(agent) : name} 没有总结出来：${plain(errorMessage(e))}`, error: true }, th.file);
+  }
+}
+
+/**
+ * 请一位把最后一问的几份回答并成一份总结（写进正在用的那段群聊，标 summary）。
+ * 回答还在说的，等它们说完再总结；加上还在说的不到两份就不用总结。
+ */
+export function summarize(root: string, who: string, context: () => TalkContext = () => ({})): { queued: string; done: Promise<void> } {
+  const [name] = checkSpeakers([who]);
+  if (!name) throw new RelayError('没说请谁总结', 'no-agent');
+  const th = threadOf(talkPath(root));
+  const last = lastAsk(readTalk(root, Infinity, th.file));
+  const r0 = th.round;
+  const pending = r0 ? r0.queue.length + r0.current.size + r0.soloQueue.reduce((n, q) => n + q.names.length, 0) : 0;
+  if (!last || last.answers.length + pending < 2) {
+    releaseThread(th);
+    throw new RelayError('最后一问还没有两份回答，用不着总结', 'no-round');
+  }
+  const r = (th.round ??= newRound());
+  if (!r.summaryQueue.includes(name) && r.summing !== name) r.summaryQueue.push(name);
+  r.running ??= runRound(root, th, r, context).finally(() => {
+    th.round = null;
+    releaseThread(th);
+  });
+  return { queued: name, done: r.running };
+}
+
+/** 采纳一条总结：把它的「结论」写进任务的约定（和投票采纳一样），群聊里记一句。 */
+export function adoptSummary(root: string, ts: string, appendRuleFn: (line: string) => void): TalkRow {
+  const file = talkPath(root);
+  const rows = readTalk(root, Infinity, file);
+  const s = rows.find((r) => r.ts === ts && r.summary);
+  if (!s) throw new RelayError('没有这条总结', 'no-summary');
+  if (rows.some((r) => r.adopt === ts)) throw new RelayError('这条总结已经采纳过了', 'adopted');
+  const line = s.text.match(/^\s*[#*\-\s]*结论\s*[：:]\s*(.+)$/m)?.[1]?.replace(/\*+/g, '').trim();
+  if (!line) throw new RelayError('这条总结没写「结论」', 'no-conclusion');
+  appendRuleFn(line);
+  return appendTalk(root, { kind: 'system', who: '接力台', text: `采纳了 ${s.who} 的总结，写进了任务的约定：${line}`, adopt: ts }, file);
 }
 
 /** 这个接力台进程里有没有哪段群聊在说话、在排队。 */

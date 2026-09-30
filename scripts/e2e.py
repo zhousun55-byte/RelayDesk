@@ -74,7 +74,14 @@ def main():
         'RELAY_NO_BROWSER': '1',
         'RELAY_CLIPBOARD': 'off',
         'RELAY_TERMINAL': 'off',
+        'RELAY_APPS_DIRS': os.path.join(tmp, 'Apps'),
     }
+    # 这台电脑上的程序：Trae 读得出标识；Kiro 只有空壳（不算装着）
+    for app, bid in [('Trae', 'com.trae.app'), ('Kiro', None), ('Notes', 'com.apple.Notes')]:
+        os.makedirs(os.path.join(tmp, 'Apps', f'{app}.app', 'Contents'))
+        if bid:
+            with open(os.path.join(tmp, 'Apps', f'{app}.app', 'Contents', 'Info.plist'), 'w') as f:
+                f.write(f'<plist><dict><key>CFBundleIdentifier</key><string>{bid}</string></dict></plist>')
     subprocess.run(['node', CLI, 'init', '加一个导出'], cwd=repo, env=env, check=True, capture_output=True)
     subprocess.run(['node', CLI, 'task', '再加一个导入'], cwd=repo, env=env, check=True, capture_output=True)
     # 群聊里一句很长的话（之前发的）：网页上先收起
@@ -173,6 +180,30 @@ def main():
             with open(os.path.join(home, '.relay', 'agents.json')) as f:
                 models = sorted(a['api']['model'] for a in json.load(f)['agents'])
             check(models == ['demo-mini', 'demo-pro'], '换模型：打字搜，列表里没有的直接用写的名字，这一位换成它')
+            # 添加桌面程序：认得的、核实过的排成一排，点一下填好；写一个这台电脑上没有的，「添加」按不了
+            page.locator('.settings').get_by_role('button', name='添加', exact=True).click()
+            page.locator('.menu .mi').filter(has_text='桌面程序').click()
+            dlg = page.get_by_role('dialog', name='添加桌面程序')
+            pick = dlg.locator('.app-picks .pick')
+            pick.first.wait_for(timeout=5000)
+            names = pick.all_inner_texts()
+            pick.filter(has_text='Trae').click()
+            inputs = dlg.locator('input.input')
+            filled = [inputs.nth(0).input_value(), inputs.nth(1).input_value()]
+            add = dlg.get_by_role('button', name='添加', exact=True)
+            page.wait_for_timeout(450)
+            found = dlg.locator('.app-check').first.inner_text()
+            check(names == ['Trae'] and filled == ['Trae', 'trae'] and found.startswith('这台电脑上有：') and add.is_enabled(), f'添加桌面程序：识别到的（核实过标识，空壳不算）点一下填好（{names} {filled} {found}）')
+            inputs.nth(0).fill('Nope')
+            page.wait_for_timeout(450)
+            check(add.is_disabled() and '没有叫「Nope」' in dlg.locator('.app-check.bad').inner_text(), '添加桌面程序：写一个这台电脑上没有的，标红、「添加」按不了')
+            page.screenshot(path=os.path.join(tmp, 'add-app.png'))
+            inputs.nth(0).fill('Trae')
+            add.click()
+            page.wait_for_function('() => document.querySelectorAll(".settings .members .member").length === 3', timeout=5000)
+            with open(os.path.join(home, '.relay', 'agents.json')) as f:
+                trae = [a for a in json.load(f)['agents'] if a['name'] == 'trae']
+            check([(a['kind'], a['label'], a['tier']) for a in trae] == [('app', 'Trae', 'weak')], '添加桌面程序：点「添加」加进名单')
             page.keyboard.press('Escape')
             page.wait_for_timeout(400)
             mock.shutdown()
@@ -208,6 +239,19 @@ def main():
             page.locator('#left-in').get_by_role('button', name='新任务').first.click()
             ta = page.locator('.composer textarea')
             ta.wait_for(timeout=5000)
+            # 空白页的几种开头：点「修问题」填进格式、〔〕那截选中；接着打字换掉它；删空了几种开头回来
+            starts = page.locator('.hero .starts')
+            is_off = '() => document.querySelector(".hero .starts").classList.contains("off")'
+            ta.fill('')
+            check(starts.locator('.start').all_inner_texts() == ['看懂项目', '修问题', '加功能'] and starts.locator('.fmt').count() == 1, '写新任务：输入框底下三种开头和一行格式说明')
+            page.screenshot(path=os.path.join(tmp, 'starters.png'))
+            starts.get_by_role('button', name='修问题').click()
+            sel = js('() => { const t = document.querySelector(".composer textarea"); return t.value.slice(t.selectionStart, t.selectionEnd); }')
+            check(ta.input_value().startswith('修好：') and sel == '〔哪里、出了什么问题〕' and js(is_off), f'点「修问题」：填进格式，要换的那截选中（{sel}），几种开头淡掉')
+            page.keyboard.type('导出的 CSV 乱码')
+            check(ta.input_value().startswith('修好：导出的 CSV 乱码\n- 找到原因'), '接着打字：换掉选中的那截')
+            ta.fill('')
+            check(not js(is_off), '删空了：几种开头回来')
             ta.click()
             ta.fill('')
             ta.type('按 /demo')
@@ -308,6 +352,8 @@ def main():
             page.locator('.me').get_by_role('button', name='展开').click()
             page.wait_for_timeout(350)
             check(folded and page.locator('.me .note.fold').count() == 0, '群聊：长话先收起，点「展开」看全文')
+            tip = js('() => { S.ask = new Set(talkers().map((m) => m.name)); updateComposer(); return `${S.ask.size}|${C.pick.dataset.tip}`; }')
+            check(tip.split('|')[1] == f"{tip.split('|')[0]} 位回答", f'群聊：成员一叠停上去只写几位（{tip}），名字点开看')
             long = '\n'.join(f'日志第 {i} 行：导出失败' for i in range(1, 61))
             paste = '''(text) => {
               const ta = document.querySelector('.composer textarea');

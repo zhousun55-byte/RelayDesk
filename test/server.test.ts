@@ -634,3 +634,37 @@ function spawnRelay(s: Sandbox, args: string[], cwd: string): string {
   return (r.stdout ?? '') + (r.stderr ?? '');
 }
 
+
+test('添加桌面程序：认得的、装着的（读得出程序标识）列出来，写明加没加；写的程序这台电脑上没有就不让存', async () => {
+  const s = sandbox('srv-apps');
+  withFakes(s);
+  s.relay(['detect', '--offline']);
+  const apps = path.join(s.home, 'Apps');
+  const bundle = (name: string, id: string | null) => {
+    fs.mkdirSync(path.join(apps, `${name}.app`, 'Contents'), { recursive: true });
+    if (id) fs.writeFileSync(path.join(apps, `${name}.app`, 'Contents', 'Info.plist'), `<?xml version="1.0"?><plist><dict><key>CFBundleIdentifier</key><string>${id}</string></dict></plist>`);
+  };
+  bundle('Trae', 'com.trae.app');
+  bundle('Kiro', null); // 只有空壳，读不出标识：不算装着
+  bundle('Notes', 'com.apple.Notes');
+  s.env.RELAY_APPS_DIRS = apps;
+  const ui = await startUi(s);
+  try {
+    const r = await ui.call('/api/apps');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json.known.map((a: { name: string; tier: string; bundleId: string; added: string | null }) => [a.name, a.tier, a.bundleId, a.added]), [['Trae', 'weak', 'com.trae.app', null]]);
+    assert.deepEqual(r.json.all.map((a: { name: string }) => a.name), ['Kiro', 'Notes', 'Trae'], '写程序名时的提示：文件夹里所有程序');
+
+    const no = await ui.call('/api/workers/save', { agent: { name: 'nope', kind: 'app', tier: 'weak', cmd: 'open -a Nope {{dir}}' } });
+    assert.equal(no.status, 400);
+    assert.equal(no.json.code, 'no-app');
+    assert.match(no.json.error, /这台电脑上找不到「Nope」/);
+    assert.equal((await ui.call('/api/workers/save', { agent: { name: 'kiro', kind: 'app', tier: 'weak', cmd: 'open -a Kiro {{dir}}' } })).status, 400, '空壳不算');
+
+    const ok = await ui.call('/api/workers/save', { agent: { name: 'trae', kind: 'app', tier: 'weak', cmd: 'open -a Trae {{dir}}' } });
+    assert.equal(ok.status, 200, JSON.stringify(ok.json));
+    assert.equal((await ui.call('/api/apps')).json.known[0].added, 'trae', '加过的写明是哪一位');
+  } finally {
+    ui.child.kill();
+  }
+});
