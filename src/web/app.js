@@ -319,8 +319,29 @@ function esc(s) {
 
 /** 行内格式：先转义，再加 code / strong，所以不会注入。 */
 function inline(escaped) {
-  return escaped.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  return (
+    escaped
+      // [名字](网址 或 本机路径)：网址新窗口打开；本机路径停上去看路径，是项目里的文件就点开看（mdLink）
+      .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_, label, href) =>
+        /^https?:\/\//.test(href) ? `<a href="${href}" target="_blank" rel="noopener">${label}</a>` : `<a class="plink" data-path="${href}" data-tip="${href}">${label}</a>`
+      )
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  );
 }
+
+/** 点正文里的本机路径链接：在这个项目里就在页签里打开（去掉行号），不在就不动（停上去看得到路径）。 */
+document.addEventListener('click', (e) => {
+  const a = e.target.closest?.('a.plink');
+  if (!a || !S.st) return;
+  e.preventDefault();
+  // macOS 上 /var、/tmp 和 /private/var、/private/tmp 是同一处
+  const norm = (x) => x.replace(/^\/private(?=\/(var|tmp|etc)\/)/, '');
+  const root = norm(S.st.project.root || '');
+  let p = norm(a.dataset.path.replace(/(#L\d+.*|:\d+(:\d+)?)$/, ''));
+  if (root && p.startsWith(`${root}/`)) p = p.slice(root.length + 1);
+  if (p && !p.startsWith('/') && !p.startsWith('..')) openFile(p);
+});
 
 function diffHtml(text) {
   return String(text)

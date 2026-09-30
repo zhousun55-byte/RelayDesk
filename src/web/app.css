@@ -4183,6 +4183,17 @@ button.busy::after {
   background: var(--fog);
   font-size: 13.5px;
 }
+.doc-md a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--rule);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: text-decoration-color 0.14s;
+}
+.doc-md a:hover {
+  text-decoration-color: var(--ink-3);
+}
 .sess-log .sm-ai {
   font-size: 13.5px;
 }

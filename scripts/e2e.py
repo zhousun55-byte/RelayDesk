@@ -215,7 +215,7 @@ def main():
             with open(os.path.join(cdir, 'desk-000001.jsonl'), 'w') as f:
                 for row in [
                     {'type': 'user', 'cwd': real, 'entrypoint': 'claude-desktop', 'message': {'role': 'user', 'content': '导出做成 CSV 吗' + '，顺带看一下 `python3 -m unittest discover` 为什么很慢' * 3}},
-                    {'type': 'assistant', 'cwd': real, 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': '做成 CSV。\n\n先读取接力状态并建立本棒交接记录，然后按指定三条命令做只读基线检查。'}, {'type': 'tool_use', 'name': 'Read', 'input': {'file_path': 'README.md'}}]}},
+                    {'type': 'assistant', 'cwd': real, 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': '做成 CSV。\n\n先读取接力状态并建立本棒交接记录，然后按指定三条命令做只读基线检查。\n\n改动见[说明](' + real + '/README.md)。'}, {'type': 'tool_use', 'name': 'Read', 'input': {'file_path': 'README.md'}}]}},
                 ]:
                     f.write(json.dumps(row, ensure_ascii=False) + '\n')
             page.get_by_role('tab', name='接力').click()
@@ -231,8 +231,13 @@ def main():
             row.click()
             page.locator('.sess-log .sm-ai').wait_for(timeout=5000)
             wide = js('''() => { const box = document.querySelector('.sess-log').getBoundingClientRect().width; return [...document.querySelectorAll('.sess-log .sm-ai p')].map((p) => Math.round(p.getBoundingClientRect().width / box * 100)); }''')
-            check(len(wide) == 2 and min(wide) > 60, f'工具里的对话：AI 的回答按整栏宽排，不被挤成一个字一行（占栏宽 {wide}%）')
+            link = page.locator('.sess-log .sm-ai a.plink')
+            has_link = link.count() == 1 and link.inner_text() == '说明'
+            check(len(wide) == 3 and min(wide) > 60, f'工具里的对话：AI 的回答按整栏宽排，不被挤成一个字一行（占栏宽 {wide}%）')
             check(page.locator('.sess-log .sm-user').inner_text().startswith('导出做成 CSV 吗') and page.locator('.sess-log .sm-tool').inner_text() == 'Read：README.md', '工具里的对话：左边收成一行，点开看全文（人说的、AI 答的、用了什么工具）')
+            link.click()
+            page.wait_for_timeout(500)
+            check(has_link and page.locator('.tab').filter(has_text='README.md').count() == 1, '工具里的对话：[名字](本机路径) 画成链接，项目里的文件点开在页签里看')
             page.locator('.thread.sess-head').click()
             page.wait_for_function('() => !document.querySelector(".thread.sess")', timeout=3000)
             check(page.locator('.thread.sess-head').get_attribute('aria-expanded') == 'false', '工具里的对话：再点一下收起（原地淡出，不整列重画）')

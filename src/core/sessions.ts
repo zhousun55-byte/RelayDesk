@@ -210,7 +210,8 @@ function codexMessages(entries: J[]): SessionMessage[] {
     if (p.type === 'message' && (p.role === 'user' || p.role === 'assistant')) {
       const joined = (Array.isArray(p.content) ? p.content : []).map((c) => str(o(c).text)).join('\n');
       // Codex 桌面版把人写的行首「1.」「- 」存成「1\.」「\- 」（不让它变成列表），读回来去掉这道转义
-      const text = p.role === 'user' ? unescapeListMarks(joined) : joined;
+      // Codex 回答末尾带的记忆出处（<oai-mem-citation>…</oai-mem-citation>）是给它自己看的，不算说的话
+      const text = p.role === 'user' ? unescapeListMarks(joined) : joined.replace(/<oai-mem-citation>[\s\S]*?(<\/oai-mem-citation>|$)/g, '').trimEnd();
       if (text.trim() && !NOT_SAID.test(text)) out.push({ role: p.role, text, at });
     } else if (p.type === 'function_call' || p.type === 'custom_tool_call' || p.type === 'local_shell_call') {
       let args: unknown = p.arguments ?? p.input ?? o(p.action).command;

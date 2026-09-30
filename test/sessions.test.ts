@@ -54,9 +54,9 @@ test('这个项目文件夹里自己在工具里开的对话：Claude Code、Cod
   jsonl(path.join(day, 'rollout-2026-09-29T10-00-00-x-desk-0003.jsonl'), [
     { type: 'session_meta', payload: { id: 'x-desk-0003', cwd: root, source: 'vscode' } },
     { type: 'response_item', timestamp: now, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<environment_context>cwd</environment_context>' }] } },
-    { type: 'response_item', timestamp: now, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '加一个导出功能' }] } },
+    { type: 'response_item', timestamp: now, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '1\\. 加一个导出功能' }] } },
     { type: 'response_item', timestamp: now, payload: { type: 'function_call', name: 'shell', arguments: '{"command":["ls","-la"]}' } },
-    { type: 'response_item', timestamp: now, payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '加好了' }] } },
+    { type: 'response_item', timestamp: now, payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '加好了\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2\n</citation_entries>\n</oai-mem-citation>' }] } },
   ]);
   jsonl(path.join(day, 'rollout-2026-09-29T10-01-00-x-exec-0004.jsonl'), [{ type: 'session_meta', payload: { id: 'x-exec-0004', cwd: root, source: 'exec' } }]);
   jsonl(path.join(day, 'rollout-2026-09-29T10-02-00-x-other-0005.jsonl'), [{ type: 'session_meta', payload: { id: 'x-other-0005', cwd: other, source: 'vscode' } }]);
@@ -66,7 +66,7 @@ test('这个项目文件夹里自己在工具里开的对话：Claude Code、Cod
     list.map((x) => [x.tool, x.id, x.title]).sort(),
     [
       ['claude', 'c-desk-0001', '我起的名字'],
-      ['codex', 'x-desk-0003', '加一个导出功能'],
+      ['codex', 'x-desk-0003', '1. 加一个导出功能'],
     ]
   );
   assert.deepEqual(sessions.projectSessions(other).map((x) => x.id), ['x-other-0005']);
@@ -84,7 +84,7 @@ test('这个项目文件夹里自己在工具里开的对话：Claude Code、Cod
   assert.deepEqual(
     x.messages.map((m) => [m.role, m.text]),
     [
-      ['user', '加一个导出功能'],
+      ['user', '1. 加一个导出功能'],
       ['tool', 'shell：ls -la'],
       ['assistant', '加好了'],
     ]
