@@ -4217,9 +4217,9 @@ function sessionBody(data) {
   if (!data.messages.length) list.append(h('div', { class: 'empty-note' }, T`还没人开口`));
   // 每一问上面写时间（不是今天的带日期），好按时间找
   for (const m of data.messages) {
-    if (m.role === 'tool') list.append(h('div', { class: 'sm tool mono' }, m.text));
-    else if (m.role === 'user') list.append(h('div', { class: 'sm user' }, m.at ? h('span', { class: 'cap' }, dayClock(m.at)) : null, h('div', { class: 'note' }, m.text.length > 1500 ? `${m.text.slice(0, 1500)}…` : m.text)));
-    else list.append(h('div', { class: 'sm ai doc-md', html: md(m.text) }));
+    if (m.role === 'tool') list.append(h('div', { class: 'sm sm-tool mono' }, m.text));
+    else if (m.role === 'user') list.append(h('div', { class: 'sm sm-user' }, m.at ? h('span', { class: 'cap' }, dayClock(m.at)) : null, h('div', { class: 'note' }, m.text.length > 1500 ? `${m.text.slice(0, 1500)}…` : m.text)));
+    else list.append(h('div', { class: 'sm sm-ai doc-md', html: md(m.text) }));
   }
   // 读出来的最后几句一句接一句浮上来（全文几百句只动最后几句）
   if (!still()) [...list.children].slice(-8).forEach((el, i) => el.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 320, delay: stagger(i), easing: EASE.ease, fill: 'backwards' }));

@@ -196,6 +196,11 @@ function codexFiles(sinceMs: number): string[] {
   return out;
 }
 
+/** 行首被转义的列表记号（「1\.」「2\)」「\- 」「\* 」「\+ 」「\# 」「\> 」）还原；别处的反斜杠不动。 */
+export function unescapeListMarks(text: string): string {
+  return text.replace(/^(\s*\d+)\\([.)])/gm, '$1$2').replace(/^(\s*)\\([-+*#>])/gm, '$1$2');
+}
+
 function codexMessages(entries: J[]): SessionMessage[] {
   const out: SessionMessage[] = [];
   for (const e of entries) {
@@ -203,7 +208,9 @@ function codexMessages(entries: J[]): SessionMessage[] {
     const p = o(e.payload);
     const at = str(e.timestamp) || undefined;
     if (p.type === 'message' && (p.role === 'user' || p.role === 'assistant')) {
-      const text = (Array.isArray(p.content) ? p.content : []).map((c) => str(o(c).text)).join('\n');
+      const joined = (Array.isArray(p.content) ? p.content : []).map((c) => str(o(c).text)).join('\n');
+      // Codex 桌面版把人写的行首「1.」「- 」存成「1\.」「\- 」（不让它变成列表），读回来去掉这道转义
+      const text = p.role === 'user' ? unescapeListMarks(joined) : joined;
       if (text.trim() && !NOT_SAID.test(text)) out.push({ role: p.role, text, at });
     } else if (p.type === 'function_call' || p.type === 'custom_tool_call' || p.type === 'local_shell_call') {
       let args: unknown = p.arguments ?? p.input ?? o(p.action).command;

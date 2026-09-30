@@ -4171,11 +4171,11 @@ button.busy::after {
   max-width: 760px;
   padding: 4px 0 32px;
 }
-.sess-log .sm.user {
+.sess-log .sm-user {
   align-self: flex-end;
   max-width: 82%;
 }
-.sess-log .sm.user .note {
+.sess-log .sm-user .note {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   padding: 8px 12px;
@@ -4183,10 +4183,10 @@ button.busy::after {
   background: var(--fog);
   font-size: 13.5px;
 }
-.sess-log .sm.ai {
+.sess-log .sm-ai {
   font-size: 13.5px;
 }
-.sess-log .sm.tool {
+.sess-log .sm-tool {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4211,13 +4211,13 @@ button.busy::after {
   color: var(--ink-2);
 }
 
-.sess-log .sm.user {
+.sess-log .sm-user {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 3px;
 }
-.sess-log .sm.user .cap {
+.sess-log .sm-user .cap {
   font: 11px/1 var(--mono);
   color: var(--ink-4);
 }

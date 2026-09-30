@@ -102,3 +102,7 @@ test('回到原工具接着说：Claude Code 用桌面版的链接打开，别�
   assert.equal(sessions.resumeHow('dsh', 'abc-123456', root), null);
   assert.equal(sessions.resumeHow('codex', 'x; rm -rf /', root), null);
 });
+
+test('Codex 桌面版存成「1\\.」「\\- 」的行首列表记号读回来还原，别处的反斜杠不动', () => {
+  assert.equal(sessions.unescapeListMarks('1\\. 跑一遍只读检查\n2\\) 再看 `a\\.b`\n\\- 一条\n  \\* 缩进的\n路径 C:\\\\x 和 \\n 不动'), '1. 跑一遍只读检查\n2) 再看 `a\\.b`\n- 一条\n  * 缩进的\n路径 C:\\\\x 和 \\n 不动');
+});
