@@ -21,7 +21,7 @@ RelayDesk lets these AIs **take turns in the same project folder**, and makes su
 
 The records in the screenshot were written by the AIs in Chinese; with English on, they write in English.
 
-There is also a **group chat**: ask several AIs the same thing. *Compare* asks them at once without seeing each other; *Vote* collects anonymous proposals and one vote per AI, weak or strong, with no voting for yourself. The adopted plan goes into the task's rules, and every later leg follows it.
+There is also a **group chat**: ask several AIs the same thing. *Compare* asks them at once without seeing each other; *Vote* collects anonymous proposals and one vote per AI, weak or strong, with no voting for yourself; *Summary* has one AI merge the answers, with names removed, into a conclusion, agreements, disagreements, advice and a next step. The adopted plan goes into the task's rules, and every later leg follows it.
 
 > The web app is available in English and Chinese: click **EN / 中** at the bottom left (the first visit follows your browser language). Detailed documentation is in Chinese ([README.md](README.md), [docs/设计说明.md](docs/设计说明.md)). RelayDesk is used most on macOS. Windows 10 / 11 has a native version (double-click `install-windows.cmd`, no WSL needed), installed and used on a real machine. The CLI and web app also run on Linux.
 
@@ -55,7 +55,7 @@ Then:
 2. **Connect a project.** Click **+** next to *Projects*, choose the project folder, and write what should be done. The first line is the task; each line starting with `- ` is a step.
 3. **Continue**, either way:
    - **By hand:** open the folder in any AI tool and say "continue". It reads `.relay/接力本.md` first and follows the rules while writing a handoff.
-   - **Let RelayDesk do it:** click **Auto** at the top. To have one specific AI do one leg, use the ▾ next to it.
+   - **Let RelayDesk do it:** click **Auto** at the top (or turn on *Auto* under the input box before sending the task). To have one specific AI do one leg, use the ▾ next to it. With *Auto* off, sending only writes the task down.
 4. **Watch, review, roll back** in the web app. Legs by weak models say *Needs review*.
 
 ### One tool, several models

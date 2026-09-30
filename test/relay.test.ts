@@ -716,6 +716,9 @@ test('派活指定谁指挥、活派给谁：同一个工具的大模型拆和�
   assert.equal(runs.filter((l) => / -m gpt-6-mini /.test(l)).length, 4, '做活的四棒用小模型');
   assert.ok(runs.filter((l) => / -s read-only /.test(l)).length >= 1, '边做边复核用只读模式');
   assert.equal(runs.filter((l) => !/ -m /.test(l) && !/ -s read-only /.test(l)).length, 2, '拆和终审用它自己的模型');
+  // 收尾那一行按「这次跑过的棒」算棒数和 token：边做边复核的棒也在里面（以前漏掉，强模型 token 少算）
+  const g = JSON.parse(fs.readFileSync(path.join(s.repo, '.relay', 'runs', 'state.json'), 'utf8')) as { stints: number[] };
+  assert.deepEqual([...g.stints].sort((a, b) => a - b), st.map((x) => x.id), '边做边复核的棒也算进这次跑过的棒');
 });
 
 test('派活时干活的那位临时出错（连不上）：先原地再派它一次，不马上换人；下一棒日志开头写着原因', () => {

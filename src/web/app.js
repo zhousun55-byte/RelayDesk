@@ -382,10 +382,11 @@ function splitDiff(text) {
 function md(src) {
   const lines = String(src || '').replace(/\r/g, '').split('\n');
   const out = [];
-  let list = false;
+  /** 正开着的列表：ul 圆点 / ol 编号（「1. 2. 3.」保留编号，写「见第 3 条」时对得上）。 */
+  let list = '';
   const flush = () => {
-    if (list) out.push('</ul>');
-    list = false;
+    if (list) out.push(`</${list}>`);
+    list = '';
   };
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
@@ -410,11 +411,16 @@ function md(src) {
       out.push(`<blockquote>${inline(esc(l.replace(/^>\s?/, '')))}</blockquote>`);
       continue;
     }
-    const lm = l.match(/^\s*[-*]\s+(.*)$/) || l.match(/^\s*\d+[.、]\s+(.*)$/);
-    if (lm) {
-      if (!list) out.push('<ul>');
-      list = true;
-      out.push(`<li>${inline(esc(lm[1]))}</li>`);
+    const bm = l.match(/^\s*[-*]\s+(.*)$/);
+    const nm = !bm && l.match(/^\s*(\d+)[.、)]\s+(.*)$/);
+    if (bm || nm) {
+      const kind = bm ? 'ul' : 'ol';
+      if (list !== kind) {
+        flush();
+        out.push(kind === 'ol' && nm[1] !== '1' ? `<ol start="${Number(nm[1])}">` : `<${kind}>`);
+        list = kind;
+      }
+      out.push(`<li>${inline(esc(bm ? bm[1] : nm[2]))}</li>`);
       continue;
     }
     if (!l.trim()) {
@@ -466,8 +472,10 @@ function lasted(a, b) {
   const s = Math.max(0, Math.round((msOf(b) - msOf(a)) / 1000));
   if (!Number.isFinite(s)) return '';
   if (s < 60) return T`${s} 秒`;
-  if (s < 3600) return T`${Math.round(s / 60)} 分钟`;
-  return T`${Math.floor(s / 3600)} 小时 ${Math.round((s % 3600) / 60)} 分`;
+  // 先按分钟四舍五入再分小时：59 分 40 秒是「1 小时 0 分」，不是「60 分钟」「1 小时 60 分」
+  const m = Math.round(s / 60);
+  if (m < 60) return T`${m} 分钟`;
+  return T`${Math.floor(m / 60)} 小时 ${m % 60} 分`;
 }
 
 function size(n) {
@@ -3043,7 +3051,12 @@ function streamItems(t) {
   }
   // 这一棒变了（交接写完了、有了复核……）：展开的全文也要重新取，不能一直显示第一次展开时的样子。
   const stints = threadStints(t);
-  for (const s of stints) items.push({ key: `s${s.id}`, at: msOf(s.startedAt), stop: true, sig: stintSig(s), make: () => stintCard(s), changed: () => S.detail.delete(s.id) });
+  // 按棒号排：派活时边做边复核和下一步同时开始，复核那一棒号数大、开始得早，按开始时间排会读成 10、12、11
+  let prev = -Infinity;
+  for (const s of stints) {
+    const at = (prev = Math.max(msOf(s.startedAt) || prev, prev + 0.001));
+    items.push({ key: `s${s.id}`, at, stop: true, sig: stintSig(s), make: () => stintCard(s), changed: () => S.detail.delete(s.id) });
+  }
   const rb = p.lastRollback;
   if (rb && inRange(rangeOf(t), msOf(rb.ts))) items.push({ key: `rb:${rb.ts}`, at: msOf(rb.ts), sig: String(rb.undone), make: () => rollbackLine(rb) });
   // 线路的终点：最新的任务看验收；全自动的结果放在它开始时的那段对话里（换了任务之后，上一个任务的「验收通过」不能跑到新任务里）。
@@ -3602,7 +3615,7 @@ function stintMenuItems(s) {
     ...sessionItems(s.session, T`第 ${s.id} 棒`),
     s.handoff ? { label: T`复制交接`, icon: 'copy', run: () => copyHandoff(s) } : null,
     '-',
-    pending ? { label: T`复核`, sub: rv ? rv.label : T`没有可用的强模型`, icon: 'review', disabled: !rv || runState().running, run: () => goWith(null, rv, 'review') } : null,
+    pending ? { label: T`复核`, sub: rv ? memberName(rv) : T`没有可用的强模型`, icon: 'review', disabled: !rv || runState().running, run: () => goWith(null, rv, 'review') } : null,
     pending ? { label: T`跳过复核`, icon: 'check', run: () => skipReview(null, s) } : null,
     !s.rolledBack && s.status !== 'working' ? { label: T`退回到这之前`, icon: 'undo', disabled: S.st.project.now.kind === 'relay', run: () => rollbackTo(null, s) } : null,
   ];
@@ -3947,10 +3960,12 @@ function chatItems(d, live) {
   }
   for (const it of items) if (it.group) it.sig = JSON.stringify([it.group.rows.map((r) => [r.ts, r.text, r.error]), looks.key]);
   for (const v of d.votes) items.push({ key: `v:${v.id}`, at: voteBorn(v), sig: JSON.stringify([v, live, looks.key]), make: () => voteCard(v, live) });
-  items.sort((a, b) => a.at - b.at);
   const st = d.status;
-  if (st && (st.speaking.length || st.queue.length)) items.push({ key: 'typing', sig: JSON.stringify([st, looks.key]), make: () => typingLine(st) });
-  else if (live && canSummarize(d)) items.push({ key: 'sum-bar', sig: looks.key, make: summaryBar });
+  const typing = st && (st.speaking.length || st.queue.length);
+  // 「总结」紧跟在最后一问的回答后面：后面又开了投票，按钮也不挂到投票底下（它总结的是那几份回答，不是投票）
+  if (!typing && live && canSummarize(d)) items.push({ key: 'sum-bar', at: msOf(d.rows[d.rows.length - 1].ts) + 0.5 || Infinity, sig: looks.key, make: summaryBar });
+  items.sort((a, b) => a.at - b.at);
+  if (typing) items.push({ key: 'typing', sig: JSON.stringify([st, looks.key]), make: () => typingLine(st) });
   return items;
 }
 
@@ -4060,12 +4075,14 @@ function voteCard(v, live = true) {
   // 出方案那一步没出上的：照样投了票，这里单独写一行（不是弃权）
   if (v.noOption && v.noOption.length) box.append(h('div', { class: 'noopt' }, T`没出方案：${v.noOption.map((x) => T`${nameOf(x.voterLabel)}（${tr(x.why)}）`).join(T`、`)}`));
   const why = ballots.filter((b) => b.voter !== 'human' || b.choice);
+  // 顶上「N 票」只数投了方案的；这里连弃权一起列，差的那几张写明是弃权
+  const abstain = why.filter((b) => !b.choice).length;
   if (done && why.length) {
     box.append(
       h(
         'details',
         { class: 'ballots' },
-        h('summary', { class: 'link' }, T`每一票 · ${why.length}`),
+        h('summary', { class: 'link' }, T`每一票 · ${why.length}`, abstain ? T`（${abstain} 张弃权）` : ''),
         why.map((b) =>
           h(
             'div',
@@ -4459,7 +4476,7 @@ function buildComposer() {
     { class: 'seg ink', role: 'group', 'aria-label': T`方式` },
     [
       ['turn', T`讨论`, T`轮流回答，后面的看得到前面的`],
-      ['solo', T`对比`, T`同时回答，互相看不到，并排放`],
+      ['solo', T`对比`, T`同时回答，互相看不到，排在一起对照`],
       ['vote', T`投票`, T`各出方案，匿名投票`],
     ].map(([k, label, tip]) =>
       h(
@@ -6056,7 +6073,7 @@ function settingsBody(tab, redraw) {
       setRow(T`每一棒最长`, T`一位 AI 接着做一段叫一棒。到时间还没交接就停下，算作出错。`, stepper('stintTimeoutMin', 1, 600, T`分钟`, 5)),
       setRow(T`复核、终审最长`, T`强模型检查别人做的活，到时间就停下。`, stepper('reviewTimeoutMin', 1, 240, T`分钟`, 5)),
       setSec(T`全自动`),
-      setRow(T`最多接力`, T`接满这些棒就停，不会没完没了地接下去。`, stepper('maxStints', 1, 100, T`棒`)),
+      setRow(T`最多接力`, T`干活的棒接满这么多就停，复核、终审不算；派活时至少是清单步数的两倍。`, stepper('maxStints', 1, 100, T`棒`)),
       setRow(T`额度用完时等恢复`, T`所有 AI 的额度都用完时，等最早恢复的那一位接着做；关掉就直接停下。`, sw('waitForQuota', T`额度用完时等恢复`)),
       setRow(T`做完后终审`, T`清单全部打勾后，由强模型把整件事从头再走一遍，过了才算完成。`, sw('finalReview', T`做完后终审`)),
       setRow(T`边做边复核`, T`派活时，干活的做下一步，指挥的同时只看不改地复核上一步；有问题就在清单里插一步去改。会多用一些强模型的额度。`, sw('sideReview', T`边做边复核`)),

@@ -490,25 +490,32 @@ class GoRunner {
     }
   }
 
+  /**
+   * 先把文件夹里的事对上账：有人（你自己在别的工具里）改到一半、账上还开着的那一棒，算它一棒，结束掉。
+   * 它刚才还在改文件：没你确认它停了，就不换人（换了就是两个 AI 同时改一个文件夹）。
+   * 全自动每一轮先做这一步再算待复核：不然这一棒要等下一棒开工才结账，复核名单里没有它，又得单独派一次强模型复核。
+   * taker：接手的那一位（全自动算名单时还不知道是谁，写「全自动」）。
+   */
+  private settleNative(taker?: MemberInfo): LedgerView {
+    const root = this.root;
+    track(root);
+    const v = loadLedger(root);
+    if (!v.open || v.open.via !== 'native') return v;
+    const active = nativeActive(v);
+    if (active && !this.opts.force) throw nativeActiveError(active);
+    const h = v.open.handoff ? readHandoff(root, v.open.handoff) : null;
+    const idle = Math.round((Date.now() - Date.parse(v.open.activeAt ?? v.open.startedAt)) / 60_000);
+    const who = taker ? nameOf(taker) : '全自动';
+    const note = active ? `${who} 接手时这一棒没交接，已确认它停下` : `${who} 接手时这一棒没交接：${idle} 分钟没改文件，账面上结束`;
+    closeStint(root, { ...v.open, ...(active ? { stopConfirmed: true } : {}) }, { status: h ? 'handed' : 'unfinished', to: takeSnapshot(root, '换人接手').sha, handoff: h, note }, projectConfig(root));
+    return loadLedger(root);
+  }
+
   /** 让一位成员跑一棒（干活 / 复核 / 终审 / 拆解）。step：派活时这一棒只做清单里的哪一步。 */
   async runStint(m: MemberInfo, kind: Stint['kind'], targets: Stint[] = [], step?: Step): Promise<StintOutcome> {
     const root = this.root;
     const cfg = projectConfig(root);
-    // 先把文件夹里的事对上账：有人（你自己在别的工具里）改到一半的，算它一棒，结束掉。
-    track(root);
-    let v = loadLedger(root);
-    if (v.open && v.open.via === 'native') {
-      // 它刚才还在改文件：没你确认它停了，就不换人（换了就是两个 AI 同时改一个文件夹）。
-      const active = nativeActive(v);
-      if (active && !this.opts.force) throw nativeActiveError(active);
-      const h = v.open.handoff ? readHandoff(root, v.open.handoff) : null;
-      const idle = Math.round((Date.now() - Date.parse(v.open.activeAt ?? v.open.startedAt)) / 60_000);
-      const note = active
-        ? `${nameOf(m)} 接手时这一棒没交接，已确认它停下`
-        : `${nameOf(m)} 接手时这一棒没交接：${idle} 分钟没改文件，账面上结束`;
-      closeStint(root, { ...v.open, ...(active ? { stopConfirmed: true } : {}) }, { status: h ? 'handed' : 'unfinished', to: takeSnapshot(root, '换人接手').sha, handoff: h, note }, cfg);
-      v = loadLedger(root);
-    }
+    const v = this.settleNative(m);
     const from = takeSnapshot(root, `第 ${nextStintId(v)} 棒开始前`).sha;
     const id = nextStintId(v);
     const handoff = handoffFileFor(root, id, m.harness ?? m.name);
@@ -962,6 +969,8 @@ class GoRunner {
       ...(r.session ? { session: r.session } : {}),
     };
     const closed = closeStint(root, stint, { status, to: base, handoff: null, lastWords: r.finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
+    // 这次跑过的棒里也有它：收尾那一行的棒数、强模型 token 才算得全
+    this.state.stints.push(id);
     applyReviews(root, closed);
     const after = loadLedger(root);
     const verdicts = ids.map((tid) => {
@@ -1021,7 +1030,7 @@ class GoRunner {
       }
       if (kind === 'review') {
         if (m.tier !== 'strong') throw new RelayError(`${nameOf(m)} 不能复核：它算弱模型，复核要强模型`, 'weak-reviewer');
-        const targets = pendingReviews(v);
+        const targets = pendingReviews(this.settleNative(m));
         if (!targets.length) return this.finish('done', '没有待复核的棒');
         const o = await this.runStint(m, 'review', targets);
         return this.finishOnce(o);
@@ -1053,7 +1062,8 @@ class GoRunner {
       // 防止没完没了的保险：派活一棒一步，步数多时棒数也多
       for (let guard = 0; guard < Math.max(this.settings.maxStints, 50) * 3 + 10; guard++) {
         if (this.stopRequested) return this.end('stopped', '全自动已停止：改到一半的内容还在文件夹里');
-        track(this.root);
+        // 对账：别人改到一半、已经停了的那一棒先结账，这一轮的待复核里就有它
+        this.settleNative();
         // 边做边复核跑完了：趁两棒之间的空档记账（清单里可能多了一步去改）
         await this.recordSide(false);
         const v = loadLedger(this.root);

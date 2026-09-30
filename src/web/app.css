@@ -553,11 +553,11 @@ svg.i {
 .seg.view::before {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.07), inset 0 0 0 1px var(--hair);
 }
-/* 在接力那一页时群聊里来了新回答 */
+/* 在接力那一页时群聊里来了新回答：跟在字后面（不写 left / right，停在字尾），英文「Chat」也不压着字 */
 .seg.view .news {
   position: absolute;
   top: 6px;
-  right: 10px;
+  margin-left: 2px;
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -1822,17 +1822,11 @@ button.busy::after {
   font-weight: 600;
   font-size: 14px;
 }
-.who b,
-.who .mdl {
+.who b {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 0 1 auto;
-}
-.who .mdl {
-  font: 12px/1 var(--mono);
-  color: var(--ink-3);
-  flex-shrink: 100;
 }
 .who .say {
   font-size: 13px;
@@ -2062,9 +2056,13 @@ button.busy::after {
 .doc-md p {
   margin: 4px 0;
 }
-.doc-md ul {
+.doc-md ul,
+.doc-md ol {
   margin: 4px 0;
   padding-left: 18px;
+}
+.doc-md ol {
+  padding-left: 22px;
 }
 .doc-md li {
   margin: 2px 0;
@@ -3397,7 +3395,8 @@ button.busy::after {
 .toast {
   position: fixed;
   left: 50%;
-  top: 16px;
+  /* 顶栏下面：不盖住顶栏中间刚变的状态（点了「全自动」，「已开始」不压着「复核中 0:00」） */
+  top: 60px;
   translate: -50% 0;
   z-index: 70;
   display: flex;
@@ -4075,7 +4074,6 @@ button.busy::after {
     display: none;
   }
   /* 窄的时候小条上只留名字和状态 */
-  .who .mdl,
   .who .tm {
     display: none;
   }

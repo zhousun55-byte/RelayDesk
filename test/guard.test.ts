@@ -120,6 +120,24 @@ test('换人之前：有 AI 在别的工具里干到一半、刚才还在改文�
   assert.equal(st[1].who.member, 'codex');
 });
 
+test('全自动开始时有一棒在别的工具里做到一半、已经停了：先结账再算待复核，一次复核就把它和之前待复核的一起核了', () => {
+  const s = prepared('native-settle', { RELAY_NATIVE_QUIET_MS: '0' });
+  setOrder(s, ['codex']);
+  s.relay(['init']);
+  s.relay(['task', '做一件事', '--step', '第一件', '--step', '第二件']);
+  s.relay(['go', 'claude']);
+  s.write('by-hand.txt', '在别的工具里写了一半\n');
+  s.relay(['snap']);
+  assert.deepEqual(s.stints().map((x) => [x.id, x.status]), [[1, 'handed'], [2, 'working']]);
+  s.relay(['auto']);
+  const st = s.stints();
+  assert.equal(st[1].status, 'unfinished');
+  assert.match(st[1].note, /全自动 接手时这一棒没交接/);
+  const reviews = st.filter((x) => x.kind === 'review');
+  assert.equal(reviews.length, 1, `以前第一次复核只核第 1 棒，第 2 棒另派一次：${JSON.stringify(reviews.map((r) => r.targets))}`);
+  assert.deepEqual(reviews[0].targets, [1, 2]);
+});
+
 test('一个项目同一时间只能有一个调度：锁在别的活着的进程手里就拒绝；那个进程没了，锁就能拿走', async () => {
   const s = prepared('lock');
   s.relay(['init']);
