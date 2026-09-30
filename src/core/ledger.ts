@@ -120,7 +120,8 @@ export interface Stint {
   /** 这一棒在工具里的对话（工具的编号、对话编号）：网页能看整段对话，也能回到原工具接着说。 */
   session?: { tool: string; id: string };
   /** 工具自己报的 token 用量（日志里「本轮用了 X 输入 / Y 输出 token」加起来；没报就没有）。 */
-  tokens?: { input: number; output: number };
+  /** 输入含读缓存的；cached = 其中读缓存的（工具报了才有）。 */
+  tokens?: { input: number; output: number; cached?: number };
   /** 终审棒：结论写在哪（.relay/复核/终审-….md）、写的是什么。 */
   reviewFile?: string;
   verdict?: Verdict;

@@ -285,26 +285,34 @@ function hhmm(ts: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-/** 拼给某个 AI 的发言提示：规则 + 项目背景 + 最近的讨论记录。纯函数。solo = 对比（这一轮别人的回答不给它看）。 */
-export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean }): string {
-  const max = input.maxChars ?? 80_000;
+/** 群聊里一次最多带多少字的讨论记录；更早的写明在哪个文件，要看自己打开。 */
+export const TALK_HISTORY_CHARS = 40_000;
+/** 放进来的记录从第几句开始：按这么多句一档往后挪，挪一次管好几轮（开头不变，接口的缓存才接得上）。 */
+const TALK_STEP = 12;
+
+/**
+ * 拼给某个 AI 的发言提示。纯函数。solo = 对比（这一轮别人的回答不给它看）。file = 这段群聊的完整记录（相对项目）。
+ * 顺序按「不变的在前、变的在后」：规则 → 讨论记录（只往后接）→ 任务状态、轮到谁。
+ * 各家接口按开头相同的部分算缓存：开头一变，后面整段都要按全价重读。
+ */
+export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean; file?: string }): string {
+  const max = input.maxChars ?? TALK_HISTORY_CHARS;
   const lines = input.rows
     .filter((r) => !r.error)
     .map((r) => `[${hhmm(r.ts)}] ${r.kind === 'system' ? '（接力台）' : r.who}：${r.text.trim()}`);
-  const kept: string[] = [];
-  let size = 0;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    size += lines[i].length + 2;
-    if (size > max && kept.length > 0) break;
-    kept.unshift(lines[i]);
-  }
+  // 最少要从哪一句开始才放得下；再往后取整到一档（最后一句总要在）
+  let need = lines.length;
+  for (let size = 0; need > 0 && size + lines[need - 1].length + 2 <= max; need--) size += lines[need - 1].length + 2;
+  if (need === lines.length && need > 0) need--;
+  let from = Math.ceil(need / TALK_STEP) * TALK_STEP;
+  if (from >= lines.length) from = need;
+  const kept = lines.slice(from);
   const t = input.context?.task;
+  const where = input.file ? `完整记录在 \`${input.file}\`` : '';
+  const head = from > 0 ? `较早的 ${from} 句没放进来${where ? `，${where}，需要时自己打开看` : ''}` : where;
   const parts = [
-    `你在参加「接力台」里的一场多 AI 讨论。你是「${input.speaker}」。`,
+    '你在参加「接力台」里的一场多 AI 讨论。',
     `项目文件夹：${input.root}（可以读里面的文件做参考，但不要修改任何文件，也不要执行会改变东西的命令）。`,
-    t
-      ? `当前任务：${t.title}\n任务状态：${t.phaseText}${t.changes.length ? `\n已改动的文件：${t.changes.slice(0, 30).join('、')}` : ''}`
-      : '现在没有进行中的任务。',
     [
       '怎么发言：',
       '- 直接给出你的判断和理由，不客套，不复述别人已经说过的话。',
@@ -313,10 +321,14 @@ export function buildTalkPrompt(input: { speaker: string; root: string; rows: Ta
       '- 消息里用反引号括起来的路径是提到的文件；.relay/uploads/ 下的是人传上来的附件（图片、文档……），需要就自己打开看，图片用你能看图的工具打开。',
       '- 用中文。只输出你要说的话本身。',
     ].join('\n'),
-    `讨论记录（${kept.length < lines.length ? '较早的已省略，' : ''}最新的在最后）：\n${kept.join('\n\n') || '（还没有人说话）'}`,
-    input.solo
-      ? `这一轮是「对比」：几个 AI 同时回答最后那个问题，互相看不到，回答会并排放在一起给人对比。请给出你自己独立的判断，不用顾及别人会怎么说。现在请你（${input.speaker}）回答。`
-      : `现在轮到你（${input.speaker}）发言。`,
+    `讨论记录（${head ? `${head}；` : ''}最新的在最后）：\n${kept.join('\n\n') || '（还没有人说话）'}`,
+    t
+      ? `当前任务：${t.title}\n任务状态：${t.phaseText}${t.changes.length ? `\n已改动的文件：${t.changes.slice(0, 30).join('、')}` : ''}`
+      : '现在没有进行中的任务。',
+    `你是「${input.speaker}」。` +
+      (input.solo
+        ? `这一轮是「对比」：几个 AI 同时回答最后那个问题，互相看不到，回答会并排放在一起给人对比。请给出你自己独立的判断，不用顾及别人会怎么说。现在请你（${input.speaker}）回答。`
+        : `现在轮到你（${input.speaker}）发言。`),
   ];
   return redactSecrets(parts.join('\n\n'));
 }
@@ -476,7 +488,8 @@ async function speakOne(root: string, th: Thread, name: string, rows: TalkRow[],
     const who = speakerName(agent);
     // 问话里写了 /技能名：附上这个技能的做法
     const asked = [...rows].reverse().find((r) => r.kind === 'human');
-    const prompt = buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), ...(solo ? { solo: true } : {}) }) + (asked ? skillNote(root, asked.text) : '');
+    const file = path.relative(root, th.file).split(path.sep).join('/');
+    const prompt = buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), file, ...(solo ? { solo: true } : {}) }) + skillNote(root, asked?.text ?? '');
     const text = await askAgent(agent, prompt, root);
     // 问的过程中可能换了模型（比如命令行太旧、换成了它用得了的）：署名按答完之后的算。
     const m = memberModel(agent, loadDetected());
@@ -505,7 +518,7 @@ async function runRound(root: string, th: Thread, r: Round, context: () => TalkC
     const solo = r.soloQueue.shift();
     if (solo) {
       // 对比：大家看到的记录都停在这一刻，互相看不到这一轮别人的回答。
-      const rows = readTalk(root, 80, th.file);
+      const rows = readTalk(root, Infinity, th.file);
       r.since = new Date().toISOString();
       for (const n of solo.names) r.current.add(n);
       await inParallel(solo.names, 4, async (n) => {
@@ -518,7 +531,7 @@ async function runRound(root: string, th: Thread, r: Round, context: () => TalkC
     if (!name) break;
     r.current.add(name);
     r.since = new Date().toISOString();
-    await speakOne(root, th, name, readTalk(root, 80, th.file), context);
+    await speakOne(root, th, name, readTalk(root, Infinity, th.file), context);
     r.current.delete(name);
   }
 }

@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { autoSettingsSafe, type SkillMode } from './auto-settings';
 
 /**
  * 技能（skill）：一个文件夹里一份 SKILL.md（开头 name、description，后面是做法）。各家工具各读各的地方，
  * 接力台把这个项目用得上的汇成一份：输入框打 / 能挑，任务或问话里写了 /技能名，发给 AI 的开工说明里就附上
  * 这个技能的说明——派给谁都照着做（接口成员读不到项目外面的文件，也能用上）。
  * 同名的只算一个：项目里的优先，再是 ~/.claude/skills、~/.agents/skills、~/.codex/skills。
+ * 设置里可以一个个开关：不用（打 / 不列、写了也不带）/ 点名时（默认）/ 每次都带上。
  */
 
 export interface SkillInfo {
@@ -18,11 +20,16 @@ export interface SkillInfo {
   from: 'project' | 'user';
 }
 
-function dirsOf(root: string): { dir: string; from: SkillInfo['from'] }[] {
+/** root = null：只看这台电脑上的。 */
+function dirsOf(root: string | null): { dir: string; from: SkillInfo['from'] }[] {
   const h = os.homedir();
   return [
-    { dir: path.join(root, '.claude', 'skills'), from: 'project' },
-    { dir: path.join(root, '.agents', 'skills'), from: 'project' },
+    ...(root
+      ? [
+          { dir: path.join(root, '.claude', 'skills'), from: 'project' as const },
+          { dir: path.join(root, '.agents', 'skills'), from: 'project' as const },
+        ]
+      : []),
     { dir: path.join(h, '.claude', 'skills'), from: 'user' },
     { dir: path.join(h, '.agents', 'skills'), from: 'user' },
     { dir: path.join(h, '.codex', 'skills'), from: 'user' },
@@ -45,7 +52,7 @@ function front(text: string, key: string): string {
   return v.replace(/^["']|["']$/g, '').trim();
 }
 
-export function listSkills(root: string): SkillInfo[] {
+export function listSkills(root: string | null): SkillInfo[] {
   const out: SkillInfo[] = [];
   const seen = new Set<string>();
   for (const { dir, from } of dirsOf(root)) {
@@ -73,18 +80,22 @@ export function listSkills(root: string): SkillInfo[] {
   return out;
 }
 
-/** 文字里写了哪些技能：/技能名（行首或空白后面），名字在这个项目的技能里。 */
-export function skillsIn(root: string, text: string, all = listSkills(root)): SkillInfo[] {
+function modes(): Record<string, SkillMode> {
+  return autoSettingsSafe().settings.skills;
+}
+
+/** 这次要带上的技能：文字里写了 /技能名 的（行首或空白后面），加上设成「每次都带上」的；设成「不用」的不算。 */
+export function skillsIn(root: string, text: string, all = listSkills(root), mode: Record<string, SkillMode> = modes()): SkillInfo[] {
   const names = new Set([...text.matchAll(/(^|\s)\/([^\s/`'"，。、；：]+)/g)].map((m) => m[2]));
-  return all.filter((s) => names.has(s.name));
+  return all.filter((s) => mode[s.name] !== 'off' && (names.has(s.name) || mode[s.name] === 'always'));
 }
 
 /**
  * 附在开工说明后面的技能说明：每个技能的做法（SKILL.md 去掉开头那段，最多 12000 字），一共最多 30000 字。
  * 没写技能就是空的。
  */
-export function skillNote(root: string, text: string): string {
-  const used = skillsIn(root, text);
+export function skillNote(root: string, text: string, mode: Record<string, SkillMode> = modes()): string {
+  const used = skillsIn(root, text, listSkills(root), mode);
   if (!used.length) return '';
   let left = 30_000;
   const parts: string[] = [];
@@ -100,5 +111,5 @@ export function skillNote(root: string, text: string): string {
     left -= take;
     parts.push(`### 技能「${s.name}」（说明文件 ${s.path}）\n\n${body.slice(0, take)}${take < body.length ? '\n\n…（后面还有，需要时打开说明文件看）' : ''}`);
   }
-  return parts.length ? `\n\n---\n这次要用到的技能（写了 /技能名）：照下面的做法做；你的工具里装了同名技能的，直接用它也行。\n\n${parts.join('\n\n')}` : '';
+  return parts.length ? `\n\n---\n这次要用到的技能（写了 /技能名，或设成每次都带上）：照下面的做法做；你的工具里装了同名技能的，直接用它也行。\n\n${parts.join('\n\n')}` : '';
 }

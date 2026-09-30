@@ -1433,12 +1433,23 @@ function tokenText(n) {
 function tokenSplit(ids) {
   const sum = { strong: 0, weak: 0 };
   let missing = 0;
+  let input = 0;
+  let cached = 0;
   for (const s of ids.map(stintById).filter(Boolean)) {
     if (!s.tokens) missing++;
-    else sum[s.who.tier === 'weak' ? 'weak' : 'strong'] += s.tokens.input + s.tokens.output;
+    else {
+      sum[s.who.tier === 'weak' ? 'weak' : 'strong'] += s.tokens.input + s.tokens.output;
+      input += s.tokens.input;
+      cached += s.tokens.cached || 0;
+    }
   }
   const bits = [sum.strong ? T`强模型 ${tokenText(sum.strong)}` : '', sum.weak ? T`弱模型 ${tokenText(sum.weak)}` : ''].filter(Boolean);
-  return bits.length ? `${bits.join(T`，`)} ${L('token')}${missing ? T`（${missing} 棒没报用量）` : ''}` : '';
+  return bits.length ? `${bits.join(T`，`)} ${L('token')}${cached ? T`，输入里 ${cacheRate(cached, input)} 读的缓存` : ''}${missing ? T`（${missing} 棒没报用量）` : ''}` : '';
+}
+
+/** 输入里读缓存的占几成：「86%」。 */
+function cacheRate(cached, input) {
+  return `${Math.min(100, Math.round((cached / Math.max(1, input)) * 100))}%`;
 }
 
 function voteBorn(v) {
@@ -2610,7 +2621,7 @@ function renderBar(t) {
     p.task.empty,
     p.now.kind,
     p.now.stint,
-    g && [g.id, g.status, g.mode, g.current && g.current.stint, g.current && g.current.kind, g.current && g.current.label, g.waitingUntil],
+    g && [g.id, g.status, g.mode, g.current && g.current.stint, g.current && g.current.kind, g.current && g.current.label, g.waitingUntil, g.side && [g.side.member, g.side.targets]],
     p.pending.map((s) => s.id),
     p.acceptance && p.acceptance.state,
     members().map((m) => [m.name, m.cooling, m.canWork]),
@@ -2629,6 +2640,20 @@ function renderBar(t) {
   const ctl = [];
   if (latest) {
     meta.push(statusEl(run));
+    // 派活边做边复核：和干活的那一棒同时在跑
+    if (run.running && g && g.side) {
+      const sd = g.side;
+      meta.push(
+        h(
+          'span',
+          { class: 'status live', 'data-k': 'side', 'data-tip': `${T`边做边复核`} · ${nameOf(sd.label)}`, onmouseenter: () => lightStints(sd.targets), onmouseleave: unlightCards },
+          h('span', { class: 'dot' }),
+          tile({ name: sd.member, label: sd.label }, 's16'),
+          h('span', { class: 'w' }, T`复核第 ${sd.targets.join('、')} 棒`),
+          h('span', { class: 'num', 'data-since': sd.since }, elapsed(sd.since))
+        )
+      );
+    }
     if (p.pending.length)
       meta.push(
         h(
@@ -3370,7 +3395,7 @@ function spanOf(s) {
   if (s.status === 'working') return h('span', { class: 'tm', 'data-since': s.startedAt }, elapsed(s.startedAt));
   const from = dayClock(s.startedAt);
   const to = s.endedAt ? clock(s.endedAt) : '';
-  return h('span', { class: 'tm' }, `${from}${to && to !== clock(s.startedAt) ? `–${to}` : ''}${s.endedAt ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}${s.tokens ? ` · ${tokenText(s.tokens.input + s.tokens.output)} ${L('token')}` : ''}`);
+  return h('span', { class: 'tm' }, `${from}${to && to !== clock(s.startedAt) ? `–${to}` : ''}${s.endedAt ? ` · ${lasted(s.startedAt, s.endedAt)}` : ''}${s.tokens ? ` · ${tokenText(s.tokens.input + s.tokens.output)} ${L('token')}${s.tokens.cached ? T`（缓存 ${cacheRate(s.tokens.cached, s.tokens.input)}）` : ''}` : ''}`);
 }
 
 /** 一棒：钉在线路上的一张小条。没交接、身份不明的是虚线；什么都没干的只留一行。 */
@@ -4892,7 +4917,7 @@ function updateSuggest() {
     const cmds = talk && !sl[1] && SUG.start === 0 ? SLASH.filter((c) => (!c.when || c.when()) && (!qy || c.label.includes(qy) || c.key.startsWith(qy))).map((c) => ({ label: c.label, icon: c.icon, cmd: c })) : [];
     loadSkills();
     const skills = SKILLS.list
-      .filter((k) => !qy || k.name.toLowerCase().includes(qy) || k.description.toLowerCase().includes(qy))
+      .filter((k) => k.mode !== 'off' && (!qy || k.name.toLowerCase().includes(qy) || k.description.toLowerCase().includes(qy)))
       .slice(0, qy ? 12 : 8)
       .map((k) => ({ label: k.name, sub: k.description.length > 48 ? `${k.description.slice(0, 48)}…` : k.description, icon: 'book', skill: k }));
     if (cmds.length && skills.length) cmds[0].head = T`命令`;
@@ -5597,6 +5622,7 @@ function openSettings(tab) {
     ['members', T`成员`, 'user'],
     ['project', L('项目', '设置'), 'folder'],
     ['relay', T`运行`, 'bolt'],
+    ['skills', T`技能`, 'book'],
     ['general', T`通用`, 'sliders'],
   ];
   // 左边的页签：选中的那一块是滑过去的（和分段按钮一样的弹簧）
@@ -5675,6 +5701,69 @@ function setField(label, desc, input, ...after) {
   return h('div', { class: 'field' }, h('span', null, label), desc ? h('small', null, desc) : null, input, ...after);
 }
 
+/**
+ * 设置里的技能：项目里的、这台电脑上的，每个三档——不用 / 点名时 / 每次。
+ * 点一下原地滑过去、存好亮「已保存」；存失败退回原来那一档。列表是现取的，取到之前留一行灰字。
+ */
+const SKILL_MODES = [
+  ['off', T`不用`],
+  ['named', T`点名时`],
+  ['always', T`每次`],
+];
+
+function skillsPane() {
+  const mark = savedMark();
+  const box = h('div', { class: 'skill-list' }, h('p', { class: 'set-desc' }, T`读取中…`));
+  const row = (k) => {
+    const seg = h('div', { class: 'seg', role: 'group', 'aria-label': k.name });
+    const pick = async (mode) => {
+      const was = k.mode;
+      if (mode === was) return;
+      const press = (m) => {
+        for (const b of seg.querySelectorAll(':scope > button')) b.setAttribute('aria-pressed', String(b.dataset.m === m));
+        syncSegs(seg.parentNode);
+      };
+      press(mode);
+      k.mode = mode;
+      try {
+        const r = await api('/api/skills/mode', { name: k.name, mode });
+        S.st.settings = r.settings;
+        mark.flash();
+      } catch (e) {
+        k.mode = was;
+        press(was);
+        fail(T`保存设置`, e);
+      }
+    };
+    seg.append(...SKILL_MODES.map(([m, label]) => h('button', { 'data-m': m, 'aria-pressed': String((k.mode || 'named') === m), onclick: () => pick(m) }, label)));
+    const desc = k.description.length > 90 ? `${k.description.slice(0, 90)}…` : k.description;
+    const r = setRow(k.name, desc, seg);
+    r.title = k.description;
+    return r;
+  };
+  const fill = (list) => {
+    const groups = [
+      [T`这个项目里的`, list.filter((k) => k.from === 'project')],
+      [T`这台电脑上的`, list.filter((k) => k.from !== 'project')],
+    ].filter(([, g]) => g.length);
+    const rows = groups.flatMap(([title, g]) => [setSec(title), ...g.map(row)]);
+    box.replaceChildren(...(rows.length ? rows : [h('p', { class: 'set-desc' }, T`没有找到技能：放在项目的 .claude/skills、.agents/skills，或者本机的 ~/.claude/skills、~/.agents/skills、~/.codex/skills 里，每个技能一个文件夹、一份 SKILL.md。`)]));
+    syncSegs(box);
+    if (!still()) [...box.children].forEach((el, i) => el.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 300, delay: Math.round(stagger(i) * 0.6), easing: EASE.ease, fill: 'backwards' }));
+  };
+  api(q('/api/skills'))
+    .then((r) => {
+      Object.assign(SKILLS, { dir: S.dir, list: r.skills });
+      fill(r.skills);
+    })
+    .catch((e) => box.replaceChildren(h('p', { class: 'set-desc' }, `${T`读不到技能`}：${tr(String((e && e.message) || e || '').replace(/[。.]+$/, ''))}`)));
+  return [
+    h('div', { class: 'set-title' }, T`技能`, mark.el),
+    h('p', { class: 'set-desc' }, T`打 / 能挑的技能。点名时：任务或问话里写了 /名字，才把它的做法附给 AI；每次：派活的每一棒、群聊的每一次发言都附上；不用：打 / 不列出，写了也不附。各家工具自己装的技能，仍由工具自己加载。`),
+    box,
+  ];
+}
+
 /** 一小节的标题：几行设置归在一起。 */
 function setSec(text) {
   return h('div', { class: 'set-sec' }, text);
@@ -5688,6 +5777,7 @@ const LEVEL_DESC = {
 function settingsBody(tab, redraw) {
   const st = S.st;
   if (tab === 'members') return membersPane(redraw);
+  if (tab === 'skills') return skillsPane();
   if (tab === 'project') {
     const p = st.project;
     if (!p.init) return [h('div', { class: 'set-title' }, L('项目', '设置')), h('div', { class: 'empty-note' }, T`这个文件夹还没接入`)];
@@ -5853,6 +5943,7 @@ function settingsBody(tab, redraw) {
       setRow(T`最多接力`, T`接满这些棒就停，不会没完没了地接下去。`, stepper('maxStints', 1, 100, T`棒`)),
       setRow(T`额度用完时等恢复`, T`所有 AI 的额度都用完时，等最早恢复的那一位接着做；关掉就直接停下。`, sw('waitForQuota', T`额度用完时等恢复`)),
       setRow(T`做完后终审`, T`清单全部打勾后，由强模型把整件事从头再走一遍，过了才算完成。`, sw('finalReview', T`做完后终审`)),
+      setRow(T`边做边复核`, T`派活时，干活的做下一步，指挥的同时只看不改地复核上一步；有问题就在清单里插一步去改。会多用一些强模型的额度。`, sw('sideReview', T`边做边复核`)),
       setSec(T`对话`),
       setRow(T`接着同一段对话`, T`同一个任务里，一位成员的下一棒顺着它上一棒在工具里的那段话说下去，一个任务在工具里就是一整段对话。关掉则每棒另起一段，token 用得少。`, sw('sameThread', T`接着同一段对话`)),
       setRow(T`列出工具里的对话`, T`接力页左边列出在这个文件夹里、用 Claude Code 和 Codex 开过的对话，点开是全文。别的文件夹不读。`, sw('showSessions', T`列出工具里的对话`)),

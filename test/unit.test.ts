@@ -692,6 +692,29 @@ test('群聊提示：带规则、任务背景和记录；太长时丢掉最早�
   assert.ok(p.endsWith('现在轮到你（DeepSeek）发言。'));
   const solo = buildTalkPrompt({ speaker: 'DeepSeek', root: '/p', rows: rows.slice(0, 2), solo: true });
   assert.match(solo, /这一轮是「对比」/);
+  // 不变的在前、变的在后：规矩 → 记录 → 任务状态、轮到谁（开头不变，接口的缓存才接得上）
+  assert.ok(p.indexOf('怎么发言') < p.indexOf('讨论记录') && p.indexOf('讨论记录') < p.indexOf('当前任务') && p.indexOf('当前任务') < p.indexOf('你是「DeepSeek」'));
+  assert.ok(p.startsWith('你在参加「接力台」里的一场多 AI 讨论。\n'), '开头不带谁在说');
+  // 记录太长：按 12 句一档往后挪，多了一两句开头还是那几句；更早的写明在哪个文件
+  const at = (n: number) => buildTalkPrompt({ speaker: 'X', root: '/p', rows: rows.slice(0, n), maxChars: 3000, file: '.relay/talk.jsonl' });
+  const head = (t: string) => t.slice(0, t.indexOf('当前') > 0 ? t.indexOf('当前') : t.indexOf('现在没有'));
+  const firstLine = (t: string) => t.match(/\[\d\d:\d\d\] \S+：(第\d+句)/)?.[1];
+  assert.equal(firstLine(at(40)), firstLine(at(41)), '多一句，开头不动');
+  assert.match(head(at(41)), /较早的 \d+ 句没放进来，完整记录在 `\.relay\/talk\.jsonl`，需要时自己打开看/);
+  assert.ok(head(at(41)).length < 3200);
+});
+
+test('清单加一步：next 插在第一个没打勾的那一步前面，带一行做法；没有没打勾的就接在最后', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-next-'));
+  fs.mkdirSync(path.join(dir, '.relay'));
+  fs.writeFileSync(path.join(dir, '.relay', '任务.md'), '# 任务\n\n做\n\n## 进度\n\n- [x] 一\n- [ ] 二\n  - 二的做法\n- [ ] 三\n');
+  let t = editTask(dir, { op: 'add', text: '按复核改好第 2 棒', next: true, note: '只改复核里写的' });
+  assert.deepEqual(t.items.map((i) => [i.text, i.done]), [['一', true], ['按复核改好第 2 棒', false], ['二', false], ['三', false]]);
+  assert.equal(t.items[1].note, '只改复核里写的');
+  assert.equal(t.items[2].note, '二的做法', '原来那一步的做法还跟着它');
+  fs.writeFileSync(path.join(dir, '.relay', '任务.md'), '# 任务\n\n做\n\n## 进度\n\n- [x] 一\n');
+  t = editTask(dir, { op: 'add', text: '补一步', next: true });
+  assert.deepEqual(t.items.map((i) => i.text), ['一', '补一步']);
 });
 
 test('群聊记录：兼容旧格式，跳过旧版残留的「正在说」和投票行', () => {

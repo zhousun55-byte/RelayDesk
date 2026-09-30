@@ -28,10 +28,16 @@ export interface AutoSettings {
   sameThread: boolean;
   /** 左边列出这个项目文件夹里、你自己在 Claude Code、Codex 里开的对话。 */
   showSessions: boolean;
+  /** 派活时边做边复核：弱模型做下一步的同时，强模型只看不改地复核上一步（省掉最后集中复核的时间）。 */
+  sideReview: boolean;
+  /** 技能怎么用（技能名 → off 不用 / always 每次都带上）；没写的 = 写了 /技能名 才带上。 */
+  skills: Record<string, SkillMode>;
 }
 
+export type SkillMode = 'off' | 'always';
+
 export function defaultAutoSettings(): AutoSettings {
-  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, lang: 'zh', lead: '', sameThread: false, showSessions: true };
+  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, lang: 'zh', lead: '', sameThread: false, showSessions: true, sideReview: true, skills: {} };
 }
 
 export function autoSettingsPath(): string {
@@ -75,7 +81,19 @@ export function normalizeAutoSettings(raw: unknown): AutoSettings {
     lead: names(o.lead, '派活谁来指挥')[0] ?? '',
     sameThread: bool(o.sameThread, d.sameThread),
     showSessions: bool(o.showSessions, d.showSessions),
+    sideReview: bool(o.sideReview, d.sideReview),
+    skills: skillModes(o.skills),
   };
+}
+
+function skillModes(v: unknown): Record<string, SkillMode> {
+  const out: Record<string, SkillMode> = {};
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+  for (const [k, m] of Object.entries(v as Record<string, unknown>).slice(0, 500)) {
+    const name = k.trim().slice(0, 120);
+    if (name && (m === 'off' || m === 'always')) out[name] = m;
+  }
+  return out;
 }
 
 /**

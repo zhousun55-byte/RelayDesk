@@ -605,7 +605,7 @@ test('DeepSeek Harness 的 token 用量从它自己记的会话里读：这个�
   const keep = process.env.DSH_HOME;
   process.env.DSH_HOME = dsh;
   try {
-    assert.deepEqual(harness.dshUsage(root, Date.now() - 60_000), { input: 3150, output: 15 }, '只算这一棒开始之后的；流里的片段不重复算');
+    assert.deepEqual(harness.dshUsage(root, Date.now() - 60_000), { input: 3150, output: 15, cached: 3000 }, '只算这一棒开始之后的；流里的片段不重复算；其中读缓存的单记');
     assert.equal(harness.dshUsage('/别的/项目', 0), null);
   } finally {
     if (keep === undefined) delete process.env.DSH_HOME;

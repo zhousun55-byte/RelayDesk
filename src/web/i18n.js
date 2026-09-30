@@ -488,6 +488,23 @@ const EN = {
   '上次没通过{}': 'Last run failed{}',
   '上次没跑成{}': "Last run couldn't start{}",
   还没跑过: 'Not run yet',
+  不用: 'Off',
+  点名时: 'When named',
+  每次: 'Always',
+  这个项目里的: 'In this project',
+  这台电脑上的: 'On this computer',
+  '读取中…': 'Loading…',
+  读不到技能: "Couldn't read skills",
+  '没有找到技能：放在项目的 .claude/skills、.agents/skills，或者本机的 ~/.claude/skills、~/.agents/skills、~/.codex/skills 里，每个技能一个文件夹、一份 SKILL.md。':
+    'No skills found. Put them in the project’s .claude/skills or .agents/skills, or in ~/.claude/skills, ~/.agents/skills or ~/.codex/skills on this computer: one folder per skill, each with a SKILL.md.',
+  '打 / 能挑的技能。点名时：任务或问话里写了 /名字，才把它的做法附给 AI；每次：派活的每一棒、群聊的每一次发言都附上；不用：打 / 不列出，写了也不附。各家工具自己装的技能，仍由工具自己加载。':
+    'Skills offered when typing /. When named: its instructions go to the AI only if the task or message contains /name. Always: attached to every dispatch leg and every chat turn. Off: not listed under /, and not attached even when named. Skills installed in each tool are still loaded by that tool.',
+  边做边复核: 'Review alongside',
+  '派活时，干活的做下一步，指挥的同时只看不改地复核上一步；有问题就在清单里插一步去改。会多用一些强模型的额度。':
+    'While dispatching, the worker takes the next step as the lead reviews the last one, read-only. Problems get a fix step inserted into the checklist. Uses some extra strong-model quota.',
+  '复核第 {} 棒': 'Reviewing leg {}',
+  '，输入里 {} 读的缓存': ', {} of input from cache',
+  '（缓存 {}）': ' ({} cached)',
 };
 
 /** 界面上的字：`T\`第 ${n} 棒\``。 */
@@ -518,6 +535,7 @@ const CJK = /[㐀-鿿]/;
 
 /** 整句对照：状态、结论、强弱、常见的提示。 */
 const SRV_WORD = {
+  没说清是哪个技能: 'Unclear which skill',
   进行中: 'In progress',
   已交接: 'Handed off',
   没交接: 'No handoff',

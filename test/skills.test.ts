@@ -43,3 +43,22 @@ test('技能汇总：项目的、~/.claude、~/.agents、~/.codex 的都列出�
   put(path.join(root, '.agents', 'skills'), 'long', 'name: long', 'x'.repeat(20_000));
   assert.ok(skills.skillNote(root, '/long').length < 13_000);
 });
+
+test('技能的三档：不用的写了也不附、打 / 不列；每次的没写也附；设置里存得下、读得回', () => {
+  const root = path.join(HOME, 'proj-modes');
+  put(path.join(root, '.agents', 'skills'), '甲', 'name: 甲\ndescription: 甲的说明', '甲的做法');
+  put(path.join(root, '.agents', 'skills'), '乙', 'name: 乙\ndescription: 乙的说明', '乙的做法');
+  const list = skills.listSkills(root);
+  const mode = { 甲: 'off', 乙: 'always' } as const;
+  assert.deepEqual(skills.skillsIn(root, '按 /甲 做', list, mode).map((s) => s.name), ['乙'], '甲设成不用：写了也不算；乙每次都带上');
+  const note = skills.skillNote(root, '什么都没写', mode);
+  assert.match(note, /乙的做法/);
+  assert.doesNotMatch(note, /甲的做法/);
+  // 存进 ~/.relay/auto.json，不传 mode 时按设置来
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const auto = require('../src/core/auto-settings') as typeof import('../src/core/auto-settings');
+  const saved = auto.saveAutoSettings({ ...auto.defaultAutoSettings(), skills: { 甲: 'off', 乙: 'always', 丙: 'named', '': 'off' } });
+  assert.deepEqual(saved.skills, { 甲: 'off', 乙: 'always' }, '「点名时」是默认，不存；空名字、不认得的档丢掉');
+  assert.match(skills.skillNote(root, '/甲'), /乙的做法/);
+  assert.doesNotMatch(skills.skillNote(root, '/甲'), /甲的做法/);
+});

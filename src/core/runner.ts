@@ -52,7 +52,10 @@ export function usageLine(j: J): string | null {
   const n = (...keys: string[]) => keys.reduce((sum, k) => sum + (typeof u[k] === 'number' ? (u[k] as number) : 0), 0);
   const input = n('input_tokens', 'prompt_tokens', 'inputTokens', 'promptTokens', 'promptTokenCount', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'cacheReadTokens', 'cacheWriteTokens');
   const output = n('output_tokens', 'completion_tokens', 'outputTokens', 'completionTokens', 'candidatesTokenCount');
-  return input || output ? `本轮用了 ${input} 输入 / ${output} 输出 token` : null;
+  // 其中读缓存的（Claude Code：cache_read_input_tokens；Codex：cached_input_tokens，已含在 input_tokens 里）
+  const details = o(u.prompt_tokens_details);
+  const cached = n('cache_read_input_tokens', 'cacheReadTokens', 'cached_input_tokens', 'cachedContentTokenCount') + (typeof details.cached_tokens === 'number' ? details.cached_tokens : 0);
+  return input || output ? `本轮用了 ${input} 输入 / ${output} 输出 token${cached ? `（输入里 ${cached} 读的缓存）` : ''}` : null;
 }
 
 function s(v: unknown): string {
@@ -433,16 +436,18 @@ export function looksLikeNetworkBlip(text: string): boolean {
 }
 
 /** 一棒的日志里记的 token 用量加起来（每家工具每轮一行「本轮用了 X 输入 / Y 输出 token」）；一行都没有就是没报。 */
-export function usageTotal(log: string): { input: number; output: number } | null {
+export function usageTotal(log: string): { input: number; output: number; cached?: number } | null {
   let input = 0;
   let output = 0;
+  let cached = 0;
   let seen = false;
-  for (const m of log.matchAll(/本轮用了 (\d+) 输入 \/ (\d+) 输出 token/g)) {
+  for (const m of log.matchAll(/本轮用了 (\d+) 输入 \/ (\d+) 输出 token(?:（输入里 (\d+) 读的缓存）)?/g)) {
     input += Number(m[1]);
     output += Number(m[2]);
+    cached += Number(m[3] ?? 0);
     seen = true;
   }
-  return seen ? { input, output } : null;
+  return seen ? { input, output, ...(cached ? { cached } : {}) } : null;
 }
 
 /** 工具自己最后报的错：日志里最后一条「出错：」；没有就是标准错误里最后一句像报错的话，再没有就是标准错误的最后一行。 */

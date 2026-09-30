@@ -10,7 +10,7 @@ import { explainFailure, firstVersion, findHarness, harnessForCommand, tomlTop, 
 import { chat, readKeyFrom, stripJsonComments, ToolChat } from '../src/core/llm';
 import { pickModel } from '../src/core/providers';
 import { normalizeAgent } from '../src/core/registry';
-import { describeArgv, looksLikeNetworkBlip, makeParser, usageLine } from '../src/core/runner';
+import { describeArgv, looksLikeNetworkBlip, makeParser, usageLine, usageTotal } from '../src/core/runner';
 
 test('工具调用参数：安全档 / 完全放开 / 只读，各家都按无人值守的方式调', () => {
   const loc: Located = { exec: ['/bin/x'], version: '1', where: '/bin/x' };
@@ -279,10 +279,12 @@ test('认得的报错翻成一句说明（只说是什么情况）：ZCode 没�
 });
 
 test('各家工具报的 token 用量统一记成一行（输入把读缓存、写缓存的也算上）；没报就没有这一行', () => {
-  assert.equal(usageLine({ type: 'result', usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 5, output_tokens: 7 } }), '本轮用了 115 输入 / 7 输出 token');
+  assert.equal(usageLine({ type: 'result', usage: { input_tokens: 10, cache_read_input_tokens: 100, cache_creation_input_tokens: 5, output_tokens: 7 } }), '本轮用了 115 输入 / 7 输出 token（输入里 100 读的缓存）');
+  assert.deepEqual(usageTotal('本轮用了 115 输入 / 7 输出 token（输入里 100 读的缓存）\n本轮用了 5 输入 / 1 输出 token\n'), { input: 120, output: 8, cached: 100 }, '一棒加起来，读缓存的单记');
+  assert.deepEqual(usageTotal('本轮用了 5 输入 / 1 输出 token\n'), { input: 5, output: 1 });
   assert.equal(usageLine({ usage: { prompt_tokens: 3, completion_tokens: 4 } }), '本轮用了 3 输入 / 4 输出 token');
   assert.equal(usageLine({ type: 'final', data: { usage: { inputTokens: 8, outputTokens: 9 } } }), '本轮用了 8 输入 / 9 输出 token');
   assert.equal(usageLine({ type: 'result', result: 'x' }), null);
   assert.deepEqual(makeParser('claude').line(JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', usage: { input_tokens: 1, output_tokens: 2 } })), ['结束（success）', '本轮用了 1 输入 / 2 输出 token']);
-  assert.deepEqual(makeParser('codex').line(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 5, cached_input_tokens: 3, output_tokens: 6 } })), ['本轮用了 5 输入 / 6 输出 token']);
+  assert.deepEqual(makeParser('codex').line(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 5, cached_input_tokens: 3, output_tokens: 6 } })), ['本轮用了 5 输入 / 6 输出 token（输入里 3 读的缓存）']);
 });

@@ -2,7 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { ToolChat } from '../src/core/llm';
+import { runLlmAgent } from '../src/core/llm-agent';
 import type { ApiSpec } from '../src/core/types';
 
 /**
@@ -65,9 +69,14 @@ test('Claude 协议边生成边收：文字、工具调用（参数分几段来�
     const r = await chat.next(10_000, (n) => seen.push(n));
     assert.equal(r.text, '先写框架。');
     assert.deepEqual([r.calls[0].name, r.calls[0].args.path, String(r.calls[0].args.content).length], ['write_file', 'a.md', 3000]);
-    assert.deepEqual(chat.used, { input: 120, output: 900 });
+    assert.deepEqual(chat.used, { input: 120, output: 900, cached: 0 });
     assert.equal(s.bodies[0].stream, true);
     assert.equal(s.bodies[0].max_tokens, 32000);
+    // 标好「可以缓存」：系统提示、最新一条的最后一块；存着的对话本身不带标记
+    assert.deepEqual((s.bodies[0].system as { cache_control?: unknown }[])[0].cache_control, { type: 'ephemeral' });
+    const sent = s.bodies[0].messages as { content: { cache_control?: unknown }[] }[];
+    assert.deepEqual(sent.at(-1)!.content.at(-1)!.cache_control, { type: 'ephemeral' });
+    assert.equal(r.cut, false);
     assert.ok(seen.length >= 1, '写长东西时报进度');
   } finally {
     s.close();
@@ -87,7 +96,7 @@ test('OpenAI 协议边生成边收：文字、思考内容、分段的工具调�
       { choices: [{ delta: { content: '好的' } }] },
       { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'write_file', arguments: '{"path":' } }] } }] },
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"b.md"}' } }] } }] },
-      { choices: [], usage: { prompt_tokens: 50, completion_tokens: 7 } },
+      { choices: [], usage: { prompt_tokens: 50, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 32 } } },
     ]);
   });
   try {
@@ -97,9 +106,39 @@ test('OpenAI 协议边生成边收：文字、思考内容、分段的工具调�
     const r = await chat.next(10_000);
     assert.equal(r.text, '好的');
     assert.deepEqual(r.calls.map((c) => [c.id, c.name, c.args.path]), [['c1', 'write_file', 'b.md']]);
-    assert.deepEqual(chat.used, { input: 50, output: 7 });
+    assert.deepEqual(chat.used, { input: 50, output: 7, cached: 32 }, '其中读缓存的单记');
     assert.equal(s.bodies.length, 2);
     assert.equal(s.bodies[1].stream_options, undefined, '第二次不带');
+  } finally {
+    s.close();
+  }
+});
+
+test('写到一次能写的上限被截断：报 cut；接口不收「可以缓存」的标记就去掉再试，之后都不带', async () => {
+  let n = 0;
+  const s = await server((b, res) => {
+    if (n++ === 0 && JSON.stringify(b).includes('cache_control')) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end('{"error":"unknown field cache_control"}');
+      return;
+    }
+    sse(res, [
+      { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 't', name: 'write_file', input: {} } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"a.md","content":"很长' } },
+      { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 32000 } },
+    ]);
+  });
+  try {
+    const chat = new ToolChat({ baseUrl: s.url, model: 'm', apiKeyEnv: '', format: 'anthropic' }, 'sys', tools);
+    chat.user('写');
+    const r = await chat.next(10_000);
+    assert.equal(r.cut, true);
+    assert.equal(r.calls[0].badArgs, '{"path":"a.md","content":"很长', '半截的参数原样交回去，让它知道断在哪');
+    chat.results([{ id: 't', content: '出错' }]);
+    chat.user('再来');
+    await chat.next(10_000);
+    assert.equal(s.bodies.length, 3);
+    assert.ok(!JSON.stringify(s.bodies[1]).includes('cache_control') && !JSON.stringify(s.bodies[2]).includes('cache_control'), '去掉之后都不带');
   } finally {
     s.close();
   }
@@ -129,5 +168,34 @@ test('一直在出字就不算卡住（总时长比「多久没回音」长也�
     slow.close();
     stuck.close();
     plain.close();
+  }
+});
+
+test('小助手干活：没调用 finish 就停下，提醒一次再收；写到上限被截断，告诉它分几次写（append 接在后面）', async () => {
+  const replies = [
+    // 1. 写到一半被截断：参数是半截的
+    [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'a', function: { name: 'write_file', arguments: '{"path":"长.md","content":"开头' } }] } }] }, { choices: [{ delta: {}, finish_reason: 'length' }] }],
+    // 2. 分两次写
+    [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'b', function: { name: 'write_file', arguments: '{"path":"长.md","content":"前半"}' } }] } }] }],
+    [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', function: { name: 'write_file', arguments: '{"path":"长.md","content":"后半","append":true}' } }] } }] }],
+    // 3. 说了句话就停了（没 finish）
+    [{ choices: [{ delta: { content: '写好了' } }] }],
+    // 4. 提醒之后 finish
+    [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'd', function: { name: 'finish', arguments: '{"summary":"写了长.md"}' } }] } }] }],
+  ];
+  let i = 0;
+  const s = await server((_b, res) => sse(res, replies[Math.min(i++, replies.length - 1)]));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-agent-'));
+  const lines: string[] = [];
+  try {
+    const r = await runLlmAgent({ spec: { baseUrl: s.url, model: 'm', apiKeyEnv: '' }, cwd: dir, brief: '写一篇长的', level: 'safe', gateCommand: '', protectedPaths: [], log: (l) => lines.push(l), shouldStop: () => false, deadline: Date.now() + 20_000, maxSteps: 10 });
+    assert.equal(r.finalText, '写了长.md');
+    assert.equal(fs.readFileSync(path.join(dir, '长.md'), 'utf8'), '前半后半');
+    const said = (k: number) => JSON.stringify(s.bodies[k].messages);
+    assert.match(said(1), /被截断了：长文件分几次写/);
+    assert.match(said(4), /还没调用 finish/);
+    assert.ok(lines.some((l) => /被截断/.test(l)));
+  } finally {
+    s.close();
   }
 });

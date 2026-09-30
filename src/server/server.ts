@@ -390,7 +390,12 @@ export function createServer(opts: ServerOptions): http.Server {
     '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
     '/api/models': (q) => modelOptions(q.get('name') ?? ''),
     // 这个项目能用的技能（输入框打 / 挑）
-    '/api/skills': (q) => ({ skills: listSkills(dirOf(q, {})).map(({ name, description, from }) => ({ name, description, from })) }),
+    // 技能：接入过的项目连同项目里的；别的文件夹（还没打开项目时）只列这台电脑上的，不读那个文件夹
+    '/api/skills': (q) => {
+      const root = dirOf(q, {});
+      const modes = autoSettingsSafe().settings.skills;
+      return { skills: listSkills(loadLedger(root).init ? root : null).map(({ name, description, from }) => ({ name, description, from, mode: modes[name] ?? 'named' })) };
+    },
     // 这个项目文件夹里你自己在 Claude Code、Codex 里开的对话（设置里关掉就不列）
     '/api/sessions': (q) => {
       const root = dirOf(q, {});
@@ -571,6 +576,15 @@ export function createServer(opts: ServerOptions): http.Server {
       setMemberModel(str(b.name) ?? '', str(b.model) ?? '');
       for (const r of liveProjects()) refreshBrief(r);
       return { members: memberViews() };
+    },
+    '/api/skills/mode': (_q, b) => {
+      const name = (str(b.name) ?? '').trim();
+      if (!name || name.length > 120 || /[\\/\u0000-\u001f]/.test(name)) throw new RelayError('没说清是哪个技能', 'bad-skill');
+      const cur = autoSettingsSafe().settings;
+      const skills = { ...cur.skills };
+      if (b.mode === 'off' || b.mode === 'always') skills[name] = b.mode;
+      else delete skills[name];
+      return { settings: saveAutoSettings({ ...cur, skills }) };
     },
     '/api/members/crew': (_q, b) => {
       setCrew(str(b.name) ?? '', str(b.crew) ?? '');

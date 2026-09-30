@@ -237,7 +237,8 @@ export function archivedTaskTitles(root: string): string[] {
 
 // ---- 在网页上改任务：改标题、给清单打勾、加一步、删一步 ----
 
-export type TaskEdit = { op: 'title'; text: string } | { op: 'toggle'; index: number; done?: boolean } | { op: 'add'; text: string } | { op: 'remove'; index: number };
+/** add 的 next：插在第一个没打勾的那一步前面（边做边复核发现了问题，下一棒先改）。 */
+export type TaskEdit = { op: 'title'; text: string } | { op: 'toggle'; index: number; done?: boolean } | { op: 'add'; text: string; next?: boolean; note?: string } | { op: 'remove'; index: number };
 
 const ITEM_LINE = /^(\s*[-*+]\s+\[)( |x|X|✓|√)(\]\s+)(.*)$/;
 /** 紧跟在一步下面、缩进写的一行做法（不是另一步）。 */
@@ -302,12 +303,16 @@ export function editTask(root: string, edit: TaskEdit): TaskDoc {
     if (edit.op === 'add') {
       const text = oneLine(edit.text);
       if (!text) throw new RelayError('这一步是空的', 'empty');
-      if (!sec.items.length && sec.placeholders.length) lines[sec.placeholders[0]] = `- [ ] ${text}`;
-      else if (sec.items.length) lines.splice(itemEnd(lines, sec.items[sec.items.length - 1]), 0, `- [ ] ${text}`);
+      const open = edit.next ? sec.items.find((i) => lines[i].match(ITEM_LINE)?.[2] === ' ') : undefined;
+      const add = [`- [ ] ${text}`, ...(edit.note ? edit.note.split('\n').filter((l) => l.trim()).map((l) => `  ${l.trim()}`) : [])];
+      if (open !== undefined) lines.splice(open, 0, ...add);
+      else if (!sec.items.length && sec.placeholders.length) lines.splice(sec.placeholders[0], 1, ...add);
+      else if (sec.items.length) lines.splice(itemEnd(lines, sec.items[sec.items.length - 1]), 0, ...add);
       else {
         const at = sec.start + 1;
-        lines.splice(at, 0, '', `- [ ] ${text}`);
-        if (lines[at + 2] !== undefined && lines[at + 2].trim()) lines.splice(at + 2, 0, '');
+        lines.splice(at, 0, '', ...add);
+        const after = at + 1 + add.length;
+        if (lines[after] !== undefined && lines[after].trim()) lines.splice(after, 0, '');
       }
     } else {
       const at = sec.items[edit.index];

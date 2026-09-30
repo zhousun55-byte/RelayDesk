@@ -177,6 +177,8 @@ type J = Record<string, unknown>;
 const o = (v: unknown): J => (v && typeof v === 'object' && !Array.isArray(v) ? (v as J) : {});
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
+const DEADLINE = '到了时限';
+
 /**
  * 边生成边收（SSE）：只要还在出字就不算卡住——idleMs 这么久一个字都没来才停，总时长只受 deadlineMs 管。
  * 以前是等整段回完才收，写一篇长文档一次就能等满 3 分钟、超时作废（2026-09-30 GLM-5.3 Flash 派活实测）。
@@ -192,7 +194,10 @@ async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: nu
     ctrl.abort();
   };
   let idle = setTimeout(() => stop(`${Math.round(idleMs / 1000)} 秒没有回音`), idleMs);
-  const hard = setTimeout(() => stop('超时'), deadlineMs);
+  // 到了这一棒的时限：不是连不上，另报一种错（换人重来也是白等一整棒，不原地再试）
+  const hard = setTimeout(() => stop(DEADLINE), deadlineMs);
+  const failed = (e: unknown): RelayError =>
+    why === DEADLINE ? new RelayError('到了这一段的时限，还没写完。', 'llm-deadline') : new RelayError(`连不上 ${spec.baseUrl}（${why || (e instanceof Error ? (e.cause instanceof Error ? e.cause.message : e.message) : String(e))}）。`, 'llm-net');
   const poke = () => {
     clearTimeout(idle);
     idle = setTimeout(() => stop(`${Math.round(idleMs / 1000)} 秒没有回音`), idleMs);
@@ -202,7 +207,7 @@ async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: nu
     try {
       res = await fetch(endpoint(spec, 'chat'), { method: 'POST', headers: headers(spec, key), body: JSON.stringify({ ...body, stream: true }), signal: ctrl.signal });
     } catch (e) {
-      throw new RelayError(`连不上 ${spec.baseUrl}（${why || (e instanceof Error ? (e.cause instanceof Error ? e.cause.message : e.message) : String(e))}）。`, 'llm-net');
+      throw failed(e);
     }
     if (!res.ok) {
       const text = (await res.text()).slice(0, 300);
@@ -210,7 +215,13 @@ async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: nu
       throw new RelayError(`${spec.baseUrl} 返回 HTTP ${res.status}：${text}`, code);
     }
     // 不支持流式：整段 JSON
-    if (!/event-stream/i.test(res.headers.get('content-type') ?? '')) return o(await res.json());
+    if (!/event-stream/i.test(res.headers.get('content-type') ?? '')) {
+      try {
+        return o(await res.json());
+      } catch (e) {
+        throw failed(e);
+      }
+    }
     const reader = res.body!.getReader();
     const dec = new TextDecoder();
     let buf = '';
@@ -235,7 +246,7 @@ async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: nu
         }
       }
     } catch (e) {
-      throw new RelayError(`连不上 ${spec.baseUrl}（${why || (e instanceof Error ? e.message : String(e))}）。`, 'llm-net');
+      throw failed(e);
     }
     return null;
   } finally {
@@ -289,14 +300,16 @@ export interface ToolCall {
 
 export class ToolChat {
   private msgs: J[] = [];
-  /** 这次对话一共用了多少 token（接口返回的 usage 加起来；输入含缓存）。 */
-  readonly used = { input: 0, output: 0 };
+  /** 这次对话一共用了多少 token（接口返回的 usage 加起来；输入含缓存，cached = 其中读缓存的）。 */
+  readonly used = { input: 0, output: 0, cached: 0 };
 
   private count(data: J): void {
     const u = o(data.usage);
-    const n = (k: string) => (typeof u[k] === 'number' ? (u[k] as number) : 0);
+    const n = (k: string, from: J = u) => (typeof from[k] === 'number' ? (from[k] as number) : 0);
     this.used.input += n('prompt_tokens') + n('input_tokens') + n('cache_read_input_tokens') + n('cache_creation_input_tokens');
     this.used.output += n('completion_tokens') + n('output_tokens');
+    // Claude 协议：cache_read_input_tokens；OpenAI：prompt_tokens_details.cached_tokens；DeepSeek：prompt_cache_hit_tokens
+    this.used.cached += n('cache_read_input_tokens') + (n('cached_tokens', o(u.prompt_tokens_details)) || n('prompt_cache_hit_tokens'));
   }
   /**
    * 模型回的思考内容（reasoning_content）要不要原样传回去。DeepSeek 等思考模型在连续调用工具时要求传回，
@@ -322,12 +335,19 @@ export class ToolChat {
   private maxTokens = 32_000;
   /** 接口收不收 stream_options（OpenAI 协议报用量要它）。 */
   private streamOptions = true;
+  /**
+   * Claude 协议要自己标「从这里往前可以缓存」：系统提示和最新一条各标一处，每一步只多算新的那一截
+   * （不标的话，同一棒里每一步都把前面整段对话按全价重算一遍）。接口不收这个字段就去掉，之后都不带。
+   * OpenAI 协议的接口（DeepSeek、GLM、OpenAI）按前缀自动缓存，不用标：对话只往后接、不改前面，就命中。
+   */
+  private cacheMarks = true;
 
   /**
    * 请模型说下一段。deadlineMs：这一段最多等多久；idleMs：多久一个字都没来算卡住。
    * onProgress(已写的字数)：边写边报（写长文件时日志里看得到它在干活）。
+   * cut：写到一次能写的上限被截断了（Claude 协议 stop_reason=max_tokens，OpenAI 协议 finish_reason=length）。
    */
-  async next(deadlineMs = 15 * 60_000, onProgress?: (chars: number) => void, idleMs = Number(process.env.RELAY_LLM_IDLE_MS ?? 120_000)): Promise<{ text: string; calls: ToolCall[] }> {
+  async next(deadlineMs = 15 * 60_000, onProgress?: (chars: number) => void, idleMs = Number(process.env.RELAY_LLM_IDLE_MS ?? 120_000)): Promise<{ text: string; calls: ToolCall[]; cut: boolean }> {
     const run = async <T>(once: () => Promise<T>): Promise<T> => {
       for (let attempt = 0; ; attempt++) {
         try {
@@ -348,19 +368,31 @@ export class ToolChat {
       }
     };
     if (this.spec.format === 'anthropic') {
+      const mark = { cache_control: { type: 'ephemeral' } };
+      // 标记只加在发出去的副本上：存着的对话不动，不然标记越积越多（最多只能标 4 处）
+      const marked = (): J[] => {
+        const last = this.msgs.at(-1);
+        if (!last || !Array.isArray(last.content) || !last.content.length) return this.msgs;
+        const blocks = last.content as J[];
+        return [...this.msgs.slice(0, -1), { ...last, content: [...blocks.slice(0, -1), { ...blocks.at(-1), ...mark }] }];
+      };
       const body = () => ({
         model: this.spec.model,
         max_tokens: this.maxTokens,
-        system: this.system,
-        messages: this.msgs,
+        system: this.cacheMarks ? [{ type: 'text', text: this.system, ...mark }] : this.system,
+        messages: this.cacheMarks ? marked() : this.msgs,
         tools: this.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
       });
       const blocks: J[] = [];
       const json: string[] = [];
       const usage: J = {};
+      let stop = '';
       const onEvent = (e: J) => {
         if (e.type === 'message_start') Object.assign(usage, o(o(e.message).usage));
-        else if (e.type === 'message_delta') Object.assign(usage, o(e.usage));
+        else if (e.type === 'message_delta') {
+          Object.assign(usage, o(e.usage));
+          stop = String(o(e.delta).stop_reason ?? stop);
+        }
         else if (e.type === 'content_block_start') {
           const i = Number(e.index);
           blocks[i] = { ...o(e.content_block) };
@@ -379,20 +411,26 @@ export class ToolChat {
           else if (d.type === 'signature_delta') b.signature = String(b.signature ?? '') + String(d.signature ?? '');
         }
       };
-      let whole: J | null;
-      try {
-        whole = await run(() => streamOnce(this.spec, body(), idleMs, deadlineMs, onEvent));
-      } catch (e) {
-        if (!(this.maxTokens > 8192 && e instanceof RelayError && e.code === 'llm-http' && /max_tokens|max tokens|too large|exceed/i.test(e.message))) throw e;
-        this.maxTokens = 8192;
-        blocks.length = 0;
-        json.length = 0;
-        whole = await run(() => streamOnce(this.spec, body(), idleMs, deadlineMs, onEvent));
+      let whole: J | null = null;
+      for (let tries = 0; ; tries++) {
+        try {
+          whole = await run(() => streamOnce(this.spec, body(), idleMs, deadlineMs, onEvent));
+          break;
+        } catch (e) {
+          if (tries >= 2 || !(e instanceof RelayError && e.code === 'llm-http')) throw e;
+          if (this.cacheMarks && /cache_control|ephemeral/i.test(e.message)) this.cacheMarks = false;
+          else if (this.maxTokens > 8192 && /max_tokens|max tokens|too large|exceed/i.test(e.message)) this.maxTokens = 8192;
+          else throw e;
+          blocks.length = 0;
+          json.length = 0;
+          stop = '';
+        }
       }
       let content: unknown[];
       if (whole) {
         this.count(whole);
         content = arr(whole.content);
+        stop = String(whole.stop_reason ?? '');
       } else {
         this.count({ usage });
         content = blocks.filter(Boolean).map((b, i) => {
@@ -414,7 +452,7 @@ export class ToolChat {
           const input = o(o(b).input);
           return { id: String(o(b).id), name: String(o(b).name), args: input, ...(typeof input.__bad === 'string' ? { badArgs: input.__bad.slice(0, 500) } : {}) };
         });
-      return { text, calls };
+      return { text, calls, cut: stop === 'max_tokens' };
     }
     const body = (withReasoning: boolean) => ({
       model: this.spec.model,
@@ -426,10 +464,13 @@ export class ToolChat {
     let content = '';
     let reasoning = '';
     let usage: J = {};
+    let finish = '';
     const parts: { id?: string; name: string; args: string }[] = [];
     const onEvent = (e: J) => {
       if (Object.keys(o(e.usage)).length) usage = o(e.usage);
-      const d = o(o(arr(e.choices)[0]).delta);
+      const c0 = o(arr(e.choices)[0]);
+      if (typeof c0.finish_reason === 'string') finish = c0.finish_reason;
+      const d = o(c0.delta);
       if (typeof d.content === 'string') {
         content += d.content;
         grew(d.content.length);
@@ -452,6 +493,7 @@ export class ToolChat {
       content = '';
       reasoning = '';
       usage = {};
+      finish = '';
       parts.length = 0;
     };
     let whole: J | null;
@@ -473,6 +515,7 @@ export class ToolChat {
     if (whole) {
       this.count(whole);
       msg = o(o(arr(whole.choices)[0]).message);
+      finish = String(o(arr(whole.choices)[0]).finish_reason ?? '');
       rawCalls = arr(msg.tool_calls);
     } else {
       this.count({ usage });
@@ -491,7 +534,7 @@ export class ToolChat {
         return { id: String(o(c).id ?? `call_${i}`), name: String(f.name ?? ''), args: {}, badArgs: raw.slice(0, 500) };
       }
     });
-    return { text, calls };
+    return { text, calls, cut: finish === 'length' };
   }
 
   results(rs: { id: string; content: string }[]): void {

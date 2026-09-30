@@ -215,8 +215,50 @@ def main():
             page.keyboard.press('Enter')
             check(ta.input_value() == '按 /demo-skill ', '打 / 挑技能：写任务时也能挑，选了写成「/技能名」')
             ta.fill('')
+            # 设置里的技能：每个三档，点「不用」原地滑过去、存进 auto.json；之后打 / 不再列出它
+            page.get_by_role('button', name='设置').click()
+            page.locator('.settings').get_by_role('tab', name='技能').click()
+            srow = page.locator('.settings .skill-list .row').filter(has_text='demo-skill')
+            srow.wait_for(timeout=5000)
+            srow.get_by_role('button', name='不用').click()
+            saved = None
+            for _ in range(50):
+                try:
+                    with open(os.path.join(home, '.relay', 'auto.json')) as f:
+                        saved = json.load(f).get('skills')
+                except Exception:
+                    saved = None
+                if saved == {'demo-skill': 'off'}:
+                    break
+                page.wait_for_timeout(100)
+            check(saved == {'demo-skill': 'off'} and srow.get_by_role('button', name='不用').get_attribute('aria-pressed') == 'true', '设置里的技能：三档，点「不用」原地换过去、存好')
+            page.keyboard.press('Escape')
+            page.wait_for_timeout(400)
+            ta.click()
+            ta.type('按 /demo')
+            page.wait_for_timeout(600)
+            check(page.locator('.menu .mi').filter(has_text='demo-skill').count() == 0, '设成「不用」的技能：打 / 不列出')
+            ta.fill('')
+            page.keyboard.press('Escape')
             page.locator('#left-in .thread').filter(has_text='再加一个导入').click()
             page.wait_for_timeout(300)
+            # 派活边做边复核：顶上除了正在干活的，再多一个「复核第 N 棒」（和干活同时在跑）
+            side = js('''() => {
+              const t = pageThreads().find((x) => x.current);
+              if (!t) return 'no-thread';
+              const keep = S.st.project.go;
+              const now = new Date().toISOString();
+              S.st.project.go = { id: 'x', status: 'running', mode: 'auto', dispatch: true, phase: '', stints: [], current: { stint: 9, member: 'demo', label: 'Demo · demo-flash', kind: 'work', since: now, log: '' }, side: { member: 'demo', label: 'Demo · demo-pro', targets: [7, 8], since: now, log: '' } };
+              barSig = '';
+              renderBar(t);
+              const el = document.querySelector('.status[data-k=side]');
+              const text = el ? el.innerText.replace(/\\s+/g, ' ') : '';
+              S.st.project.go = keep;
+              barSig = '';
+              renderBar(t);
+              return text;
+            }''')
+            check('复核第 7、8 棒' in side, f'派活边做边复核：顶上多一个「复核第 N 棒」（{side}）')
 
             # 群聊：之前发的长话先收起，点「展开」看全文；粘进来很长的一段字存成文件带上，输入框里只有一个小条，点开在页签里看
             page.get_by_role('tab', name='群聊').click()

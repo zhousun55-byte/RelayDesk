@@ -98,7 +98,7 @@ export interface HarnessSpec {
   model(loc: Located): ModelInfo;
   invoke(loc: Located, input: InvokeInput): Invocation;
   /** 输出里不带 token 用量的工具：从它自己记的会话里读（sinceMs 之后这个项目的会话加起来）；读不到就是 null。 */
-  usage?(root: string, sinceMs: number): { input: number; output: number } | null;
+  usage?(root: string, sinceMs: number): { input: number; output: number; cached?: number } | null;
   /** 输出里不带额度的工具：从它自己记的会话里读（sinceMs 之后这个项目最新的一份）；读不到就是 null。 */
   limits?(root: string, sinceMs: number): Limit[] | null;
   /** 能换哪些模型（不花额度：它自己的 models 命令、模型缓存、简称）。这回列不出来是 null；根本列不了的工具不写。 */
@@ -866,7 +866,7 @@ function unzstdAll(buf: Buffer, unzstd: (b: Buffer) => Buffer): string {
   return Buffer.concat(parts).toString('utf8');
 }
 
-export function dshUsage(root: string, sinceMs: number): { input: number; output: number } | null {
+export function dshUsage(root: string, sinceMs: number): { input: number; output: number; cached?: number } | null {
   const unzstd = (zlib as unknown as { zstdDecompressSync?: (b: Buffer) => Buffer }).zstdDecompressSync;
   if (!unzstd) return null;
   const name = `-${root
@@ -882,6 +882,7 @@ export function dshUsage(root: string, sinceMs: number): { input: number; output
   }
   let input = 0;
   let output = 0;
+  let cached = 0;
   let seen = false;
   const n = (v: unknown) => (typeof v === 'number' ? v : 0);
   for (const d of subs) {
@@ -900,13 +901,14 @@ export function dshUsage(root: string, sinceMs: number): { input: number; output
         if (!u || typeof u !== 'object') continue;
         input += n(u.inputTokens) + n(u.cacheReadTokens) + n(u.cacheWriteTokens);
         output += n(u.outputTokens);
+        cached += n(u.cacheReadTokens);
         seen = true;
       } catch {
         /* 坏行跳过 */
       }
     }
   }
-  return seen ? { input, output } : null;
+  return seen ? { input, output, ...(cached ? { cached } : {}) } : null;
 }
 
 /**

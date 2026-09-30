@@ -431,10 +431,16 @@ export function applyReviews(root: string, by: Stint | null, members: MemberInfo
   const files = listReviewFiles(root);
   // 派活的终审一起复核了前面几棒，只写一份结论：也记到这几棒上。它开工后又单独给某一棒写了复核的，以那一份为准。
   const written = new Map(files.map((f) => [f.rel, f.mtimeMs]));
+  // 边做边复核的结论是接力台在终审开工前几秒代写的：按修改时间会被当成「终审开工后写的」，要看是哪一棒写的、那一棒是不是在终审开工前就结束了。
+  const doneBefore = (id: number, final: Stint) => {
+    const mark = (v.stints.find((y) => y.id === id)?.reviews ?? []).filter((m) => m.file === reviewFileFor(id)).at(-1);
+    const by = mark ? v.stints.find((y) => y.id === mark.by) : undefined;
+    return !!by?.endedAt && by.id < final.id && Date.parse(by.endedAt) <= Date.parse(final.startedAt);
+  };
   const merged = new Map(
     v.stints
       .filter((x) => x.kind === 'final' && x.reviewFile && x.targets?.length)
-      .map((x) => [x.reviewFile!, x.targets!.filter((id) => (written.get(reviewFileFor(id)) ?? 0) < Date.parse(x.startedAt) - REVIEW_BEFORE_MS)])
+      .map((x) => [x.reviewFile!, x.targets!.filter((id) => (written.get(reviewFileFor(id)) ?? 0) < Date.parse(x.startedAt) - REVIEW_BEFORE_MS || doneBefore(id, x))])
   );
   const marked: number[] = [];
   for (const f of files) {

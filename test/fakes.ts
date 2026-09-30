@@ -120,6 +120,17 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '  fi',
     '}',
     'if [ $ro -eq 1 ]; then',
+    // 边做边复核（只看不改）：每棒一段「=== 第 N 棒 ===」；FAKE_SIDE_BAD_ONCE = 第一次说有问题
+    "  if grep -q '派来边做边复核' \"$P\"; then",
+    '    V="${FAKE_SIDE_VERDICT:-没问题}"',
+    '    if [ -n "$FAKE_SIDE_BAD_ONCE" ] && [ ! -f "$FAKE_DIR/side-bad" ]; then touch "$FAKE_DIR/side-bad"; V="有问题，还没修"; fi',
+    '    T=""',
+    "    for n in $(grep '^- 第 [0-9]* 棒（' \"$P\" | grep -o '第 [0-9]* 棒' | grep -o '[0-9][0-9]*'); do",
+    '      T="$T=== 第 $n 棒 ===\\n- 结论：$V\\n## 它说的和实际对不对得上\\n- 对得上\\n## 发现的问题和该怎么改（没有就写「无」）\\n- 无\\n"',
+    '    done',
+    '    say "$T"',
+    '    exit 0',
+    '  fi',
     "  if grep -q '投票：<方案字母>' \"$P\"; then",
     "    own=$(sed -n 's/.*其中方案 \\([A-L]\\) 是你自己出的.*/\\1/p' \"$P\" | head -1)",
     '    pick=A; [ "$own" = A ] && pick=B',
@@ -154,6 +165,10 @@ function fakeScript(name: 'claude' | 'codex'): string {
     // 像 Codex：外层启动器起一个带着自己路径的子进程干活（外层没了子进程还在）
     '  slow) echo $$ > "$FAKE_DIR/$NAME.pid"; sh -c "sleep 30; :" "$0" ;;',
     '  offline) while :; do echo "Reconnecting... waiting for network (Connection failed: error sending request)" >&2; sleep 0.3; done ;;',
+    // 连着两次连不上（接力台原地再试的那一次也没好），第三次才好
+    '  blip-twice)',
+    '    N=$(cat "$FAKE_DIR/$NAME-blips" 2>/dev/null || echo 0)',
+    '    if [ "$N" -lt 2 ]; then echo $((N+1)) > "$FAKE_DIR/$NAME-blips"; echo "API Error: Connection error (ECONNRESET)" >&2; exit 1; fi ;;',
     '  blip-once)',
     '    if [ ! -f "$FAKE_DIR/$NAME-blipped" ]; then',
     '      touch "$FAKE_DIR/$NAME-blipped"',

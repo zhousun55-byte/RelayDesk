@@ -60,7 +60,8 @@ const SYSTEM = [
   '- 说明文字用中文。',
 ].join('\n');
 
-const TALK_SYSTEM = '你在「接力台」的多 AI 讨论里发言。可以用 list_files / read_file / search 看当前项目文件夹里的文件，不能改任何东西。看够了就直接回答。';
+/** 只看不改（群聊、投票、边做边复核）：只给看文件的工具，看够了直接回答。 */
+const READ_SYSTEM = '你是「接力台」里的一位成员，这一回只看不改：可以用 list_files / read_file / search 看当前项目文件夹里的文件，不能改任何东西。看够了就直接回答。';
 const READ_TOOLS = new Set(['list_files', 'read_file', 'search']);
 
 function tools(level: Level, hasGate: boolean): ToolDef[] {
@@ -81,8 +82,8 @@ function tools(level: Level, hasGate: boolean): ToolDef[] {
     },
     {
       name: 'write_file',
-      description: '新建或整体覆盖一个文件（目录会自动建）。',
-      parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
+      description: '新建或整体覆盖一个文件（目录会自动建）。append=true 时接在文件末尾：很长的文件分几次写，一次写不下会被截断。',
+      parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean' } }, required: ['path', 'content'] },
     },
     {
       name: 'edit_file',
@@ -232,6 +233,10 @@ function writeFile(root: string, args: Record<string, unknown>, protectedPaths: 
   if (args.content.includes(REDACTED) && fs.existsSync(abs) && !fs.readFileSync(abs, 'utf8').includes(REDACTED)) throw new ToolError(KEEP_SECRET);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const existed = fs.existsSync(abs);
+  if (args.append === true) {
+    fs.appendFileSync(abs, args.content);
+    return `${existed ? '接在' : '新建了'} ${rel}${existed ? ' 末尾' : ''}（这次 ${args.content.split('\n').length} 行）。`;
+  }
   fs.writeFileSync(abs, args.content);
   return `${existed ? '覆盖了' : '新建了'} ${rel}（${args.content.split('\n').length} 行）。`;
 }
@@ -307,12 +312,14 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
   const root = input.cwd;
   const hasGate = !!input.gateCommand.trim();
   const ro = !!input.readOnly;
-  const chat = new ToolChat(input.spec, ro ? TALK_SYSTEM : SYSTEM, tools(input.level, hasGate).filter((t) => !ro || READ_TOOLS.has(t.name)));
+  const chat = new ToolChat(input.spec, ro ? READ_SYSTEM : SYSTEM, tools(input.level, hasGate).filter((t) => !ro || READ_TOOLS.has(t.name)));
   chat.user(redactSecrets(ro ? input.brief : `${input.brief}\n\n---\n现在开始工作。记住：做完调用 finish。`));
   const maxSteps = input.maxSteps ?? 60;
   let finalText = '';
   let steps = 0;
   let finished = false;
+  /** 没调用 finish、也没调用工具就停下的次数（提醒过两次还这样才算它结束）。 */
+  let nudged = 0;
 
   const exec = async (c: ToolCall): Promise<string> => {
     if (c.badArgs !== undefined) throw new ToolError(`参数不是合法的 JSON：${c.badArgs}`);
@@ -362,7 +369,16 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
         finalText = r.text;
         input.log(`说：${clip(r.text)}`);
       }
-      if (!r.calls.length) break;
+      // 写到一次能写的上限被截断：工具参数多半是半截的。告诉它分几次写，接着来（2026-09-29 终审写结论写到 8192 被截断，一句话没留就结束了）
+      const cutNote = '上一段超过了一次能写的长度，被截断了：长文件分几次写——先 write_file 写开头一部分，再用 write_file 加 append=true 接着往后写。';
+      if (r.cut) input.log('这一段写到一次能写的上限被截断，请它分几次写。');
+      if (!r.calls.length) {
+        // 干活时没调用 finish 就停了：提醒它（做完了就 finish，没做完接着做）；只看不改的直接收下回答
+        if (ro || nudged >= 2 || (!r.cut && r.text.trim() && nudged >= 1)) break;
+        nudged++;
+        chat.user(r.cut ? cutNote : '还没调用 finish。做完了就调用 finish 写三行总结；没做完就接着做。');
+        continue;
+      }
       const results: { id: string; content: string }[] = [];
       for (const c of r.calls) {
         if (c.name === 'finish') {
@@ -386,6 +402,7 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
       }
       chat.results(results);
       if (finished) break;
+      if (r.cut) chat.user(cutNote);
       if (chat.size() > 400_000) {
         const n = chat.prune(250_000);
         if (n) input.log(`对话太长，丢掉了最早的 ${n} 轮。`);
@@ -400,10 +417,11 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
       if (r.text.trim()) finalText = r.text;
     }
   } catch (e) {
+    if (e instanceof RelayError && e.code === 'llm-deadline') return { finalText, steps, stopped: false, timedOut: true };
     return { finalText, steps, stopped: false, timedOut: false, error: errorMessage(e) };
   } finally {
     // 和编程工具日志里的用量同一个说法（runner.ts 的 usageLine）
-    if (chat.used.input || chat.used.output) input.log(`本轮用了 ${chat.used.input} 输入 / ${chat.used.output} 输出 token`);
+    if (chat.used.input || chat.used.output) input.log(`本轮用了 ${chat.used.input} 输入 / ${chat.used.output} 输出 token${chat.used.cached ? `（输入里 ${chat.used.cached} 读的缓存）` : ''}`);
   }
   return { finalText, steps, stopped: false, timedOut: false };
 }

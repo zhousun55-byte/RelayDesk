@@ -197,6 +197,19 @@ test('对话：每一棒记下在工具里的对话，网页能读；这个项�
     list = await ui.call(`/api/sessions${q(s)}`);
     assert.deepEqual(list.json.sessions, [], '设置里关掉就不列');
 
+    // 设置里的技能：一个个开关，存进 auto.json（「点名时」是默认，不存），别的设置不动
+    const sk = path.join(s.home, '.claude', 'skills', '自审');
+    fs.mkdirSync(sk, { recursive: true });
+    fs.writeFileSync(path.join(sk, 'SKILL.md'), '---\nname: 自审\ndescription: 自己审一遍\n---\n\n做法\n');
+    const listSkills = async () => (await ui.call(`/api/skills${q(s)}`)).json.skills.map((k: { name: string; from: string; mode: string }) => [k.name, k.from, k.mode]);
+    assert.deepEqual(await listSkills(), [['自审', 'user', 'named']]);
+    const off = await ui.call('/api/skills/mode', { name: '自审', mode: 'off' });
+    assert.deepEqual(off.json.settings.skills, { 自审: 'off' });
+    assert.equal(off.json.settings.showSessions, false, '别的设置不动');
+    assert.deepEqual(await listSkills(), [['自审', 'user', 'off']]);
+    assert.deepEqual((await ui.call('/api/skills/mode', { name: '自审', mode: 'named' })).json.settings.skills, {});
+    assert.equal((await ui.call('/api/skills/mode', { name: ' ', mode: 'off' })).status, 400);
+
     const open = await ui.call('/api/session/open', { dir: s.repo, tool: 'codex', id: 'abc-123456' });
     assert.match(open.json.command, /codex resume abc-123456$/);
     assert.equal((await ui.call('/api/session/open', { dir: s.repo, tool: 'claude', id: sess.id })).status, 200);

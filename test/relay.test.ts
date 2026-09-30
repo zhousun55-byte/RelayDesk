@@ -602,9 +602,9 @@ test('群聊：讨论（轮流说）、对比（同时答）；投票不投自�
   for (const b of last.ballots) assert.notEqual(last.options.find((o: { key: string }) => o.key === b.choice).author, b.voter, '不投自己');
 });
 
-test('派活：强模型先拆成小步，弱模型一棒做一步，中途不复核，做完后终审一起复核；强模型一直没干活；每一棒记下 token 用量', () => {
+test('派活（边做边复核关着）：强模型先拆成小步，弱模型一棒做一步，中途不复核，做完后终审一起复核；强模型一直没干活；每一棒记下 token 用量', () => {
   const s = prepared('dispatch');
-  setOrder(s, ['claude', 'codex']);
+  setOrder(s, ['claude', 'codex'], { sideReview: false });
   s.relay(['init']);
   s.relay(['task', '--dispatch', '做一件大事']);
   assert.match(s.relay(['status']), /任务（派活）：做一件大事/);
@@ -657,8 +657,9 @@ test('派活指定谁指挥、活派给谁：同一个工具的大模型拆和�
   s.relay(['task', '--dispatch', '做一件大事']);
   const out = s.relay(['auto']);
   assert.match(out, /✓ 验收通过：清单 4\/4 全部打勾/);
+  const st = s.stints();
   assert.deepEqual(
-    s.stints().map((x) => [x.kind, x.who.member]),
+    st.filter((x) => x.kind !== 'review').map((x) => [x.kind, x.who.member]),
     [
       ['plan', 'codex'],
       ['work', 'codex-mini'],
@@ -669,9 +670,65 @@ test('派活指定谁指挥、活派给谁：同一个工具的大模型拆和�
     ],
     '弱模型 claude 排在最前也不派：活给指挥配的那位'
   );
+  // 边做边复核（默认开）：指挥的那位只看不改地复核做完的几棒，和下一棒干活同时跑；快照不动、不算改了文件
+  const side = st.filter((x) => x.kind === 'review');
+  assert.ok(side.length >= 1 && side.every((x) => x.who.member === 'codex' && x.from === x.to && x.status === 'handed'), JSON.stringify(side));
+  const works = st.filter((x) => x.kind === 'work');
+  assert.ok(
+    side.some((r) => works.some((w) => !(r.targets ?? []).includes(w.id) && Date.parse(w.startedAt) >= Date.parse(r.startedAt) && Date.parse(w.startedAt) <= Date.parse(r.endedAt!))),
+    '复核的同时下一棒在干活'
+  );
+  assert.ok(works.every((w) => w.review === 'done'), '每一棒都复核过了');
+  const covered = new Set(side.flatMap((r) => r.targets ?? []));
+  assert.ok(works.slice(0, -1).every((w) => covered.has(w.id)), '除了最后一棒（可能并进终审），都是边做边复核的');
+  assert.match(fs.readFileSync(path.join(s.repo, '.relay', '复核', `第${works[0].id}棒.md`), 'utf8'), /- 复核人：Codex[\s\S]*- 结论：没问题/, '接力台代写的复核文件');
+  const sidePrompt = fs
+    .readdirSync(s.base)
+    .filter((f) => f.startsWith('prompt-codex-'))
+    .map((f) => fs.readFileSync(path.join(s.base, f), 'utf8'))
+    .find((p) => p.includes('派来边做边复核'));
+  assert.match(sidePrompt ?? '', /这一棒只看不改/);
   const runs = fs.readFileSync(s.env.FAKE_LOG!, 'utf8').split('\n').filter((l) => l.startsWith('codex exec'));
   assert.equal(runs.filter((l) => / -m gpt-6-mini /.test(l)).length, 4, '做活的四棒用小模型');
-  assert.equal(runs.filter((l) => !/ -m /.test(l)).length, 2, '拆和终审用它自己的模型');
+  assert.ok(runs.filter((l) => / -s read-only /.test(l)).length >= 1, '边做边复核用只读模式');
+  assert.equal(runs.filter((l) => !/ -m /.test(l) && !/ -s read-only /.test(l)).length, 2, '拆和终审用它自己的模型');
+});
+
+test('派活时干活的那位临时出错（连不上）：先原地再派它一次，不马上换人；下一棒日志开头写着原因', () => {
+  const s = prepared('dispatch-retry', { FAKE_CLAUDE_MODE: 'blip-twice' });
+  // 还有一位弱模型排在后面：刚出过错的会被排到它后面，按顺序挑就换人了——要点名再派原来那位
+  const file = path.join(s.home, '.relay', 'agents.json');
+  const reg = JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: Record<string, unknown>[] };
+  reg.agents.push({ ...reg.agents.find((a) => a.name === 'claude')!, name: 'claude-b', model: 'deepseek-v4-pro', tier: 'weak', tierSet: true });
+  fs.writeFileSync(file, JSON.stringify(reg));
+  setOrder(s, ['claude', 'claude-b', 'codex']);
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  assert.match(s.relay(['auto']), /✓ 验收通过/);
+  const works = s.stints().filter((x) => x.kind === 'work');
+  assert.deepEqual(works.slice(0, 2).map((x) => [x.who.member, x.status]), [['claude', 'failed'], ['claude', 'handed']], '还是它，不换成别人');
+  assert.match(s.read(works[1].log), /接手原因：上一棒出错（.*ECONNRESET.*），像是临时的，原地再来一次/);
+  assert.ok(works.every((x) => x.who.member !== 'codex'), '强模型没干活');
+});
+
+test('派活边做边复核查出问题：清单里下一步前面插一步「按复核改好」，干活的人接着就改；改完的那一棒也复核', () => {
+  const s = prepared('dispatch-fix', { FAKE_SIDE_BAD_ONCE: '1' });
+  setOrder(s, ['claude', 'codex']);
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  const out = s.relay(['auto']);
+  assert.match(out, /✓ 验收通过：清单 5\/5 全部打勾/);
+  const task = s.read('.relay/任务.md');
+  const fix = task.match(/- \[x\] 按复核改好第 (\d+) 棒复核里指出的问题/);
+  assert.ok(fix, task);
+  const st = s.stints();
+  const bad = st.find((x) => x.id === Number(fix![1]))!;
+  assert.equal(bad.reviews?.[0]?.verdict, 'problem');
+  assert.equal(bad.review, 'done', '最后终审一起过了');
+  const fixer = st.find((x) => x.kind === 'work' && x.step?.text.startsWith('按复核改好'))!;
+  assert.equal(fixer.who.member, 'claude', '改问题的也是干活的弱模型');
+  assert.ok(fixer.id > bad.id);
+  assert.ok(st.every((x) => x.kind !== 'work' || x.who.member === 'claude'), '强模型一直没干活');
 });
 
 test('接着同一段对话：打开时同一个任务里一位成员下一棒接着自己上一棒在工具里的那段对话（codex exec resume、claude --resume）；关着每棒新开；每棒记下对话编号', () => {
