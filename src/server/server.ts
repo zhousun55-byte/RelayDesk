@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { talkContext } from '../commands/talk';
 import { autoSettingsSafe, saveAutoSettings } from '../core/auto-settings';
-import { saveRelayConfig } from '../core/config';
+import { ensureGateOk, saveRelayConfig } from '../core/config';
 import { addModelMembers, canCheckApps, desktopApps, enableProvider, findAppBundle, loadDetected, modelOptions, newerHints, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
@@ -20,7 +20,7 @@ import { appNameOf, llmName, toolName } from '../core/names';
 import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
 import { isInside } from '../core/paths';
 import { untilText } from '../core/quota';
-import { agentKind, findAgent, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
+import { agentKind, findAgent, isOpenCommand, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
 import { adoptSummary, archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, summarize, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
 import { adoptOption, appendRule, castHumanVote, readVotes, startVote } from '../core/vote';
@@ -265,9 +265,10 @@ function requireProject(root: string): void {
 }
 
 function num(v: unknown, what: string): number {
-  const n = Number(v);
-  if (!Number.isInteger(n) || n <= 0) throw new RelayError(`${what}不对。`, 'bad-number');
-  return n;
+  // 只认写成十进制整数的：Number() 会放过 "+1"、" 1"、"0x10"、"1e3"
+  const s = typeof v === 'number' ? String(v) : typeof v === 'string' ? v : '';
+  if (!/^[1-9]\d{0,14}$/.test(s)) throw new RelayError(`${what}不对。`, 'bad-number');
+  return Number(s);
 }
 
 // ---- 路由 ----
@@ -292,6 +293,11 @@ export function createServer(opts: ServerOptions): http.Server {
       /* 名单坏了：网页上会报出来 */
     }
     ensureDetected();
+  }
+  try {
+    ensureGateOk();
+  } catch {
+    /* 记不下来：检查命令会提示去确认 */
   }
   const watchOn = (root: string) => {
     if (opts.watch && loadLedger(root).init) watchProject(root);
@@ -485,6 +491,8 @@ export function createServer(opts: ServerOptions): http.Server {
       if (!a) throw new RelayError('名单里没有它。', 'no-agent');
       const cmd = agentKind(a) === 'app' ? a.cmd : a.app;
       if (!cmd) throw new RelayError('没有桌面程序', 'cannot-open');
+      // 名单文件随时可能被直接改写，绕过保存时的检查：交给 shell 之前再对一遍写法
+      if (!isOpenCommand(cmd)) throw new RelayError('这一位的打开命令不是 open -a 程序 {{dir}} 的写法，没有执行。到「设置 → 成员」里改一下。', 'bad-command');
       const copied = copyToClipboard(HINT);
       const r = await runOpener(fillTemplate(cmd, { dir: root, worktree: root }), root);
       if (r.code !== 0 && !r.lingering) throw new RelayError(`打不开：${r.output || `退出码 ${r.code}`}`, 'open-failed');

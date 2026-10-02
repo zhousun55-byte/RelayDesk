@@ -301,6 +301,15 @@ export interface LedgerView {
   deleted?: Set<number>;
 }
 
+/**
+ * 账本在项目文件夹里，干活的 AI、克隆来的仓库都改得到。形状不对的事件不采信：
+ * 快照号是 git 的对象号（测试和旧账本里也有 S1 这种短记法）；棒号是安全范围内的正整数
+ * （2^53 这种丢精度的号会开出一棒对不上的「进行中」，退回、撤销就一直说忙）。
+ */
+const SNAP_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const okSnap = (x: unknown): boolean => typeof x === 'string' && SNAP_RE.test(x);
+const okStintId = (x: unknown): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x > 0;
+
 /** 把账本折成现在的样子。 */
 export function viewLedger(events: LedgerEvent[], bad: BadLine[] = []): LedgerView {
   const byId = new Map<number, Stint>();
@@ -309,29 +318,32 @@ export function viewLedger(events: LedgerEvent[], bad: BadLine[] = []): LedgerVi
   let lastRollback: RollbackEvent | null = null;
   for (const ev of events) {
     if (ev.type === 'init') {
+      if (!okSnap(ev.snap)) continue;
       if (!init) init = ev;
       if (!base) base = ev.snap;
     } else if (ev.type === 'stint') {
+      if (!okStintId(ev.stint?.id)) continue;
       const prev = byId.get(ev.stint.id);
       const s = { ...ev.stint };
       if (prev?.rolledBack) s.rolledBack = true;
       byId.set(s.id, s);
       // 只在这一棒结束（或结束的快照变了）时往前推。后来给旧棒补记复核、标记不用复核，是把旧棒原样重存一遍，
       // 不能把起点拉回到它结束的地方——不然下一棒会把中间别人的改动再算一遍。
-      if (s.status !== 'working' && s.to && (!prev || prev.status === 'working' || prev.to !== s.to)) base = s.to;
+      if (s.status !== 'working' && okSnap(s.to) && (!prev || prev.status === 'working' || prev.to !== s.to)) base = s.to!;
     } else if (ev.type === 'rollback') {
+      if (!okSnap(ev.after)) continue;
       lastRollback = ev;
       base = ev.after;
       for (const id of ev.dropped ?? []) {
-        const s = byId.get(id);
+        const s = okStintId(id) ? byId.get(id) : undefined;
         if (s) s.rolledBack = true;
       }
       for (const id of ev.restored ?? []) {
-        const s = byId.get(id);
+        const s = okStintId(id) ? byId.get(id) : undefined;
         if (s) delete s.rolledBack;
       }
     } else if (ev.type === 'base') {
-      base = ev.snap;
+      if (okSnap(ev.snap)) base = ev.snap;
     }
   }
   const stints = [...byId.values()].sort((a, b) => a.id - b.id);

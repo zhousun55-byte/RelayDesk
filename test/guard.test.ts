@@ -221,7 +221,7 @@ test('全自动：检查命令自己会在项目里写文件（缓存、报告�
   const s = prepared('gate-writes', {}, (x) => setOrder(x, ['codex'], { finalReview: false }));
   s.relay(['init']);
   s.relay(['task', '分三步做完', '--step', '第一步', '第二步', '第三步']);
-  s.write('.relay/config.json', JSON.stringify({ gate: { command: 'mkdir -p .gate-out && date > .gate-out/stamp && test -f work.txt' }, protectedPaths: [] }));
+  s.relay(['config', '--gate', 'mkdir -p .gate-out && date > .gate-out/stamp && test -f work.txt']);
   const out = s.relay(['auto']);
   assert.match(out, /验收通过/, out);
   const st = s.stints();

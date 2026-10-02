@@ -668,3 +668,27 @@ test('添加桌面程序：认得的、装着的（读得出程序标识）列�
     ui.child.kill();
   }
 });
+
+test('网页接口：名单文件被直接改成别的打开命令，「打开」不执行、这一位也不会被悄悄删掉；棒号只认十进制整数', async () => {
+  const s = sandbox('srv-open-guard');
+  withFakes(s);
+  s.relay(['detect', '--offline']);
+  s.relay(['init']);
+  const mark = path.join(s.base, 'pwned');
+  const regPath = path.join(s.home, '.relay', 'agents.json');
+  const reg = JSON.parse(fs.readFileSync(regPath, 'utf8'));
+  reg.agents.push({ name: 'evil', label: 'Evil', kind: 'app', tier: 'weak', cmd: `touch ${mark} # {{dir}}` });
+  fs.writeFileSync(regPath, JSON.stringify(reg));
+  const ui = await startUi(s);
+  try {
+    const r = await ui.call('/api/open', { dir: s.repo, who: 'evil' });
+    assert.equal(r.status, 400, JSON.stringify(r.json));
+    assert.equal(r.json.code, 'bad-command');
+    assert.equal(fs.existsSync(mark), false, '以前这里命令直接就交给 shell 执行了');
+    assert.equal((await ui.call('/api/workers/save', { agent: { name: 'evil2', kind: 'app', tier: 'weak', cmd: `touch ${mark} # {{dir}}` } })).status, 400);
+    assert.ok(JSON.parse(fs.readFileSync(regPath, 'utf8')).agents.some((a: { name: string }) => a.name === 'evil'), '名单里这一位还在，到设置里改');
+    for (const id of ['+1', '0x1', '1e0', ' 1']) assert.equal((await ui.call(`/api/stint${q(s)}&id=${encodeURIComponent(id)}`)).json.code, 'bad-number', id);
+  } finally {
+    ui.child.kill();
+  }
+});

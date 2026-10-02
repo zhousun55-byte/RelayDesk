@@ -571,6 +571,9 @@ const SRV_WORD = {
   '手动接着做时打开它；接力台调度时用它自带的命令行内核。': 'Opened when continuing by hand; RelayDesk runs its bundled CLI core.',
   '手动接着做时打开它；接力台调度时用它自带的无界面模式（同一个登录、同一个模型）。': 'Opened when continuing by hand; RelayDesk runs its bundled headless mode (same login, same model).',
   '手动接着做时打开它。': 'Opened when continuing by hand.',
+  '检查命令和这台电脑上确认过的不一样（可能是项目自带的，或者被改过），没有执行。到「设置 → 项目」看一眼再保存，或运行 relay config --gate 定下来。':
+    "The check command differs from the one confirmed on this computer (it may have come with the project, or been changed), so it didn't run. Review it in Settings → Project and save, or set it with relay config --gate.",
+  '这一位的打开命令不是 open -a 程序 {{dir}} 的写法，没有执行。到「设置 → 成员」里改一下。': "This member's open command isn't in the open -a App {{dir}} form, so it didn't run. Fix it in Settings → Members.",
   '最后一问还没有两份回答，用不着总结': 'The last question has fewer than two answers; nothing to summarize',
   '这条总结已经采纳过了': 'This summary was already adopted',
   '这条总结没写「结论」': 'This summary has no conclusion line',

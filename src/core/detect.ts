@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { scanApps } from './env';
 import { RelayError } from './errors';
-import { checkCommand } from './launch';
 import { findHarness, HARNESSES, harnessForCommand, locateCached, clearLocateCache, shownModel, type HarnessSpec, type Level, type LoginInfo, type ModelInfo } from './harness';
 import { autoSettingsSafe } from './auto-settings';
 import { apiUsable, listModels } from './llm';
@@ -279,12 +278,10 @@ export function syncRegistry(report: DetectReport): string[] {
   const removed = new Set(reg.removed ?? []);
 
   for (const a of reg.agents) {
+    // 旧写法 cursor {{dir}}：cursor 命令常常其实是 cursor-agent，而且打开命令现在只认 open -a 这一种写法
     if (agentKind(a) === 'app' && /^cursor(\s|$)/.test((a.cmd ?? '').trim())) {
-      const chk = checkCommand(a.cmd ?? '');
-      if (!chk.ok) {
-        a.cmd = 'open -a Cursor {{dir}}';
-        changes.push(`「${agentLabel(a)}」的打开命令坏了（cursor 命令其实是 cursor-agent），改成了 open -a Cursor {{dir}}。`);
-      }
+      a.cmd = 'open -a Cursor {{dir}}';
+      changes.push(`「${agentLabel(a)}」的打开命令改成了 open -a Cursor {{dir}}。`);
     }
   }
 

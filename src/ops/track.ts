@@ -4,7 +4,7 @@ import path from 'node:path';
 import { buildBrief } from '../core/brief';
 import { loadAutoSettings } from '../core/auto-settings';
 import { claudeWorkIn, claudeWriterOf } from '../core/claude-log';
-import { defaultRelayConfig, loadRelayConfig } from '../core/config';
+import { defaultRelayConfig, GATE_UNCONFIRMED, gateConfirmed, loadRelayConfig } from '../core/config';
 import { errorMessage, RelayError } from '../core/errors';
 import { runGate } from '../core/gate';
 import { appendLedger, countedReviews, loadLedger, nextStintId, reviewStateOf, saveStint, taskBaseline, type Facts, type LedgerView, type ReviewMark, type RollbackEvent, type Stint, type Who } from '../core/ledger';
@@ -342,6 +342,11 @@ export async function gateStint(root: string, id: number, cfg?: RelayConfig, opt
     return;
   }
   if (!conf.gate.command.trim()) return;
+  // 项目里的 .relay/config.json 谁都改得到（克隆来的仓库、正在干活的 AI）：只跑这台电脑上确认过的那一条
+  if (!gateConfirmed(root, conf.gate.command)) {
+    record({ status: 'error', command: conf.gate.command, detail: GATE_UNCONFIRMED });
+    return;
+  }
   const before = opts.absorb ? takeSnapshot(root, '跑检查之前').sha : null;
   gatesRunning++;
   try {

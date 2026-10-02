@@ -8,6 +8,16 @@ import type { AgentConfig, AgentKind, AgentsRegistry, Tier } from './types';
 /** 桌面程序「打开文件夹」命令里的占位符（旧版叫 {{worktree}}，也认）。 */
 export const DIR_PLACEHOLDER = '{{dir}}';
 const DIR_PLACEHOLDERS = ['{{dir}}', '{{worktree}}'];
+
+/**
+ * 桌面程序的打开命令是网页上一点就交给 shell 执行的：只认 open -a 程序 {{dir}} 这一种写法
+ * （程序名带空格用引号；{{worktree}} 是旧写法）。程序名里不许有 shell 会展开的符号，别的写法一律不认。
+ */
+const OPEN_CMD_RE = /^open\s+-a\s+(?:"[^"$`\\]+"|'[^']+'|[^\s"'$`\\;&|<>(){}[\]*?!#~]+)\s+(["']?)\{\{(?:dir|worktree)\}\}\1$/;
+
+export function isOpenCommand(cmd: string | undefined): boolean {
+  return typeof cmd === 'string' && OPEN_CMD_RE.test(cmd.trim());
+}
 export const OUT_PLACEHOLDER = '{{out}}';
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/;
@@ -184,6 +194,7 @@ export function normalizeAgent(input: unknown): AgentConfig {
     if (kind === 'app' && !DIR_PLACEHOLDERS.some((x) => cmd.includes(x))) {
       throw new RelayError(`桌面程序的打开命令必须含 ${DIR_PLACEHOLDER}（项目文件夹），例如 open -a Cursor ${DIR_PLACEHOLDER}。`, 'bad-agent');
     }
+    if (kind === 'app' && !isOpenCommand(cmd)) throw new RelayError(`桌面程序的打开命令只能写成 open -a 程序 ${DIR_PLACEHOLDER}，例如 open -a Cursor ${DIR_PLACEHOLDER}。`, 'bad-agent');
     agent.cmd = cmd;
     if (model) agent.model = model;
     if (ask) agent.ask = ask;
@@ -204,6 +215,7 @@ export function normalizeAgent(input: unknown): AgentConfig {
   if (app) {
     if (kind === 'app') throw new RelayError('桌面程序不能再配桌面程序', 'bad-agent');
     if (!DIR_PLACEHOLDERS.some((x) => app.includes(x))) throw new RelayError(`桌面程序的打开命令必须含 ${DIR_PLACEHOLDER}（项目文件夹）。`, 'bad-agent');
+    if (!isOpenCommand(app)) throw new RelayError(`桌面程序的打开命令只能写成 open -a 程序 ${DIR_PLACEHOLDER}，例如 open -a Cursor ${DIR_PLACEHOLDER}。`, 'bad-agent');
     agent.app = app;
   }
   if (o.detected === true) agent.detected = true;

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { Command } from 'commander';
 import { loadAutoSettings } from '../core/auto-settings';
+import { gateConfirmed } from '../core/config';
 import { loadDetected } from '../core/detect';
 import { which } from '../core/env';
 import { errorMessage } from '../core/errors';
@@ -85,6 +86,7 @@ export function doctor(dir: string): DoctorLine[] {
       else add('warn', st === 'old' ? '接力规矩是旧版的：relay init 更新一下' : 'AGENTS.md / CLAUDE.md 里没有接力规矩了：relay init 补上');
       const { cfg, error } = projectConfigSafe(root);
       if (error) add('warn', `配置文件坏了（检查命令、不许改的文件都没法用，全自动不会开工）：${error}`);
+      else if (cfg.gate.command && !gateConfirmed(root, cfg.gate.command)) add('warn', `检查命令：${cfg.gate.command}（还没在这台电脑上确认过，不会自动跑：relay config --gate 定下来，或在网页「设置 → 项目」里保存一次）`);
       else add('ok', `检查命令：${cfg.gate.command || '没配置（每一棒结束时不跑检查）'}`);
     }
   } catch (e) {

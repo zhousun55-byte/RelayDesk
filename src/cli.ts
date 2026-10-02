@@ -26,6 +26,7 @@ import { chatCommand, talkCommand, voteCommand } from './commands/talk';
 import { watchCommand } from './commands/watch';
 import { uiCommand } from './commands/ui';
 import { workersCommand } from './commands/workers';
+import { ensureGateOk } from './core/config';
 import { errorMessage } from './core/errors';
 
 function version(): string {
@@ -69,6 +70,15 @@ program.addCommand(workersCommand());
 program.addCommand(settingsCommand());
 program.addCommand(configCommand());
 program.addCommand(doctorCommand());
+
+// 检查命令的确认：升级上来第一次运行时，先把这台电脑上已经在用的项目记下来（见 core/config.ts）
+program.hook('preAction', () => {
+  try {
+    ensureGateOk();
+  } catch {
+    /* 记不下来：检查命令会提示去确认 */
+  }
+});
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(`${c.red('✗')} ${errorMessage(err)}`);

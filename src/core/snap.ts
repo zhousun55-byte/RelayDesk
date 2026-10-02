@@ -76,8 +76,8 @@ interface SgResult {
 
 function cleanEnv(root: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true' };
-  // 从 git 钩子里调用时会带着这些变量，会把快照写进用户的仓库。
-  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_PREFIX', 'GIT_COMMON_DIR', 'GIT_NAMESPACE']) {
+  // 从 git 钩子里调用时会带着这些变量，会把快照写进用户的仓库；后几个能从外面塞进配置、属性和外部 diff。
+  for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_PREFIX', 'GIT_COMMON_DIR', 'GIT_NAMESPACE', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_ATTR_SOURCE', 'GIT_EXTERNAL_DIFF']) {
     delete env[k];
   }
   env.GIT_INDEX_FILE = path.join(snapDir(root), 'index');
@@ -90,6 +90,7 @@ const BASE = [
   '-c', 'core.safecrlf=false',
   '-c', 'core.fsmonitor=false',
   '-c', 'core.hooksPath=/dev/null',
+  '-c', 'core.attributesFile=/dev/null',
   '-c', 'commit.gpgsign=false',
   '-c', 'user.name=接力台',
   '-c', 'user.email=relay@local',
@@ -129,7 +130,73 @@ export function hasSnapRepo(root: string): boolean {
   return fs.existsSync(path.join(snapDir(root), 'HEAD'));
 }
 
-/** 建快照仓库（已经有了就只补排除规则）。 */
+/**
+ * 快照仓库在项目的 .relay 里：干活的 AI、克隆来的仓库都改得到它的 config。
+ * config 里的 filter、diff 驱动、别名、include 都能让 git add / checkout 去执行命令，所以每次用之前整份对一遍，
+ * 只留 git 建库时自己写的这几项，别的都去掉。接力台从来不往这份 config 里写别的。
+ */
+const SNAP_CONFIG_KEEP: Record<string, Set<string>> = {
+  core: new Set(['repositoryformatversion', 'filemode', 'bare', 'ignorecase', 'precomposeunicode', 'symlinks', 'logallrefupdates']),
+  extensions: new Set(['objectformat', 'refstorage']),
+};
+
+function tidySnapConfig(dir: string): void {
+  const p = path.join(dir, 'config');
+  let cur: string;
+  try {
+    cur = fs.readFileSync(p, 'utf8');
+  } catch {
+    return;
+  }
+  const out: string[] = [];
+  let keep: Set<string> | null = null;
+  for (const line of cur.split('\n')) {
+    const sec = line.match(/^\s*\[\s*([A-Za-z0-9.-]+)\s*\]\s*$/);
+    if (sec) {
+      keep = SNAP_CONFIG_KEEP[sec[1].toLowerCase()] ?? null;
+      if (keep) out.push(`[${sec[1].toLowerCase()}]`);
+      continue;
+    }
+    if (/^\s*\[/.test(line)) {
+      keep = null; // 带子段名的（[filter "x"]、[diff "y"]、[include]……）一律不要
+      continue;
+    }
+    const kv = line.match(/^\s*([A-Za-z][A-Za-z0-9-]*)\s*=\s*([^\n]*?)\s*$/);
+    if (keep && kv && keep.has(kv[1].toLowerCase()) && !/[\\"]/.test(kv[2])) out.push(`\t${kv[1].toLowerCase()} = ${kv[2]}`);
+  }
+  const next = out.join('\n') + '\n';
+  if (next !== cur) fs.writeFileSync(p, next);
+}
+
+/** HEAD 只该是「ref: refs/heads/某个分支」。被写坏了：指回已有的分支，快照和历史都还在，不用重建。 */
+function repairSnapHead(dir: string): void {
+  const p = path.join(dir, 'HEAD');
+  let head = '';
+  try {
+    head = fs.readFileSync(p, 'utf8').trim();
+  } catch {
+    return;
+  }
+  if (/^ref: refs\/heads\/[A-Za-z0-9._/-]+$/.test(head) || /^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(head)) return;
+  const heads = path.join(dir, 'refs', 'heads');
+  let branches: string[] = [];
+  try {
+    branches = fs.readdirSync(heads).filter((b) => /^[A-Za-z0-9._-]+$/.test(b) && fs.statSync(path.join(heads, b)).isFile());
+  } catch {
+    /* 没有分支目录：指向 main，下一张快照会把它建出来 */
+  }
+  let packed = '';
+  try {
+    packed = fs.readFileSync(path.join(dir, 'packed-refs'), 'utf8');
+  } catch {
+    /* 没有打包过 */
+  }
+  for (const m of packed.matchAll(/ refs\/heads\/([A-Za-z0-9._-]+)$/gm)) branches.push(m[1]);
+  const branch = ['main', 'master'].find((b) => branches.includes(b)) ?? branches[0] ?? 'main';
+  fs.writeFileSync(p, `ref: refs/heads/${branch}\n`);
+}
+
+/** 建快照仓库（已经有了就只补排除规则，顺手把被改过的 config、HEAD 理回来）。 */
 export function ensureSnapRepo(root: string): void {
   const dir = snapDir(root);
   if (!hasSnapRepo(root)) {
@@ -137,6 +204,13 @@ export function ensureSnapRepo(root: string): void {
     const r = spawnSync('git', ['init', '-q', '--bare', dir], { encoding: 'utf8', env: cleanEnv(root) });
     if (r.status !== 0) throw new RelayError(`建快照仓库失败：${(r.stderr ?? '').trim() || r.error?.message}`, 'snap');
   }
+  repairSnapHead(dir);
+  tidySnapConfig(dir);
+  // git 仓库自己的 info/attributes 比项目里的 .gitattributes 优先：快照只存文件本身，不走任何 filter（LFS 之类）和合并驱动。
+  const attrs = path.join(dir, 'info', 'attributes');
+  const want = '# 接力台：快照只存文件本身，不走 filter 和合并驱动\n* -filter -merge\n';
+  fs.mkdirSync(path.dirname(attrs), { recursive: true });
+  if (!fs.existsSync(attrs) || fs.readFileSync(attrs, 'utf8') !== want) fs.writeFileSync(attrs, want);
   const ex = path.join(dir, 'info', 'exclude');
   fs.mkdirSync(path.dirname(ex), { recursive: true });
   const cur = fs.existsSync(ex) ? fs.readFileSync(ex, 'utf8') : '';
