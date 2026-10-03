@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -101,6 +101,8 @@ export interface HarnessSpec {
   usage?(root: string, sinceMs: number): { input: number; output: number; cached?: number } | null;
   /** 输出里不带额度的工具：从它自己记的会话里读（sinceMs 之后这个项目最新的一份）；读不到就是 null。 */
   limits?(root: string, sinceMs: number): Limit[] | null;
+  /** 派活前不花额度地问一次现在的额度（不读登录凭据，由工具自己去问）；问不到是 null。 */
+  liveLimits?(loc: Located): Promise<Limit[] | null>;
   /** 能换哪些模型（不花额度：它自己的 models 命令、模型缓存、简称）。这回列不出来是 null；根本列不了的工具不写。 */
   models?(loc: Located): Promise<string[] | null>;
   /** 工具自己说的「这个模型要停用、换成哪个」（Codex 模型缓存里的 upgrade）：模型 → 建议换成的、停用时间。 */
@@ -684,9 +686,83 @@ const codex: HarnessSpec = {
     return { argv: a, stdin: i.prompt, format: 'codex', outFile: i.outFile };
   },
   limits: (root, sinceMs) => codexSessionLimits(root, sinceMs),
+  liveLimits: (loc) => codexLiveLimits(loc),
   models: async () => codexModels(),
   upgrades: () => codexUpgrades(),
 };
+
+/**
+ * 不花额度地问 Codex 现在的额度（借 CodexBar：codex app-server 的 account/rateLimits/read，JSON-RPC 一行一条）。
+ * 由 Codex 自己去问，接力台不读它的登录凭据；只读、什么都不批准（-s read-only -a never），在临时目录里起，最多等 15 秒。
+ * 2026-10-03 本机 codex-cli 0.157.0 实测：primary 是 5 小时窗口、secondary 是一周窗口（usedPercent、windowDurationMins、resetsAt 秒）。
+ */
+export function codexLiveLimits(loc: Located, timeoutMs = 15_000): Promise<Limit[] | null> {
+  return new Promise((resolve) => {
+    const e = resolveExec([...loc.exec, '-s', 'read-only', '-a', 'never', 'app-server']);
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(e.file, e.args, { cwd: os.tmpdir(), env: agentEnv({}), stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, windowsVerbatimArguments: e.verbatim });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let done = false;
+    const finish = (v: Limit[] | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        child.stdin?.end();
+      } catch {
+        /* 已经关了 */
+      }
+      child.kill();
+      resolve(v);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    const send = (m: object) => {
+      try {
+        child.stdin?.write(`${JSON.stringify(m)}\n`);
+      } catch {
+        finish(null);
+      }
+    };
+    child.on('error', () => finish(null));
+    child.on('exit', () => finish(null));
+    let buf = '';
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (d: string) => {
+      buf += d;
+      for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        let j: { id?: number; result?: unknown; error?: unknown };
+        try {
+          j = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (j.id === 1) {
+          send({ method: 'initialized', params: {} });
+          send({ id: 2, method: 'account/rateLimits/read', params: {} });
+        } else if (j.id === 2) finish(j.error ? null : appServerLimits(j.result));
+      }
+    });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'relaydesk', version: '2' } } });
+  });
+}
+
+/** app-server 回的额度（驼峰写法）换成会话记录里那种写法再认：5 小时、一周两个窗口。 */
+export function appServerLimits(result: unknown): Limit[] | null {
+  const r = (result && typeof result === 'object' ? (result as { rateLimits?: unknown }).rateLimits : null) as Record<string, unknown> | null;
+  if (!r) return null;
+  const win = (w: unknown) => {
+    const x = (w && typeof w === 'object' ? w : {}) as { usedPercent?: unknown; windowDurationMins?: unknown; resetsAt?: unknown };
+    return { used_percent: x.usedPercent, window_minutes: x.windowDurationMins, resets_at: x.resetsAt };
+  };
+  const out = codexLimits({ primary: win(r.primary), secondary: win(r.secondary) });
+  return out.length ? out : null;
+}
 
 /**
  * Codex 每次运行在 ~/.codex/sessions/年/月/日/ 下留一份 rollout-时间-编号.jsonl（群聊、复核也留）：

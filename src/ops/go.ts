@@ -733,6 +733,33 @@ class GoRunner {
     return spareFirst(orderMembers(allMembers(this.settings.level), this.settings.order), recentErrors());
   }
 
+  /**
+   * 派活前不花额度地问一次额度（借 CodexBar：Codex 用它自己的 app-server 问，接力台不读登录凭据）。
+   * 同一个工具的几位共用一个账号，问一次记到每一位身上；5 分钟内读到过（刚跑完一棒的会话记录里也有）就不问。
+   * 有窗口用满了：先记成额度用完、什么时候恢复，挑人时跳过它，不用等它跑一棒失败才知道。
+   */
+  private async refreshLiveLimits(): Promise<void> {
+    if (process.env.RELAY_LIVE_LIMITS === 'off') return;
+    const groups = new Map<string, MemberInfo[]>();
+    for (const m of this.members()) {
+      if (m.kind !== 'harness' || !m.harness || !m.canWork || m.cooling || !findHarness(m.harness)?.liveLimits) continue;
+      groups.set(m.harness, [...(groups.get(m.harness) ?? []), m]);
+    }
+    for (const [h, ms] of groups) {
+      if (ms.some((m) => m.limitsAt && Date.now() - Date.parse(m.limitsAt) < 5 * 60_000)) continue;
+      const spec = findHarness(h);
+      const loc = spec ? locateCached(spec) : null;
+      if (!spec?.liveLimits || !loc) continue;
+      const w = await spec.liveLimits(loc).catch(() => null);
+      if (!w?.length) continue;
+      const full = fullUntil(w);
+      for (const m of ms) {
+        noteLimits(m.name, w);
+        if (full) markQuota(m.name, { hit: true, line: `${nameOf(m)} 报的额度窗口用满了`, until: full });
+      }
+    }
+  }
+
   /** 挑一位：能调度、没在等额度、这次没出过错。tier = 只要强的 / 只要弱的 / 都行。 */
   private pick(tier: Tier, exclude: string[] = []): MemberInfo | null {
     return readyMembers(this.members()).find((m) => !this.failed.has(m.name) && !exclude.includes(m.name) && (tier === 'any' || m.tier === tier)) ?? null;
@@ -1028,6 +1055,7 @@ class GoRunner {
     try {
       const v = requireInit(this.root);
       const kind = this.opts.kind ?? 'work';
+      if (!this.opts.who) await this.refreshLiveLimits();
       const all = this.members();
       let m: MemberInfo | null = null;
       if (this.opts.who) {
@@ -1079,6 +1107,7 @@ class GoRunner {
         this.settleNative();
         // 边做边复核跑完了：趁两棒之间的空档记账（清单里可能多了一步去改）
         await this.recordSide(false);
+        await this.refreshLiveLimits();
         const v = loadLedger(this.root);
         const task = readTask(this.root);
         if (task.empty) return this.end('needs-human', '全自动停止：还没写任务');

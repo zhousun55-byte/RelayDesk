@@ -36,6 +36,8 @@ export function testEnv(home: string): NodeJS.ProcessEnv {
     RELAY_LOGIN_PATH: 'off',
     RELAY_SCAN_APPS: 'off',
     RELAY_AUTODETECT: 'off',
+    // 派活前问额度（codex app-server）：只在测这件事的测试里开
+    RELAY_LIVE_LIMITS: 'off',
     GIT_CONFIG_NOSYSTEM: '1',
     NO_COLOR: '1',
   };

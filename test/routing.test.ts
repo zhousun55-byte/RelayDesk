@@ -99,3 +99,36 @@ test('全自动：没登录的那一位（Claude Code 说 Please run /login）�
   assert.equal(q.blocked.claude?.kind, 'auth');
   assert.match(q.blocked.claude.note, /没登录或登录过期，原话：Invalid API key · Please run \/login/);
 });
+
+test('派活前问额度（借 CodexBar：codex app-server，不花额度、不读登录凭据）：Codex 5 小时窗口用满了就先跳过它，记下什么时候恢复；没满照常派', () => {
+  const s = sandbox('route-live');
+  withFakes(s);
+  s.env.RELAY_LIVE_LIMITS = 'on';
+  s.relay(['detect', '--offline']);
+  s.relay(['init']);
+  s.relay(['task', '做几步', '--step', '一', '二']);
+  setOrder(s, ['codex', 'claude'], { finalReview: false });
+  s.env.FAKE_CODEX_LIVE = '100 41';
+  s.env.FAKE_RESETS_IN = '5400';
+  const t = Date.now();
+  s.relay(['go']);
+  assert.equal(s.stints().at(-1)!.who.member, 'claude', 'Codex 额度用满：先派排在后面的');
+  const log = fs.readFileSync(s.env.FAKE_LOG!, 'utf8').split('\n');
+  assert.equal(log.filter((l) => l === 'codex app-server').length, 1, '问了一次');
+  assert.ok(!log.some((l) => /^codex exec/.test(l)), '没去让 Codex 白跑一棒');
+  const q = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'quota.json'), 'utf8')) as QuotaFile;
+  assert.ok(Math.abs(Date.parse(q.members.codex.until) - (t + 5400_000)) < 60_000, '恢复时间是 Codex 报的');
+  assert.deepEqual(
+    q.limits.codex.windows.map((w) => [w.kind, w.used]),
+    [
+      ['5h', 100],
+      ['7d', 41],
+    ]
+  );
+
+  // 额度恢复了（再问一次，没用满）：照常派 Codex
+  fs.rmSync(path.join(s.home, '.relay', 'quota.json'));
+  s.env.FAKE_CODEX_LIVE = '20 41';
+  s.relay(['go']);
+  assert.equal(s.stints().at(-1)!.who.member, 'codex');
+});
