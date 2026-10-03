@@ -2,7 +2,7 @@
 //   RelayDesk-mac.zip      解压出 RelayDesk 文件夹，双击「安装接力台（Mac）.command」
 //   RelayDesk-windows.zip  解压出 RelayDesk 文件夹，双击 install-windows.cmd
 // 包里是编译好的 dist/src 和运行要的依赖，装的时候不下依赖、不编译，只要 Node.js 20+（Windows 上没有的话安装程序用 winget 装）。
-// 各自只带自己平台的安装脚本。文件名不带版本号：README 的下载链接指向 releases/latest/download/<文件名>。
+// 各自只带自己平台的安装脚本和 INSTALL.txt（README 里是网页排版和 docs 里的图，放进包里用文本编辑器打开只看得到标签）。文件名不带版本号：README 的下载链接指向 releases/latest/download/<文件名>。
 //   --no-build   用现成的 dist（npm test 刚编过）
 //   --no-zip     只摆好文件夹（release/mac/RelayDesk、release/windows/RelayDesk），不压缩（测试用）
 //   --out <dir>  放到别处
@@ -37,7 +37,7 @@ const deps = new Set();
   }
 })(Object.keys(pkg.dependencies ?? {}));
 
-const COMMON = ['dist/src', 'LICENSE', 'README.md', 'README.en.md', ...[...deps].map((n) => `node_modules/${n}`)];
+const COMMON = ['dist/src', 'LICENSE', ...[...deps].map((n) => `node_modules/${n}`)];
 const ONLY = {
   mac: ['安装接力台（Mac）.command', 'scripts/make-desktop-app.sh', 'scripts/open-relay.sh', 'scripts/icon.png', 'scripts/AppIcon.icon', 'scripts/Assets.car'],
   windows: ['install-windows.cmd', 'scripts/windows'],

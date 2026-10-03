@@ -25,11 +25,12 @@ test('下载包：Mac、Windows 各带各的安装脚本，带编译结果和依
 
     for (const dir of [mac, win]) {
       for (const rel of ['dist/src/cli.js', 'dist/src/web/index.html', 'node_modules/commander/package.json', 'LICENSE', 'INSTALL.txt']) assert.ok(has(dir, rel), `${dir} 里有 ${rel}`);
-      for (const rel of ['src', 'test', 'dist/test', 'docs', 'tsconfig.json']) assert.ok(!has(dir, rel), `${dir} 里不带 ${rel}`);
+      for (const rel of ['src', 'test', 'dist/test', 'docs', 'tsconfig.json', 'README.md']) assert.ok(!has(dir, rel), `${dir} 里不带 ${rel}`);
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as Record<string, unknown>;
       assert.equal(pkg.version, version);
       assert.equal(pkg.devDependencies, undefined);
       assert.match(fs.readFileSync(path.join(dir, 'INSTALL.txt'), 'utf8'), new RegExp(version.replaceAll('.', '\\.')));
+      assert.match(fs.readFileSync(path.join(dir, 'INSTALL.txt'), 'utf8'), /github\.com\/zhousun55-byte\/RelayDesk/, '写了去哪看说明和更新');
     }
     assert.ok(has(mac, '安装接力台（Mac）.command') && has(mac, 'scripts/make-desktop-app.sh') && has(mac, 'scripts/open-relay.sh'));
     assert.ok(!has(mac, 'install-windows.cmd') && !has(mac, 'scripts/windows'), 'Mac 包不带 Windows 的');

@@ -1,5 +1,7 @@
 接力台（RelayDesk）{version} · Windows 10 / 11
 
+说明、更新和问题反馈：https://github.com/zhousun55-byte/RelayDesk
+
 几个 AI（Claude Code、Codex、Cursor……）在同一个项目文件夹里轮流接着做：额度用完换下一位，弱模型做的由强模型复核，改坏了能退回。界面有中文和英文，左下角「EN / 中」切换。
 
 一、安装
@@ -23,6 +25,8 @@
 ------------------------------------------------------------
 
 RelayDesk {version} · Windows 10 / 11
+
+Docs, updates and issues: https://github.com/zhousun55-byte/RelayDesk
 
 Several AI coding tools take turns in the same project folder: when one runs out of quota the next picks up, a stronger model reviews the weaker models' legs, and any leg can be rolled back. Switch the web app between English and Chinese with "EN / 中" at the bottom left.
 
