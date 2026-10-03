@@ -4,17 +4,31 @@
 // 顺带核对：启动没有改包里的东西（没装依赖、没编译）。成功退出码 0。
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
 const dir = path.resolve(process.argv[2] ?? '');
-const port = Number(process.argv[3]) || 7470 + Math.floor(Math.random() * 200);
 const mac = fs.existsSync(path.join(dir, 'scripts', 'open-relay.sh'));
 const launcher = mac ? ['/bin/zsh', [path.join(dir, 'scripts', 'open-relay.sh')]] : [process.execPath, [path.join(dir, 'scripts', 'windows', 'launch.js')]];
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-pack-smoke-'));
-const env = { ...process.env, HOME: home, USERPROFILE: home, RELAY_HOME: path.join(home, '.relay'), RELAY_PORT: String(port), RELAY_NO_BROWSER: '1', RELAY_AUTODETECT: 'off', RELAY_SCAN_APPS: 'off', RELAY_LOGIN_PATH: 'off' };
+const env = { ...process.env, HOME: home, USERPROFILE: home, RELAY_HOME: path.join(home, '.relay'), RELAY_NO_BROWSER: '1', RELAY_AUTODETECT: 'off', RELAY_SCAN_APPS: 'off', RELAY_LOGIN_PATH: 'off' };
 delete env.RELAY_KEEPER;
 delete env.RELAY_AT_LOGIN;
+
+// 启动器从 RELAY_PORT 往后找 10 个端口看有没有接力台在跑：挑一段 10 个都空着的，免得碰上别的测试开着的接力台
+const free = (p) => new Promise((res) => { const s = net.createServer().once('error', () => res(false)).listen(p, '127.0.0.1', () => s.close(() => res(true))); });
+async function pickPort() {
+  if (Number(process.argv[3])) return Number(process.argv[3]);
+  for (let i = 0; i < 50; i++) {
+    const base = 7470 + Math.floor(Math.random() * 400);
+    let ok = true;
+    for (let p = base; p < base + 10 && ok; p++) ok = await free(p);
+    if (ok) return base;
+  }
+  return 7470;
+}
+let port = 0;
 
 const fail = (why) => {
   console.error(`下载包没起来：${why}`);
@@ -30,6 +44,8 @@ const ping = async () => {
 };
 
 (async () => {
+  port = await pickPort();
+  env.RELAY_PORT = String(port);
   if (!fs.existsSync(path.join(dir, 'dist', 'src', 'cli.js'))) fail(`${dir} 里没有 dist/src/cli.js`);
   if (fs.existsSync(path.join(dir, 'src'))) fail('包里不该带 src（带了会在用户电脑上编译）');
   const version = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version;
@@ -56,4 +72,5 @@ const ping = async () => {
   if (fs.statSync(path.join(dir, 'dist', 'src', 'cli.js')).mtimeMs !== stamp) fail('启动时重新编译了');
   fs.rmSync(home, { recursive: true, force: true });
   console.log(`${mac ? 'Mac' : 'Windows'} 包：用启动器起来了（${version}，端口 ${port}），也关掉了`);
+  process.exit(0); // 不等残留的连接自己关
 })();

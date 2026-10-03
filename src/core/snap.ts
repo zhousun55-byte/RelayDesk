@@ -207,8 +207,24 @@ export function ensureSnapRepo(root: string): void {
   const dir = snapDir(root);
   if (!hasSnapRepo(root)) {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
-    const r = spawnSync('git', ['init', '-q', '--bare', dir], { encoding: 'utf8', env: cleanEnv(root) });
-    if (r.status !== 0) throw new RelayError(`建快照仓库失败：${(r.stderr ?? '').trim() || r.error?.message}`, 'snap');
+    const init = (at: string) => {
+      const r = spawnSync('git', ['init', '-q', '--bare', at], { encoding: 'utf8', env: cleanEnv(root) });
+      if (r.status !== 0) throw new RelayError(`建快照仓库失败：${(r.stderr ?? '').trim() || r.error?.message}`, 'snap');
+    };
+    if (fs.existsSync(dir)) init(dir); // 残缺的（没有 HEAD）：原地补全
+    else {
+      // 先在旁边建好再一下子挪过去：网页开着（盯着文件夹）时在终端里接入，两个进程会同时建，
+      // 对同一个文件夹 git init 会撞上（config 被锁、模板复制失败）。挪的时候别人已经建好了，就用别人的。
+      const tmp = `${dir}.new-${process.pid}-${Date.now()}`;
+      try {
+        init(tmp);
+        fs.renameSync(tmp, dir);
+      } catch (e) {
+        if (!hasSnapRepo(root)) throw e instanceof RelayError ? e : new RelayError(`建快照仓库失败：${(e as Error).message}`, 'snap');
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
   }
   repairSnapHead(dir);
   tidySnapConfig(dir);
