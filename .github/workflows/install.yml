@@ -9,8 +9,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  # 包在 Mac 上做（ditto 压缩，和发布流程一样），两边拿的就是用户下载到的那个 zip
+  pack:
+    runs-on: macos-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -20,9 +21,26 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/pack.js
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: release/*.zip
+
+  windows:
+    needs: pack
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      # 用户事先装好的 Node.js（LTS）
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
       - name: 解开（和右键「全部解压缩」一样）
         shell: pwsh
-        run: Expand-Archive -Path release/RelayDesk-windows.zip -DestinationPath "$env:RUNNER_TEMP\pkg"
+        run: Expand-Archive -Path RelayDesk-windows.zip -DestinationPath "$env:RUNNER_TEMP\pkg"
       - name: 双击 install-windows.cmd
         shell: cmd
         run: call "%RUNNER_TEMP%\pkg\RelayDesk\install-windows.cmd" < NUL
@@ -50,18 +68,19 @@ jobs:
           if ($up) { throw '去掉以后接力台还在跑' }
 
   mac:
+    needs: pack
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      # 用户事先装好的 Node.js（LTS）
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: node scripts/pack.js
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
       - name: 解开（和在访达里双击一样用 ditto）
-        run: ditto -x -k release/RelayDesk-mac.zip "$RUNNER_TEMP/pkg"
+        run: ditto -x -k RelayDesk-mac.zip "$RUNNER_TEMP/pkg"
       - name: 双击「安装接力台（Mac）.command」
         env:
           RELAY_NO_BROWSER: '1'
