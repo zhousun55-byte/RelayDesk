@@ -66,7 +66,7 @@ const NAMES: [string, string][] = [
 test('成员叫它用的模型：gpt-6-sol → GPT-6 Sol、opus → Claude Opus、带思考强度和快慢的去掉；网页里的写法和后台一样', () => {
   for (const [id, want] of NAMES) assert.equal(names.llmName(id), want, id);
   // 网页没有构建步骤，同一套规则写了两份：拿同一张表对照
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split('\n');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split(/\r?\n/);
   const pick = (name: string) => {
     const i = src.findIndex((l) => new RegExp(`^(function ${name}\\(|const ${name} = )`).test(l));
     assert.ok(i >= 0, `app.js 里没有 ${name}`);

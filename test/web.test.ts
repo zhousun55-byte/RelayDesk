@@ -13,7 +13,7 @@ const runWeb = (code: string, ctx: vm.Context) => vm.runInNewContext(`${I18N}\n$
  * 从 app.js 里把用到的函数和表原样取出来，在沙箱里跑。
  */
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split('\n');
+const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split(/\r?\n/);
 
 /** 取一个顶层函数或常量：从声明那一行到顶格的收尾（`}` / `];` / `};`）。 */
 function pick(name: string): string {

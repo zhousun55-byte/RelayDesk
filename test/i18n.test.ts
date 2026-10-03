@@ -78,8 +78,9 @@ test('英文版：后台送来的状态、结论、验收、恢复时间换成�
 
 test('认不出来的模型：写名字的头一个字母（豆包写「豆」），撞了的写两个字母；名字里没有字才用几何图形', () => {
   const pick = (name: string) => {
-    const i = APP.split('\n').findIndex((l) => l.startsWith(`function ${name}(`));
-    const lines = APP.split('\n');
+    // 按 \r\n 和 \n 都能切行：Windows 上签出的文件是 \r\n，只按 \n 切的话那一行是「}\r」，永远找不到函数的结尾
+    const lines = APP.split(/\r?\n/);
+    const i = lines.findIndex((l) => l.startsWith(`function ${name}(`));
     let j = i;
     while (lines[j] !== '}') j++;
     return lines.slice(i, j + 1).join('\n');

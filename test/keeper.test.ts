@@ -207,7 +207,7 @@ test('启动脚本：--check 告诉小程序接力台在不在、是不是你关
 });
 
 test('网页：接力台换了新版重启过，网页自己刷新；你正在打字、开着弹窗或菜单时先不刷，空下来再刷', async () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split('\n');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split(/\r?\n/);
   const fn = (name: string) => {
     const i = src.findIndex((l) => new RegExp(`^(async )?function ${name}\\(`).test(l));
     assert.ok(i >= 0, `app.js 里没有 ${name}`);

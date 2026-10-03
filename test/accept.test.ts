@@ -479,7 +479,7 @@ test('内置代理不读、不搜放密钥的文件（.env、私钥）；模板�
 });
 
 test('网页切换项目：A 的请求晚回来也不会显示在 B 里（状态、对话、文件树、棒的详情、打开的文件都一样）；点棒上的按钮发往当前项目', async () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split('\n');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split(/\r?\n/);
   const fn = (name: string) => {
     const i = src.findIndex((l) => new RegExp(`^(async )?function ${name}\\(`).test(l));
     assert.ok(i >= 0, `app.js 里没有 ${name}`);
@@ -535,7 +535,7 @@ ${code}
 });
 
 test('网页切换项目：建任务、传文件要连着发几个请求，中途换了项目，后面的不发到新项目（以前 A 的任务会写进 B）；草稿留在 A', async () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split('\n');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'web', 'app.js'), 'utf8').split(/\r?\n/);
   const fn = (name: string) => {
     const i = src.findIndex((l) => new RegExp(`^(async )?function ${name}\\(`).test(l));
     assert.ok(i >= 0, `app.js 里没有 ${name}`);
