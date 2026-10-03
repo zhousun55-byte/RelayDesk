@@ -1,8 +1,8 @@
-﻿# 接力台（RelayDesk）在 Windows 上的安装：双击 agent-relay 文件夹里的 install-windows.cmd，它调这个脚本。
-#   没有 Node.js / Git 就用 winget 装；装依赖、编译；开始菜单里放一个「接力台」，登录电脑时在后台启动；最后打开网页。
+﻿# 接力台（RelayDesk）在 Windows 上的安装：双击接力台文件夹里的 install-windows.cmd，它调这个脚本。
+#   没有 Node.js / Git 就用 winget 装；从源码装的还要装依赖、编译（下载包里是编好的）；开始菜单里放一个「接力台」，登录电脑时在后台启动；最后打开网页。
 #   以后不弹黑窗口、不在桌面放图标。对应 Mac 上的 make-desktop-app.sh。
 #   install-windows.cmd --remove   去掉开始菜单和登录启动里的「接力台」（挪进回收站），关闭正在运行的接力台。
-#                                  agent-relay 文件夹和 %USERPROFILE%\.relay 里的记录都不动。
+#                                  接力台文件夹和 %USERPROFILE%\.relay 里的记录都不动。
 # 这个文件存成带 BOM 的 UTF-8：Windows 自带的 PowerShell 5 没有 BOM 会把中文读成乱码。
 
 $Win = $PSScriptRoot
@@ -46,12 +46,20 @@ $major = [int](& node -p "process.versions.node.split('.')[0]")
 if ($major -lt 20) { Die "Node.js 是 $(& node -v)，要 20 或更新的版本。到 https://nodejs.org 装新版，再双击一次 install-windows.cmd。" }
 
 Set-Location $Dir
-Write-Host '安装依赖（第一次要一两分钟）……'
-& npm install --no-audit --no-fund
-if ($LASTEXITCODE -ne 0) { Die '安装依赖失败，原因在上面几行。' }
-Write-Host '编译……'
-& npm run build
-if ($LASTEXITCODE -ne 0) { Die '编译失败，原因在上面几行。' }
+# 从网上下载、解压出来的文件带着「来自网络」的标记，开始菜单里的接力台每次打开都会弹安全警告：装的时候一次去掉。
+Get-ChildItem -LiteralPath $Dir -Recurse -File | Unblock-File
+# 下载包里是编译好的、带着依赖（没有 src）：不装依赖、不编译。从源码装（git clone 下来的）才要。
+if (Test-Path (Join-Path $Dir 'src')) {
+  Write-Host '安装依赖（第一次要一两分钟）……'
+  & npm install --no-audit --no-fund
+  if ($LASTEXITCODE -ne 0) { Die '安装依赖失败，原因在上面几行。' }
+  Write-Host '编译……'
+  & npm run build
+  if ($LASTEXITCODE -ne 0) { Die '编译失败，原因在上面几行。' }
+} elseif (-not (Test-Path (Join-Path $Dir 'node_modules'))) {
+  & npm install --omit=dev --no-audit --no-fund
+  if ($LASTEXITCODE -ne 0) { Die '安装依赖失败，原因在上面几行。' }
+}
 
 # 快捷方式指向 wscript + relaydesk.vbs：点开不弹黑窗口。
 $shell = New-Object -ComObject WScript.Shell

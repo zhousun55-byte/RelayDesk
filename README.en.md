@@ -25,6 +25,15 @@ There is also a **group chat**: ask several AIs the same thing. *Compare* asks t
 
 > The web app is available in English and Chinese: click **EN / 中** at the bottom left (the first visit follows your browser language). Detailed documentation is in Chinese ([README.md](README.md), [docs/设计说明.md](docs/设计说明.md)). RelayDesk is used most on macOS. Windows 10 / 11 has a native version (double-click `install-windows.cmd`, no WSL needed), installed and used on a real machine. The CLI and web app also run on Linux.
 
+## Download
+
+| macOS | Windows 10 / 11 |
+| :-- | :-- |
+| [RelayDesk-mac.zip](../../releases/latest/download/RelayDesk-mac.zip) | [RelayDesk-windows.zip](../../releases/latest/download/RelayDesk-windows.zip) |
+| Unzip, double-click `安装接力台（Mac）.command` | Unzip, double-click `install-windows.cmd` |
+
+The packages are prebuilt: nothing is downloaded or compiled during install. You need [Node.js](https://nodejs.org) 20 or newer and git (on Windows the installer gets them with winget if they are missing). Each package has an `INSTALL.txt` with every step, including what to do when macOS or Windows blocks it. Older versions are under [Releases](../../releases). On Linux, or to work on the code, use git clone below.
+
 ## Get started
 
 Requires [Node.js](https://nodejs.org) 20 or newer (20, 22 and 24 are tested) and git.
@@ -35,7 +44,7 @@ macOS, one command:
 git clone <repo url> agent-relay && cd agent-relay && zsh scripts/make-desktop-app.sh
 ```
 
-From a downloaded zip: unzip it and double-click `安装接力台（Mac）.command` in Finder ("install RelayDesk"). If macOS says it can't verify the developer, click "Open Anyway" at the bottom of System Settings → Privacy & Security.
+From a downloaded package: unzip it and double-click `安装接力台（Mac）.command` in Finder ("install RelayDesk"). If macOS says it can't verify the developer, click "Open Anyway" at the bottom of System Settings → Privacy & Security.
 
 This installs dependencies, builds, puts a **RelayDesk** app (named 接力台) in `/Applications` (or `~/Applications` without write access) that starts in the background at login, and opens the web page. No Dock or desktop icon, no terminal window. Open it later from Launchpad or Spotlight, or at http://127.0.0.1:7388. To remove it: `zsh scripts/make-desktop-app.sh --remove`.
 

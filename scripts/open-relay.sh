@@ -94,8 +94,8 @@ if [[ ! -d node_modules ]]; then
   npm install --no-audit --no-fund >>"$LOG" 2>&1 || fail "安装依赖失败。详情见 $LOG"
 fi
 
-# 没编译过、或者源码比编译结果新：先编译。
-if [[ ! -f dist/src/cli.js || -n "$(find src package.json -newer dist/src/cli.js -print -quit 2>/dev/null)" ]]; then
+# 没编译过、或者源码比编译结果新：先编译。下载包里是编译好的，没有 src，不编译。
+if [[ -d src && ( ! -f dist/src/cli.js || -n "$(find src package.json -newer dist/src/cli.js -print -quit 2>/dev/null)" ) ]]; then
   [[ -n "$BACKGROUND" ]] || notify "正在准备接力台……"
   npm run build >>"$LOG" 2>&1 || fail "编译失败。在 agent-relay 文件夹里执行 npm run build 看看原因。"
 fi

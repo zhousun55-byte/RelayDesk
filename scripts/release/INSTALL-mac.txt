@@ -1,0 +1,39 @@
+接力台（RelayDesk）{version} · macOS
+
+几个 AI（Claude Code、Codex、Cursor……）在同一个项目文件夹里轮流接着做：额度用完换下一位，弱模型做的由强模型复核，改坏了能退回。界面有中文和英文，左下角「EN / 中」切换。
+
+一、要先装好的
+1. Node.js 20 或更新的版本：https://nodejs.org （下载 LTS 版，一路下一步）
+2. git（第一次在终端输入 git 会提示安装，点「安装」就行）
+3. 至少一个已经登录的 AI 编程工具，比如 Claude Code、Codex、Cursor（命令行版 cursor-agent）。接力台会自己找出这台电脑上装了哪些。
+
+二、安装
+1. 把解压出来的 RelayDesk 文件夹放在一个以后不会挪动的地方（比如「文稿」里）。
+2. 打开 RelayDesk 文件夹，双击「安装接力台（Mac）.command」。会弹出一个终端窗口显示进度，几秒钟就好（包里是编译好的）。
+   如果提示「无法打开」或「无法验证开发者」：先点「完成」，打开「系统设置 → 隐私与安全性」，拉到最下面，点「仍要打开」，再双击一次。
+3. 窗口里出现「装好了」，「应用程序」里就多了一个「接力台」，浏览器会自己打开网页。这个终端窗口可以关掉。
+   以后在启动台里点「接力台」就行；它在后台运行，程序坞里没有图标，登录电脑时自己启动。
+4. 双击还是打不开时，用终端装：打开「终端」，输入 zsh 和一个空格，再把「安装接力台（Mac）.command」拖进终端窗口，按回车。
+5. 不想要了：同第 4 条，拖进去之后再输入一个空格和 --remove，按回车。
+
+三、用起来
+1. 左边「项目」旁的 + 选一个项目文件夹，在中间写一句要做什么，回车。
+2. 点顶上的「全自动」，接力台就会派 AI 一棒一棒地做，做到验收通过。
+3. 也可以自己在任何 AI 工具里打开这个项目文件夹，对它说「接着做」。
+
+出问题时：~/.relay/ui.log 最后几行写了原因。
+
+------------------------------------------------------------
+
+RelayDesk {version} · macOS
+
+Several AI coding tools take turns in the same project folder: when one runs out of quota the next picks up, a stronger model reviews the weaker models' legs, and any leg can be rolled back. Switch the web app between English and Chinese with "EN / 中" at the bottom left.
+
+You need: Node.js 20 or newer (https://nodejs.org), git, and at least one AI coding tool you are signed in to (Claude Code, Codex, Cursor's cursor-agent, ...).
+
+1. Move the RelayDesk folder somewhere it will stay, for example Documents.
+2. Double-click "安装接力台（Mac）.command" (install RelayDesk). If macOS says it can't verify the developer, click Done, then "Open Anyway" at the bottom of System Settings → Privacy & Security, and double-click again.
+3. When it says it's done, a RelayDesk app (named 接力台) is in Applications and the web page opens. It runs in the background with no Dock icon and starts at login.
+4. To remove it: open Terminal, type "zsh ", drag the .command file in, add " --remove" and press Return.
+
+Logs: ~/.relay/ui.log

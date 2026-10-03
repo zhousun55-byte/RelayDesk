@@ -22,21 +22,30 @@
 
 > 网页有中文和英文，左下角一键切换（第一次打开按浏览器的语言）；文档是中文的，英文简介见 [README.en.md](README.en.md)。macOS 上用得最多；Windows 10 / 11 上有原生版（双击 `install-windows.cmd` 装好，不用 WSL），在真机上装好用过；Linux 上命令行和网页都能用。
 
+## 下载
+
+| macOS | Windows 10 / 11 |
+| :-- | :-- |
+| [RelayDesk-mac.zip](../../releases/latest/download/RelayDesk-mac.zip) | [RelayDesk-windows.zip](../../releases/latest/download/RelayDesk-windows.zip) |
+| 解压，双击「安装接力台（Mac）.command」 | 解压，双击 `install-windows.cmd` |
+
+包里是编译好的，装的时候不下依赖、不编译。要先装好 [Node.js](https://nodejs.org) 20 或更新的版本和 git（Windows 上没有的话，安装程序用 winget 装）。每个包里有一份 `INSTALL.txt`，写了每一步和遇到系统拦截怎么办。以前的版本在 [Releases](../../releases)。Linux 和想改代码的，用下面的 git clone。
+
 ## 三分钟上手
 
 需要 [Node.js](https://nodejs.org) 20 或更新的版本（20、22、24 都测过）和 git。
 
-macOS 上一条命令装好：
+macOS 上从源码装，一条命令：
 
 ```bash
 git clone <这个仓库的地址> agent-relay && cd agent-relay && zsh scripts/make-desktop-app.sh
 ```
 
-下载的压缩包：解压后在访达里双击「安装接力台（Mac）.command」，效果一样（系统说无法验证开发者时，到「系统设置 → 隐私与安全性」最下面点「仍要打开」）。在终端里输入命令时，`scripts/make-desktop-app.sh` 前面要带上文件夹的完整位置（把文件拖进终端窗口会自动填好），只打 `/scripts/…` 会报找不到文件。
+下载的包：解压后在访达里双击「安装接力台（Mac）.command」，效果一样，只是不用装依赖和编译（系统说无法验证开发者时，到「系统设置 → 隐私与安全性」最下面点「仍要打开」）。在终端里输入命令时，`scripts/make-desktop-app.sh` 前面要带上文件夹的完整位置（把文件拖进终端窗口会自动填好），只打 `/scripts/…` 会报找不到文件。
 
 它会装好依赖、编译好，在「应用程序」文件夹（`/Applications`，没有写权限时放 `~/Applications`）里放一个「接力台」并让它登录电脑时自己在后台启动，最后打开网页。桌面和程序坞上都不挂图标，也不弹终端窗口。接力台意外退出、或者编译出了新版本，它几秒内在后台重新拉起（手上有活时等活干完），开着的网页会自己刷新成新版。以后要打开网页，在启动台或聚焦搜索（⌘ 空格）里打开「接力台」，或者在浏览器里打开 http://127.0.0.1:7388 。在网页「设置」里点「关闭接力台」，它就停下，直到你下次打开「接力台」或重新登录。不想要了：`zsh scripts/make-desktop-app.sh --remove`。
 
-Windows 10 / 11：把文件夹放在一个以后不挪动的地方，双击里面的 `install-windows.cmd`。没有 Node.js、Git 的，它用系统自带的 winget 装；然后装依赖、编译，在开始菜单里放一个「接力台」，登录电脑时在后台启动，最后打开网页。以后从开始菜单打开，不弹黑窗口，桌面上不放图标；意外退出、编译出新版本，一样几秒内在后台重新拉起。不想要了：在这个文件夹里执行 `install-windows.cmd --remove`。
+Windows 10 / 11：把文件夹放在一个以后不挪动的地方，双击里面的 `install-windows.cmd`。没有 Node.js、Git 的，它用系统自带的 winget 装；从源码装的再装依赖、编译（下载的包是编译好的），在开始菜单里放一个「接力台」，登录电脑时在后台启动，最后打开网页。以后从开始菜单打开，不弹黑窗口，桌面上不放图标；意外退出、编译出新版本，一样几秒内在后台重新拉起。不想要了：在这个文件夹里执行 `install-windows.cmd --remove`。
 
 Linux（或者不想让它在后台常驻）：
 
@@ -361,6 +370,7 @@ git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install &
 ```bash
 npm test                  # 编译 + 全部测试（不花钱、不联网）
 python3 scripts/e2e.py    # 用浏览器真的点一遍网页（要装 playwright）
+node scripts/pack.js      # 做 Mac、Windows 两个下载包，放在 release/（推 v 开头的标签时 GitHub 自动做、在两个系统上各起一次，再挂到 Release 上）
 ```
 
 测试用假的 `claude` / `codex` / `dsh` 程序（参数和输出格式跟真的一样）和假的模型接口，覆盖接入、快照、记账、调度、额度用完换人、复核、终审、退回、群聊投票、网页接口，以及一批「不能把没做完说成做完」的反例：复核结论的各种写法、验收、快照读不出来、配置文件坏了、退回后的任务清单、换人前的确认、调度锁、内置小代理的路径、网页切换项目时的旧响应；还有 2026-09-25 自查找出的：复核记错了人、只打勾的弱模型、账本坏行、检查命令写的文件、正常复核被当成额度用完、关掉终端窗口留下工具、投票丢票、讨论命令带出会话变量、汉字被切开（`test/selfcheck.test.ts` 和 `test/guard.test.ts`）；2026-09-29 审查找出的：终审过后检查命令改了源码还算通过、建任务中途换了项目写进了别的项目、同时传同名文件、运行设置写坏了被悄悄换成默认。这些是假工具测试，不能代替真实工具的验收。

@@ -4,3 +4,4 @@ dist.new/
 dist.old/
 .DS_Store
 npm-debug.log*
+/release/

@@ -1,0 +1,79 @@
+name: 发布
+
+# 推一个 v 开头的标签（比如 v2.0.0）：跑全部测试，做 Mac、Windows 两个下载包，
+# 分别在 Mac 和 Windows 上解开、用包里的启动器起一次，都过了才挂到这个标签的 Release 上。
+# 下载包的文件名不带版本号，README 里的「下载」链接（releases/latest/download/…）一直指向最新的那个。
+# 已经在网页上建好了这个标签的 Release（写好了说明）的，只把两个包传上去，不动说明。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: node scripts/pack.js --no-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: release/*.zip
+
+  smoke:
+    needs: pack
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            zip: RelayDesk-mac.zip
+          - os: windows-latest
+            zip: RelayDesk-windows.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+      - name: 解开（和在访达里双击一样用 ditto；双击安装的那个文件要还能执行）
+        if: runner.os == 'macOS'
+        run: ditto -x -k ${{ matrix.zip }} unz && test -x "unz/RelayDesk/安装接力台（Mac）.command"
+      - name: 解开（和右键「全部解压缩」一样）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Expand-Archive -Path ${{ matrix.zip }} -DestinationPath unz
+      - run: node repo/scripts/pack-smoke.js unz/RelayDesk
+
+  release:
+    needs: smoke
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" RelayDesk-mac.zip RelayDesk-windows.zip --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" RelayDesk-mac.zip RelayDesk-windows.zip --title "接力台 $TAG" --generate-notes --repo "$GITHUB_REPOSITORY"
+          fi

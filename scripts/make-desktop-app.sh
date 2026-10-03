@@ -82,8 +82,12 @@ if [[ ! -d "$DIR/node_modules" ]]; then
   print "安装依赖……"
   (cd "$DIR" && npm install --no-audit --no-fund >/dev/null) || { print -u2 "安装依赖失败：在 $DIR 里执行 npm install 看看原因。"; exit 1; }
 fi
-print "编译……"
-(cd "$DIR" && npm run build >/dev/null) || { print -u2 "编译失败：在 $DIR 里执行 npm run build 看看原因。"; exit 1; }
+# 下载包里是编译好的（没有 src）：不编译。
+if [[ -d "$DIR/src" ]]; then
+  print "编译……"
+  (cd "$DIR" && npm run build >/dev/null) || { print -u2 "编译失败：在 $DIR 里执行 npm run build 看看原因。"; exit 1; }
+fi
+[[ -f "$DIR/dist/src/cli.js" ]] || { print -u2 "找不到 $DIR/dist/src/cli.js：重新下载一份接力台。"; exit 1; }
 
 # 0. 旧的先退出；放在别处的旧副本（桌面上的、另一个「应用程序」文件夹里的）挪进废纸篓，并注销登记。
 quit_app

@@ -80,7 +80,7 @@ async function main() {
   fs.rmSync(STOPPED, { force: true });
   let port = await runningPort();
   if (!port) {
-    if (!fs.existsSync(CLI)) fail('接力台还没编译。双击 agent-relay 文件夹里的 install-windows.cmd 再装一次。');
+    if (!fs.existsSync(CLI)) fail('接力台还没编译。双击接力台文件夹里的 install-windows.cmd 再装一次。');
     try {
       if (fs.statSync(LOG).size > 2_000_000) fs.renameSync(LOG, `${LOG}.old`);
     } catch {
