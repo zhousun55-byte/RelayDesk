@@ -4,7 +4,7 @@
 
 ## 开发环境
 
-需要 Node.js 20 或更新的版本，和 git。
+需要 Node.js（推荐 22 或更新的 LTS 版，最低 20）和 git。
 
 ```bash
 npm install

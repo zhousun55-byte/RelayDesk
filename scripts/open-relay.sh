@@ -80,9 +80,11 @@ if ! command -v node >/dev/null 2>&1; then
     [[ -x "$p/node" ]] && export PATH="$p:$PATH" && break
   done
 fi
-command -v node >/dev/null 2>&1 || fail "找不到 Node.js（需要 20 或更新的版本）。先到 https://nodejs.org 安装，再打开「接力台」。"
+command -v node >/dev/null 2>&1 || fail "找不到 Node.js（需要 20 或更新的版本）。先到 https://nodejs.org 安装，再打开「接力台」。
+Node.js not found (20 or newer is needed). Install it from https://nodejs.org, then open RelayDesk again."
 
-cd "$DIR" 2>/dev/null || fail "找不到接力台的程序文件夹：$DIR"
+cd "$DIR" 2>/dev/null || fail "找不到接力台的程序文件夹：$DIR
+RelayDesk's folder is missing: $DIR"
 mkdir -p "$RELAY_DIR"
 # 日志太大就换一个新文件，旧的留一份。
 if [[ -f "$LOG" && $(stat -f %z "$LOG") -gt 2000000 ]]; then
@@ -90,14 +92,16 @@ if [[ -f "$LOG" && $(stat -f %z "$LOG") -gt 2000000 ]]; then
 fi
 
 if [[ ! -d node_modules ]]; then
-  notify "第一次运行：正在安装依赖，要一两分钟……"
-  npm install --no-audit --no-fund >>"$LOG" 2>&1 || fail "安装依赖失败。详情见 $LOG"
+  notify "第一次运行：正在安装依赖，要一两分钟…… / First run: installing dependencies..."
+  npm install --no-audit --no-fund >>"$LOG" 2>&1 || fail "安装依赖失败。详情见 $LOG
+Installing dependencies failed. See $LOG"
 fi
 
 # 没编译过、或者源码比编译结果新：先编译。下载包里是编译好的，没有 src，不编译。
 if [[ -d src && ( ! -f dist/src/cli.js || -n "$(find src package.json -newer dist/src/cli.js -print -quit 2>/dev/null)" ) ]]; then
-  [[ -n "$BACKGROUND" ]] || notify "正在准备接力台……"
-  npm run build >>"$LOG" 2>&1 || fail "编译失败。在接力台的文件夹里执行 npm run build 看看原因。"
+  [[ -n "$BACKGROUND" ]] || notify "正在准备接力台…… / Getting RelayDesk ready..."
+  npm run build >>"$LOG" 2>&1 || fail "编译失败。在接力台的文件夹里执行 npm run build 看看原因。
+The build failed. Run npm run build in the RelayDesk folder to see why."
 fi
 
 # 在家目录启动：接力台会打开上次用过的项目。
@@ -112,7 +116,8 @@ const fs = require("node:fs");
 const [cli, log, port] = process.argv.slice(1);
 const out = fs.openSync(log, "a");
 spawn(process.execPath, [cli, "ui", "--no-open", "--port", port], { detached: true, stdio: ["ignore", out, out] }).unref();
-' "$DIR/dist/src/cli.js" "$LOG" "$PORT" || fail "启动接力台失败。详情见 $LOG"
+' "$DIR/dist/src/cli.js" "$LOG" "$PORT" || fail "启动接力台失败。详情见 $LOG
+RelayDesk failed to start. See $LOG"
 
 for i in {1..60}; do
   sleep 0.5
@@ -122,4 +127,5 @@ for i in {1..60}; do
   fi
 done
 fail "接力台没能启动。最后几行记录：
+RelayDesk did not start. The last lines of its log:
 $(tail -n 8 "$LOG")"

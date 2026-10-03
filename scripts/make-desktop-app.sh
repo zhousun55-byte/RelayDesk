@@ -42,7 +42,7 @@ quit_app() {
     pgrep -f '/接力台\.app/Contents/MacOS/applet' >/dev/null 2>&1 || return 0
     sleep 0.5
   done
-  print -u2 "「接力台」小程序 20 秒内没有退出，先接着往下做。"
+  print -u2 "「接力台」小程序 20 秒内没有退出，先接着往下做。\nThe RelayDesk app did not quit within 20 seconds; carrying on."
 }
 
 if [[ "${1:-}" == "--remove" ]]; then
@@ -52,10 +52,10 @@ if [[ "${1:-}" == "--remove" ]]; then
   for app in "$HOME/Applications/接力台.app" "/Applications/接力台.app" "$OLD_APP"; do
     if ours "$app"; then
       trash "$app"
-      print "挪进废纸篓了：$app"
+      print "挪进废纸篓了：$app\nMoved to the Trash: $app"
     fi
   done
-  print "已经不再登录时启动。以后要用，重新执行：zsh $DIR/scripts/make-desktop-app.sh"
+  print "已经不再登录时启动。以后要用，重新执行：zsh $DIR/scripts/make-desktop-app.sh\nRelayDesk no longer starts at login. To use it again, run: zsh $DIR/scripts/make-desktop-app.sh"
   exit 0
 fi
 
@@ -72,22 +72,22 @@ APP="$DEST/接力台.app"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-[[ -f "$LAUNCHER" ]] || { print -u2 "找不到 $LAUNCHER"; exit 1; }
+[[ -f "$LAUNCHER" ]] || { print -u2 "找不到 $LAUNCHER\nNot found: $LAUNCHER"; exit 1; }
 chmod +x "$LAUNCHER"
 mkdir -p "$DEST"
 
 # 先装依赖、编译好（第一次要一两分钟），小程序一启动接力台马上就能用。
-command -v node >/dev/null 2>&1 || { print -u2 "找不到 Node.js（需要 20 或更新的版本）。先到 https://nodejs.org 安装，再执行一次这个脚本。"; exit 1; }
+command -v node >/dev/null 2>&1 || { print -u2 "找不到 Node.js（需要 20 或更新的版本）。先到 https://nodejs.org 安装，再执行一次这个脚本。\nNode.js not found (20 or newer is needed). Install it from https://nodejs.org, then run this again."; exit 1; }
 if [[ ! -d "$DIR/node_modules" ]]; then
-  print "安装依赖……"
-  (cd "$DIR" && npm install --no-audit --no-fund >/dev/null) || { print -u2 "安装依赖失败：在 $DIR 里执行 npm install 看看原因。"; exit 1; }
+  print "安装依赖……\nInstalling dependencies..."
+  (cd "$DIR" && npm install --no-audit --no-fund >/dev/null) || { print -u2 "安装依赖失败：在 $DIR 里执行 npm install 看看原因。\nInstalling dependencies failed. Run npm install in $DIR to see why."; exit 1; }
 fi
 # 下载包里是编译好的（没有 src）：不编译。
 if [[ -d "$DIR/src" ]]; then
-  print "编译……"
-  (cd "$DIR" && npm run build >/dev/null) || { print -u2 "编译失败：在 $DIR 里执行 npm run build 看看原因。"; exit 1; }
+  print "编译……\nBuilding..."
+  (cd "$DIR" && npm run build >/dev/null) || { print -u2 "编译失败：在 $DIR 里执行 npm run build 看看原因。\nThe build failed. Run npm run build in $DIR to see why."; exit 1; }
 fi
-[[ -f "$DIR/dist/src/cli.js" ]] || { print -u2 "找不到 $DIR/dist/src/cli.js：重新下载一份接力台。"; exit 1; }
+[[ -f "$DIR/dist/src/cli.js" ]] || { print -u2 "找不到 $DIR/dist/src/cli.js：重新下载一份接力台。\n$DIR/dist/src/cli.js not found. Download RelayDesk again."; exit 1; }
 
 # 0. 旧的先退出；放在别处的旧副本（桌面上的、另一个「应用程序」文件夹里的）挪进废纸篓，并注销登记。
 quit_app
@@ -96,7 +96,7 @@ for other in "$OLD_APP" "$HOME/Applications/接力台.app" "/Applications/接力
   if [[ "$other" != "$APP" ]] && ours "$other"; then
     "$LSR" -u "$other" >/dev/null 2>&1 || true
     trash "$other"
-    print "以前放在 ${other:h} 的「接力台」挪进废纸篓了。"
+    print "以前放在 ${other:h} 的「接力台」挪进废纸篓了。\nMoved the old RelayDesk in ${other:h} to the Trash."
   fi
 done
 
@@ -201,7 +201,7 @@ if [[ -f "$DIR/scripts/icon.png" ]]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$PLIST"
   fi
 else
-  print "（没能生成图标，先用系统默认的。）"
+  print "（没能生成图标，先用系统默认的。）\n(Could not make the icon; using the default one.)"
 fi
 
 # 3. 每次装都换一个版本号：系统的图标缓存按「同一个 App、同一个版本」认，版本不变，换了图标启动台还显示旧的。
@@ -271,11 +271,11 @@ for i in {1..60}; do
   done
   sleep 1
 done
-print "已生成：$APP"
+print "已生成：$APP\nCreated: $APP"
 if [[ -n "$url" ]]; then
-  print "接力台已经在后台运行，以后登录电脑时也会自己启动；桌面和程序坞上都不会有它的图标。"
+  print "接力台已经在后台运行，以后登录电脑时也会自己启动；桌面和程序坞上都不会有它的图标。\nRelayDesk is running in the background and will start at login. No Dock or desktop icon."
   [[ -n "${RELAY_NO_BROWSER:-}" ]] || open "$url"
-  print "网页：$url （以后在启动台或聚焦搜索里打开「接力台」就行）"
+  print "网页：$url （以后在启动台或聚焦搜索里打开「接力台」就行）\nWeb page: $url (open RelayDesk from Launchpad or Spotlight from now on)"
 else
-  print -u2 "接力台一分钟内没有起来，记录在 ${RELAY_HOME:-$HOME/.relay}/ui.log。在启动台里打开「接力台」再试一次。"
+  print -u2 "接力台一分钟内没有起来，记录在 ${RELAY_HOME:-$HOME/.relay}/ui.log。在启动台里打开「接力台」再试一次。\nRelayDesk did not start within a minute. See ${RELAY_HOME:-$HOME/.relay}/ui.log, then open RelayDesk from Launchpad to try again."
 fi

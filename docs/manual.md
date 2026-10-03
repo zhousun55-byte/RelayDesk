@@ -4,7 +4,7 @@ Details that don't fit in the [README](../README.en.md). The full manual is in C
 
 ## Get started
 
-Requires [Node.js](https://nodejs.org) 20 or newer (20, 22 and 24 are tested) and git.
+Requires [Node.js](https://nodejs.org) and git. 22 or a newer LTS is recommended; 20 is the minimum (20, 22 and 24 are tested, but 20 reached end of life in April 2026).
 
 macOS, one command:
 

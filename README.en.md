@@ -53,7 +53,7 @@ When you're not sure, ask several AIs at once. In *Compare* they answer at the s
 
 ## Install
 
-1. Install [Node.js](https://nodejs.org) 20 or newer and git. On Windows the installer gets them with winget if they are missing.
+1. Install [Node.js](https://nodejs.org) (22 or a newer LTS is recommended; 20 is the minimum) and git. On Windows the installer gets them with winget if they are missing.
 2. Download the package for your system above, unzip it, and put the folder somewhere it will stay.
 3. On a Mac, double-click `安装接力台（Mac）.command` ("install RelayDesk"). On Windows, double-click `install-windows.cmd`.
 

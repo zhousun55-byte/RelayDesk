@@ -53,7 +53,7 @@
 
 ## 装上
 
-1. 先装好 [Node.js](https://nodejs.org) 20 或更新的版本和 git。Windows 上没有的话，安装程序会用 winget 装。
+1. 先装好 [Node.js](https://nodejs.org)（推荐 22 或更新的 LTS 版，最低 20）和 git。Windows 上没有的话，安装程序会用 winget 装。
 2. 下载上面对应系统的包，解压，把文件夹放在以后不挪动的地方。
 3. Mac 双击「安装接力台（Mac）.command」，Windows 双击 `install-windows.cmd`。
 

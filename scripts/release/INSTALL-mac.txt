@@ -5,7 +5,7 @@
 几个 AI（Claude Code、Codex、Cursor……）在同一个项目文件夹里轮流接着做：额度用完换下一位，弱模型做的由强模型复核，改坏了能退回。界面有中文和英文，左下角「EN / 中」切换。
 
 一、要先装好的
-1. Node.js 20 或更新的版本：https://nodejs.org （下载 LTS 版，一路下一步）
+1. Node.js（推荐 22 或更新的 LTS 版，最低 20）：https://nodejs.org （下载 LTS 版，一路下一步）
 2. git（第一次在终端输入 git 会提示安装，点「安装」就行）
 3. 至少一个已经登录的 AI 编程工具，比如 Claude Code、Codex、Cursor（命令行版 cursor-agent）。接力台会自己找出这台电脑上装了哪些。
 
@@ -34,7 +34,7 @@ Docs, updates and issues: https://github.com/zhousun55-byte/RelayDesk
 
 Several AI coding tools take turns in the same project folder: when one runs out of quota the next picks up, a stronger model reviews the weaker models' legs, and any leg can be rolled back. Switch the web app between English and Chinese with "EN / 中" at the bottom left.
 
-You need: Node.js 20 or newer (https://nodejs.org), git, and at least one AI coding tool you are signed in to (Claude Code, Codex, Cursor's cursor-agent, ...).
+You need: Node.js 22 or a newer LTS (20 is the minimum, https://nodejs.org), git, and at least one AI coding tool you are signed in to (Claude Code, Codex, Cursor's cursor-agent, ...).
 
 1. Move the RelayDesk folder somewhere it will stay, for example Documents.
 2. Double-click "安装接力台（Mac）.command" (install RelayDesk). If macOS says it can't verify the developer, click Done, then "Open Anyway" at the bottom of System Settings → Privacy & Security, and double-click again.

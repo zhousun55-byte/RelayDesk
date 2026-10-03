@@ -62,7 +62,7 @@ async function keep() {
     const now = Date.now();
     exits.push(now);
     while (now - exits[0] > 60_000) exits.shift();
-    if (exits.length >= 5) return log('一分钟里退出了 5 次，不再重新拉起。原因看上面几行。');
+    if (exits.length >= 5) return log('一分钟里退出了 5 次，不再重新拉起。原因看上面几行。\nExited 5 times in a minute; not restarting again. The reason is in the lines above.');
     await sleep(2000);
     // 别的接力台占着端口（比如在终端里用 npm start 开的）：不跟它抢。
     if (await runningPort()) return;
@@ -80,7 +80,7 @@ async function main() {
   fs.rmSync(STOPPED, { force: true });
   let port = await runningPort();
   if (!port) {
-    if (!fs.existsSync(CLI)) fail('接力台还没编译。双击接力台文件夹里的 install-windows.cmd 再装一次。');
+    if (!fs.existsSync(CLI)) fail('接力台还没编译。双击接力台文件夹里的 install-windows.cmd 再装一次。\nRelayDesk is not built. Double-click install-windows.cmd in the RelayDesk folder to install it again.');
     try {
       if (fs.statSync(LOG).size > 2_000_000) fs.renameSync(LOG, `${LOG}.old`);
     } catch {
@@ -91,7 +91,7 @@ async function main() {
       await sleep(500);
       port = await runningPort();
     }
-    if (!port) fail('接力台没能启动。');
+    if (!port) fail('接力台没能启动。\nRelayDesk did not start.');
   }
   if (mode !== '--background') spawn('explorer.exe', [`http://127.0.0.1:${port}/`], { detached: true, stdio: 'ignore' }).unref();
 }
