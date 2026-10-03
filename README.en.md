@@ -1,8 +1,29 @@
+<div align="center">
+
 # RelayDesk
 
-RelayDesk is the English name of 接力台 ("relay desk").
+**Quota runs out. The work doesn't.**
 
-**Run out of quota? Anyone can pick up where the last one stopped.**
+Line up Claude Code, Codex, Cursor, DeepSeek and the rest as one team, and let them finish the job in the same folder.<br>
+Every leg is on record, and once a stronger model has quota again, it checks the lighter models' work first.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-black)](https://nodejs.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-black)](#download)
+[![Tests](https://img.shields.io/badge/tests-244%20passing-black)](https://github.com/zhousun55-byte/RelayDesk/actions)
+
+[Download](#download) · [Get started](#get-started) · [中文](README.md)
+
+</div>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-en-dark.png">
+    <img alt="RelayDesk: quota runs out, the work doesn't. A line of dots runs from an open ring to a solid dot with a check mark, in three legs: 01 Claude Opus 5.5, 02 DeepSeek Flash, 03 GPT-6.1 Sol" src="docs/images/hero-en-light.png" width="900">
+  </picture>
+</p>
+
+RelayDesk is the English name of 接力台 ("relay desk").
 
 You probably have several AIs: Claude, Codex (GPT), Cursor, ZCode, MiMo, DeepSeek… each with its own quota. Claude runs out halfway through, so Codex continues in the same folder; Codex runs out too and only DeepSeek is left, which is cheap but noticeably weaker, and you worry it will break things.
 
@@ -41,7 +62,7 @@ Requires [Node.js](https://nodejs.org) 20 or newer (20, 22 and 24 are tested) an
 macOS, one command:
 
 ```bash
-git clone <repo url> agent-relay && cd agent-relay && zsh scripts/make-desktop-app.sh
+git clone https://github.com/zhousun55-byte/RelayDesk.git && cd RelayDesk && zsh scripts/make-desktop-app.sh
 ```
 
 From a downloaded package: unzip it and double-click `安装接力台（Mac）.command` in Finder ("install RelayDesk"). If macOS says it can't verify the developer, click "Open Anyway" at the bottom of System Settings → Privacy & Security.
@@ -53,7 +74,7 @@ Windows 10 / 11: put the folder somewhere it will stay and double-click `install
 Linux (or if you don't want it running in the background):
 
 ```bash
-git clone <repo url> agent-relay && cd agent-relay && npm install && npm run build && npm start
+git clone https://github.com/zhousun55-byte/RelayDesk.git && cd RelayDesk && npm install && npm run build && npm start
 ```
 
 `npm start` opens the web page; press Ctrl-C to stop. Run `npm link` once to get the `relay` command everywhere.

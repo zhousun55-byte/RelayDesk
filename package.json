@@ -5,6 +5,14 @@
   "description": "接力台（RelayDesk）：额度用完换谁接着做都不怕。多个 AI 在同一个项目文件夹里轮流接着做，弱模型做的由强模型复核，改坏了能退回；还能拉进群里讨论、投票。",
   "license": "MIT",
   "author": "ZHOUSUN",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhousun55-byte/RelayDesk.git"
+  },
+  "homepage": "https://github.com/zhousun55-byte/RelayDesk#readme",
+  "bugs": {
+    "url": "https://github.com/zhousun55-byte/RelayDesk/issues"
+  },
   "type": "commonjs",
   "bin": {
     "relay": "dist/src/cli.js"

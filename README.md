@@ -1,6 +1,27 @@
-# 接力台（RelayDesk）
+<div align="center">
 
-**额度用完，换谁接着做都不怕。**
+# 接力台 RelayDesk
+
+**额度会用完，活不会断。**
+
+把手上的 Claude Code、Codex、Cursor、DeepSeek……排成一支队伍，在同一个文件夹里把活接着干完。<br>
+谁做的都有记录，换一位核过再往下走。
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-black)](https://nodejs.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-black)](#下载)
+[![Tests](https://img.shields.io/badge/tests-244%20passing-black)](https://github.com/zhousun55-byte/RelayDesk/actions)
+
+[下载](#下载) · [三分钟上手](#三分钟上手) · [它是怎么做到的](#它是怎么做到的) · [常见问题](#常见问题) · [English](README.en.md)
+
+</div>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
+    <img alt="接力台：额度会用完，活不会断。一道点从空心圈走到打勾的实心点，三段分别是 01 Claude Opus 5.5、02 DeepSeek Flash、03 GPT-6.1 Sol" src="docs/images/hero-light.png" width="900">
+  </picture>
+</p>
 
 你手上可能有好几个 AI：Claude、Codex（GPT）、Cursor、ZCode、MiMo、DeepSeek……每个都有额度。
 用 Claude 做到一半额度没了，换 Codex 在同一个文件夹里接着做；Codex 也没了，只剩 DeepSeek——便宜，但明显弱一些，怕它把代码改坏。
@@ -38,7 +59,7 @@
 macOS 上从源码装，一条命令：
 
 ```bash
-git clone <这个仓库的地址> agent-relay && cd agent-relay && zsh scripts/make-desktop-app.sh
+git clone https://github.com/zhousun55-byte/RelayDesk.git && cd RelayDesk && zsh scripts/make-desktop-app.sh
 ```
 
 下载的包：解压后在访达里双击「安装接力台（Mac）.command」，效果一样，只是不用装依赖和编译（系统说无法验证开发者时，到「系统设置 → 隐私与安全性」最下面点「仍要打开」）。在终端里输入命令时，`scripts/make-desktop-app.sh` 前面要带上文件夹的完整位置（把文件拖进终端窗口会自动填好），只打 `/scripts/…` 会报找不到文件。
@@ -50,7 +71,7 @@ Windows 10 / 11：把文件夹放在一个以后不挪动的地方，双击里�
 Linux（或者不想让它在后台常驻）：
 
 ```bash
-git clone <这个仓库的地址> agent-relay && cd agent-relay && npm install && npm run build && npm start
+git clone https://github.com/zhousun55-byte/RelayDesk.git && cd RelayDesk && npm install && npm run build && npm start
 ```
 
 `npm start` 会打开网页，按 Ctrl-C 停下（Windows 上也能这样用：在 PowerShell 里一条一条执行）。想在终端里到处用 `relay` 命令，再执行一次 `npm link`。

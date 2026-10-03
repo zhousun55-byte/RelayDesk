@@ -37,7 +37,7 @@ export function doctor(dir: string): DoctorLine[] {
 
   const w = which('relay');
   if (w) add('ok', `终端里可以直接用 relay 命令（${w}）`);
-  else add('warn', `终端里还不能直接打 relay。到 agent-relay 文件夹执行 npm link；或用 node ${path.join(__dirname, '..', 'cli.js')}`);
+  else add('warn', `终端里还不能直接打 relay。到接力台的文件夹执行 npm link；或用 node ${path.join(__dirname, '..', 'cli.js')}`);
 
   try {
     const reg = loadRegistry();
