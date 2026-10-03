@@ -512,6 +512,28 @@ export function createServer(opts: ServerOptions): http.Server {
       return { opened: true, copied, hint: HINT };
     },
     '/api/copy-hint': () => ({ copied: copyToClipboard(HINT), hint: HINT }),
+    // 工具里的一段对话带到接力台：抽出原来的任务、最后的要求、做到哪了，网页填进新任务的输入框（上下文跟人走，不跟窗口走）
+    '/api/session/carry': (q, b) => {
+      const root = dirOf(q, b);
+      requireProject(root);
+      const tool = sessionToolOf(str(b.tool) ?? '');
+      if (!tool) throw new RelayError('这个工具的对话读不了', 'no-session');
+      const { messages } = readSession(root, tool, str(b.id) ?? '');
+      const firstAsk = messages.find((m) => m.role === 'user');
+      const lastAsk = [...messages].reverse().find((m) => m.role === 'user');
+      const lastSay = [...messages].reverse().find((m) => m.role === 'assistant');
+      if (!firstAsk && !lastSay) throw new RelayError('这段对话里没有能带过来的内容。', 'no-carry');
+      const clip = (s: string, n: number) => s.trim().slice(0, n);
+      const en = b.lang === 'en';
+      const name = toolName(tool) ?? tool;
+      const parts = [
+        firstAsk ? `${en ? 'Original task: ' : '原来的任务：'}${clip(firstAsk.text, 600)}` : '',
+        lastAsk && lastAsk !== firstAsk ? `${en ? 'Latest request: ' : '最后的要求：'}${clip(lastAsk.text, 400)}` : '',
+        lastSay ? `${en ? 'Where it got to: ' : '做到这里：'}${clip(lastSay.text, 900)}` : '',
+      ].filter(Boolean);
+      const head = en ? `Carried over from a ${name} conversation` : `从 ${name} 的一段对话带过来`;
+      return { text: `${head}\n\n${parts.join('\n\n')}\n\n${en ? 'Carry on and finish it.' : '接着把它做完。'}`, tool };
+    },
     '/api/session/open': (q, b) => {
       const root = dirOf(q, b);
       requireProject(root);

@@ -1591,9 +1591,46 @@ function swapIn(dir) {
   }
 }
 
+/** 一段任务做完没有：正在做的这段看验收，换掉的看换那一刻记下的验收；还挂着待复核的算没做完。 */
+function threadDone(t) {
+  if (t.pending) return false;
+  if (t.current) return accepted();
+  return !!t.accept && t.accept.state === 'accepted';
+}
+
+/** 切页（接力 / 派活 / 群聊）时：打开这一页最近一个没做完的；都做完了，开空白新任务。 */
+function pickUnfinished() {
+  if (S.view === 'chat') {
+    // 群聊：正在用的这段还有人在说、在排队、在总结，就停在这；存档里有还没说完的，接最近那段；都静了，回到正在用的这段
+    const st = S.talk && S.talk.status;
+    if (st && (st.speaking.length || st.queue.length || st.summing)) return;
+    const busy = ((S.talk && S.talk.sessions) || []).filter((x) => x.busy);
+    if (busy.length) {
+      if (S.chat !== busy[0].id) {
+        S.chat = busy[0].id;
+        loadArchive(busy[0].id);
+      }
+    } else if (S.chat) {
+      S.chat = null;
+      S.archive = null;
+    }
+    return;
+  }
+  const open = pageThreads().filter((t) => !threadDone(t));
+  const last = open[open.length - 1];
+  if (last && !blank(last)) {
+    S.draft = false;
+    S.thread = last.current ? null : last.id;
+  } else {
+    S.draft = true;
+    S.thread = null;
+  }
+}
+
 function setView(v) {
   if (!showView(v)) return;
   closeDrawers();
+  pickUnfinished();
   renderAll();
   scrollBottom();
 }
@@ -4261,6 +4298,24 @@ function openSession(tool, id, title) {
   openTab({ type: 'session', tool, id, title });
 }
 
+/** 工具里的一段对话带到接力台：抽出任务和进展，填进一张新任务的输入框。 */
+async function carrySession(tool, id) {
+  const r = await act(null, () => api('/api/session/carry', { tool, id, lang: LANG.now }));
+  if (!r || !r.text) return;
+  showView(S.view === 'dispatch' ? 'dispatch' : 'relay');
+  // 同一页里点的：从对话页签回到「任务」页签，新任务那张纸才露出来
+  S.tab = 0;
+  S.draft = true;
+  S.thread = null;
+  closeDrawers();
+  renderAll();
+  if (C.ta) {
+    C.ta.value = r.text;
+    C.ta.dispatchEvent(new Event('input', { bubbles: true }));
+    C.ta.focus();
+  }
+}
+
 async function resumeSession(sess) {
   const r = await act(null, () => api('/api/session/open', { tool: sess.tool, id: sess.id }));
   if (!r) return;
@@ -4437,6 +4492,7 @@ function renderDoc(t) {
     const info = d && d.data ? d.data.info : null;
     head.append(
       h('div', { class: 'crumbs' }, tile({ label: SESSION_TOOL[t.tool] || t.tool, tool: SESSION_TOOL[t.tool] }, 's20'), h('b', null, (info && info.title) || t.title || T`对话`), h('span', null, ` · ${SESSION_TOOL[t.tool] || t.tool}`)),
+      h('button', { class: 'btn small', 'data-tip': T`把这段对话的任务和进展带过来，接着做`, onclick: () => carrySession(t.tool, t.id) }, icon('route'), T`带到新对话`),
       ...sessionItems({ tool: t.tool, id: t.id }).filter((it) => it.icon !== 'chat').map((it) => h('button', { class: 'btn small', 'data-tip': it.sub || null, onclick: it.run }, icon(it.icon), it.label)),
       iconBtn(T`刷新`, 'sync', () => (S.docs.delete(tabKey(t)), (docSig = ''), renderCenter()))
     );

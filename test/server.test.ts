@@ -215,6 +215,21 @@ test('对话：每一棒记下在工具里的对话，网页能读；这个项�
     assert.equal((await ui.call('/api/session/open', { dir: s.repo, tool: 'claude', id: sess.id })).status, 200);
     assert.equal((await ui.call('/api/session/open', { dir: s.repo, tool: 'dsh', id: 'abc-123456' })).status, 400);
     assert.equal((await ui.call(`/api/session${q(s)}&tool=claude&id=${encodeURIComponent('../../x')}`)).status, 400);
+
+    // 带到新对话：抽出原来的任务、最后的要求、做到哪了，写工具的名字
+    const rows = [
+      { type: 'user', cwd: real, entrypoint: 'claude-desktop', message: { role: 'user', content: '给 notes.py 加 edit 命令' } },
+      { type: 'assistant', cwd: real, message: { role: 'assistant', content: [{ type: 'text', text: '先看了 delete 的写法' }] } },
+      { type: 'user', cwd: real, message: { role: 'user', content: '测试也补上' } },
+      { type: 'assistant', cwd: real, message: { role: 'assistant', content: [{ type: 'text', text: 'edit 写好了，测试还差越界那条' }] } },
+    ];
+    fs.writeFileSync(path.join(dir, 'desk-000002.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const carry = await ui.call('/api/session/carry', { dir: s.repo, tool: 'claude', id: 'desk-000002' });
+    assert.equal(carry.status, 200, JSON.stringify(carry.json));
+    assert.equal(carry.json.text, '从 Claude Code 的一段对话带过来\n\n原来的任务：给 notes.py 加 edit 命令\n\n最后的要求：测试也补上\n\n做到这里：edit 写好了，测试还差越界那条\n\n接着把它做完。');
+    const en = await ui.call('/api/session/carry', { dir: s.repo, tool: 'claude', id: 'desk-000002', lang: 'en' });
+    assert.match(en.json.text, /^Carried over from a Claude Code conversation\n\nOriginal task: 给 notes.py 加 edit 命令/);
+    assert.equal((await ui.call('/api/session/carry', { dir: s.repo, tool: 'agy', id: 'desk-000002' })).json.code, 'no-session');
   } finally {
     ui.child.kill();
   }

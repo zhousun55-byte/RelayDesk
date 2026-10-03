@@ -317,6 +317,43 @@ result = { dispatch, relay: pageThreads().map((t) => t.id), page: pageOf({ mode:
   assert.deepEqual(JSON.parse(JSON.stringify(ctx.result)), { dispatch: ['t1'], relay: ['t0', 't2'], page: 'dispatch', split: '强模型 3.2 万，弱模型 15.9 万 token（1 棒没报用量）', small: '860' });
 });
 
+test('网页切页：接力、派活页打开最近一个没做完的任务（有待复核的算没做完），都做完了开空白新任务；群聊接还在说的那段，都静了回到正在用的那段', () => {
+  const ctx: Record<string, unknown> = {};
+  runWeb(
+    `${['threads', 'pageThreads', 'blank', 'accepted', 'threadDone', 'pickUnfinished'].map(pick).join('\n\n')}
+const loaded = [];
+const loadArchive = (id) => loaded.push(id);
+const S = { view: 'relay', draft: false, thread: null, st: { project: { acceptance: null, threads: [
+  { id: 't0', title: '旧的', stints: [1], accept: { state: 'accepted' } },
+  { id: 't1', title: '换掉时没做完', stints: [2] },
+  { id: 't2', title: '派活的', stints: [3], mode: 'dispatch' },
+  { id: 't3', title: '正在做', stints: [4], current: true, pending: 1 },
+] } } };
+const out = {};
+pickUnfinished(); out.current = [S.draft, S.thread];
+S.st.project.threads[3].pending = 0; S.st.project.acceptance = { state: 'accepted' };
+pickUnfinished(); out.older = [S.draft, S.thread];
+S.st.project.threads[1].accept = { state: 'accepted' };
+pickUnfinished(); out.allDone = [S.draft, S.thread];
+S.view = 'dispatch'; pickUnfinished(); out.dispatch = [S.draft, S.thread];
+S.view = 'chat'; S.chat = 'old'; S.talk = { status: { speaking: [], queue: [] }, sessions: [{ id: 'old' }, { id: 'live-1', busy: true }] };
+pickUnfinished(); out.busy = [S.chat, loaded.join()];
+S.talk.sessions[1].busy = false; pickUnfinished(); out.quiet = S.chat;
+S.chat = 'old'; S.talk.status.speaking = [{ agent: 'codex' }]; pickUnfinished(); out.speaking = S.chat;
+result = out;`,
+    ctx
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.result)), {
+    current: [false, null],
+    older: [false, 't1'],
+    allDone: [true, null],
+    dispatch: [false, 't2'],
+    busy: ['live-1', 'live-1'],
+    quiet: null,
+    speaking: 'old',
+  });
+});
+
 test('成员名单的额度：第二行写「5 小时 5% · 一周 72%」，悬停写几点恢复；没报过额度就什么都不写', () => {
   const code = ['pad', 'clock', 'aheadClock', 'LIMIT_WORD', 'limitsText', 'limitsTip'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
