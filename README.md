@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  让 Claude Code、Codex、Cursor、DeepSeek 在同一个文件夹里接力写代码。<br>
-  一个没额度了，下一个接上；弱一档的模型做完，强的那位核过再往下走。
+  让 Claude Code、Codex、Cursor、DeepSeek 在同一个文件夹里一起写代码。<br>
+  额度用完换下一位接着做，强模型把活拆给快模型，拿不准就开群聊投票。
 </p>
 
 <p align="center">
@@ -22,24 +22,34 @@
 
 <br>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ui-dark.png">
-  <img alt="接力台的网页：Claude Opus 5.5 额度用完，DeepSeek Flash 接着写，GPT-6.1 Sol 逐棒复核，最后验收通过（沙盒演示）" src="docs/images/ui-light.png">
-</picture>
-
-## 为什么做它
+## 接力
 
 写到一半，Claude 额度用完了。换 Codex 接着写，又用完了。只剩 DeepSeek，额度够，可不放心让它一个人改这么多代码。
 
-接力台把手上这几个 AI 排成一队，在同一个文件夹里轮流接着做。
+接力台让这几个 AI 在同一个文件夹里轮流接着做。每一棒开工先读接力本，收工写交接，换人不用重讲一遍；额度用完就换下一位，都没额度就等最早恢复的那位。弱一档的模型做完的棒标成「待复核」，强模型对照真实改动核过才算数。每一棒前后都存快照，能退回到任意一棒之前，退错了还能撤销。
 
-## 它做的事
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ui-dark.png">
+  <img alt="接力：Claude Opus 5.5 额度用完，DeepSeek Flash 接着写，GPT-6.1 Sol 逐棒复核，最后验收通过（沙盒演示）" src="docs/images/ui-light.png">
+</picture>
 
-1. 接力。每一棒开工先读接力本，收工写交接，换人不用重讲一遍。额度用完就换下一位，都没额度就等最早恢复的那位。
-2. 复核。弱一档的模型做完的棒标成「待复核」，强模型对照真实改动核过才算数。
-3. 退回。每一棒前后都存快照，能退回到任意一棒之前，退错了还能撤销。
-4. 派活。同一个工具里，强模型把任务拆成小步，同一家更快的模型一步一步做。
-5. 群聊。拿不准时问几个 AI，匿名投票，一个 AI 一票，不能投自己。
+## 派活
+
+一棒做不完的大任务，交给同一个工具里的一强一快。强模型读代码，把任务拆成小步；同一家更快的模型一棒做一步；强模型在旁边只看不改地复核。Claude Code 里是 Opus 拆、Haiku 做，GLM-5.3 派给 GLM-5.3 Flash、MiMo V2.6 Pro 派给 MiMo V2.6 Flash 也一样。快模型在哪一步卡住了，那一步交回强模型做。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dispatch-dark.png">
+  <img alt="派活：Claude Haiku 4.5 一棒做一步，Claude Opus 5.5 在旁边边做边复核（沙盒演示）" src="docs/images/dispatch-light.png">
+</picture>
+
+## 群聊
+
+拿不准的时候，把几个 AI 拉进一个群。对比时同时回答、互相看不到，各给各的判断。投票时方案去掉名字，一个 AI 一票，不能投自己，弱一档的模型也有一票。也可以请一位把几份回答写成结论，分歧照样留着。采纳的方案写进任务的约定，之后每一棒都照着做。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/chat-dark.png">
+  <img alt="群聊：三个 AI 对比回答同一个问题，下面一次投票，方案 B 三票、已采纳" src="docs/images/chat-light.png">
+</picture>
 
 ## 装上
 
@@ -59,8 +69,8 @@ npm install && npm run build && npm start
 ## 用起来
 
 1. 点左边「项目」旁的 +，选一个项目文件夹。
-2. 在中间写一句要做什么，回车。
-3. 点顶上的「全自动」，接力台一棒一棒派下去，做到验收通过。也可以在任何 AI 工具里打开这个文件夹，说一句「接着做」。
+2. 左上角挑一页（接力、派活或群聊），在中间写一句要做什么，回车。
+3. 接力页点顶上的「全自动」，接力台一棒一棒派下去，做到验收通过。也可以在任何 AI 工具里打开这个文件夹，说一句「接着做」。
 
 ## 能接进来的
 

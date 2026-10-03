@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  Let Claude Code, Codex, Cursor and DeepSeek take turns in the same folder.<br>
-  When one runs out of quota, the next picks up. Work done by a lighter model is checked by a stronger one.
+  Let Claude Code, Codex, Cursor and DeepSeek work on the same folder together.<br>
+  When one runs out of quota the next takes over, a strong model hands small steps to a faster one, and when you're unsure, they vote.
 </p>
 
 <p align="center">
@@ -22,24 +22,34 @@
 
 <br>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ui-en-dark.png">
-  <img alt="RelayDesk: Claude Opus 5.5 runs out of quota, DeepSeek Flash continues, GPT-6.1 Sol reviews each leg, and the task is accepted (sandbox demo; the AIs wrote their notes in Chinese)" src="docs/images/ui-en-light.png">
-</picture>
-
-## Why
+## Relay
 
 Claude runs out of quota halfway through. Codex picks it up and runs out too. DeepSeek still has plenty, but you don't trust it alone with that much code.
 
-RelayDesk lines up the AIs you already have and lets them take turns in the same folder.
+RelayDesk lets these AIs take turns in the same folder. Every leg starts by reading the relay book and ends with a handoff, so nobody has to re-explain. When one runs out of quota the next takes over; when all are out, it waits for the first to come back. Legs done by lighter models are marked *needs review* until a stronger model checks the real changes. There is a snapshot before and after every leg, so you can roll back to before any leg, and undo the rollback.
 
-## What it does
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ui-en-dark.png">
+  <img alt="Relay: Claude Opus 5.5 runs out of quota, DeepSeek Flash continues, GPT-6.1 Sol reviews each leg, and the task is accepted (sandbox demo; the AIs wrote their notes in Chinese)" src="docs/images/ui-en-light.png">
+</picture>
 
-1. Relay. Every leg starts by reading the relay book and ends with a handoff, so nobody has to re-explain. When one AI runs out of quota the next takes over; when all are out, it waits for the first to come back.
-2. Review. Legs done by lighter models are marked *needs review* until a stronger model checks the real changes.
-3. Roll back. There is a snapshot before and after every leg. Roll back to before any leg, and undo the rollback.
-4. Dispatch. Inside one tool, a strong model splits the task into small steps and a faster model from the same family does them one by one.
-5. Group chat. Ask several AIs at once. Votes are anonymous: one AI, one vote, no voting for yourself.
+## Dispatch
+
+For a job too big for one leg, pair a strong model with a faster one from the same tool. The strong model reads the code and splits the task into small steps, the faster model does one step per leg, and the strong model reviews alongside without touching files. In Claude Code that is Opus splitting and Haiku doing; GLM-5.3 handing to GLM-5.3 Flash or MiMo V2.6 Pro handing to MiMo V2.6 Flash works the same way. If the faster model gets stuck on a step, that step goes back to the strong model.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dispatch-en-dark.png">
+  <img alt="Dispatch: Claude Haiku 4.5 does one step per leg while Claude Opus 5.5 reviews alongside (sandbox demo)" src="docs/images/dispatch-en-light.png">
+</picture>
+
+## Group chat
+
+When you're not sure, ask several AIs at once. In *Compare* they answer at the same time without seeing each other. In *Vote* the proposals are anonymous, each AI gets one vote and can't vote for itself, so a lighter model's vote counts too. One of them can also merge the answers into a conclusion that keeps the disagreements. The adopted plan goes into the task's rules, and every later leg follows it.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/chat-en-dark.png">
+  <img alt="Group chat: three AIs compare answers to the same question, then vote; option B gets three votes and is adopted (the conversation is in Chinese)" src="docs/images/chat-en-light.png">
+</picture>
 
 ## Install
 
@@ -59,8 +69,8 @@ npm install && npm run build && npm start
 ## Use it
 
 1. Click **+** next to *Projects* and choose a project folder.
-2. Write what should be done and press Enter.
-3. Click **Auto**. RelayDesk hands out legs until the work is accepted. Or open the folder in any AI tool and say "continue".
+2. Pick a page at the top left (Relay, Dispatch or Chat), write what should be done and press Enter.
+3. On the Relay page, click **Auto**. RelayDesk hands out legs until the work is accepted. Or open the folder in any AI tool and say "continue".
 
 The web app switches between English and Chinese with **EN / 中** at the bottom left. With English on, the AIs write their handoffs and reviews in English.
 
