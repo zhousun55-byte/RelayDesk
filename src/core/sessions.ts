@@ -1,17 +1,21 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { RelayError } from './errors';
 
 /**
  * 各家工具自己记的对话（只读）：
- * - 接力台派出去的每一棒记下它在工具里的对话编号（账本里 stint.session），网页能看整段对话、回到原工具接着说；
+ * - 接力台派出去的每一棒、群聊里每一位的回答记下它在工具里的对话编号，网页能看整段对话、回到原工具接着说；
  * - 接进接力台的项目文件夹里，你自己在工具里开的对话也列出来（只列这个文件夹的，别的文件夹一律不读）。
- * 只在网页要看的时候读，不另存、不外发。现在读得懂的是 Claude Code（~/.claude/projects）和 Codex（~/.codex/sessions）；
- * 别家的对话存法不公开（Cursor 是数据库），接力台派出去的那几棒看接力台自己的日志。
+ * 只在网页要看的时候读，不另存、不外发。读得懂的四家（存法照 mindbus、magpie 读各家记录的做法核实过）：
+ * Claude Code（~/.claude/projects）、Codex（~/.codex/sessions）、DeepSeek Harness（~/.dsh/sessions，常压成 zstd）、
+ * Cursor 命令行（~/.cursor/chats 记每段对话在哪个文件夹，正文在 ~/.cursor/projects/…/agent-transcripts）。
+ * 工具自己塞进去的话（系统提醒、技能清单、环境说明、被打断的标记）不算人说的；子代理、压缩后留下的重复记录不列。
  */
 
-export type SessionTool = 'claude' | 'codex';
+export type SessionTool = 'claude' | 'codex' | 'dsh' | 'cursor-agent';
 
 export interface SessionInfo {
   tool: SessionTool;
@@ -51,13 +55,18 @@ export function resumeHow(harness: string, id: string, root: string): { url: str
 /** 这个工具算哪一家的记录。 */
 export function sessionToolOf(harness: string | undefined): SessionTool | null {
   if (harness === 'claude' || harness === 'claude-official') return 'claude';
-  if (harness === 'codex') return 'codex';
+  if (harness === 'codex' || harness === 'dsh' || harness === 'cursor-agent') return harness;
   return null;
 }
 
 const home = () => os.homedir();
-const claudeRoot = () => path.join(home(), '.claude', 'projects');
-const codexRoot = () => path.join(home(), '.codex', 'sessions');
+const envDir = (k: string) => process.env[k]?.trim() || '';
+const claudeRoot = () => path.join(envDir('CLAUDE_CONFIG_DIR') || path.join(home(), '.claude'), 'projects');
+const codexHome = () => envDir('CODEX_HOME') || path.join(home(), '.codex');
+const codexRoot = () => path.join(codexHome(), 'sessions');
+const dshRoot = () => path.join(envDir('DSH_HOME') || path.join(home(), '.dsh'), 'sessions');
+const cursorConfig = () => envDir('CURSOR_CONFIG_DIR') || path.join(home(), '.cursor');
+const cursorData = () => envDir('CURSOR_DATA_DIR') || path.join(home(), '.cursor');
 
 /** Claude Code 放一个文件夹的记录的地方：路径里不是字母数字的都换成 -（/Users/me/K线阅读 → -Users-me-K---）。 */
 export function claudeDirOf(root: string): string {
@@ -111,8 +120,32 @@ function lines(text: string): J[] {
 const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n)}…` : t);
 const oneLine = (t: string) => t.replace(/\s+/g, ' ').trim();
 
-/** 工具自己塞进对话里的话（命令、提醒、环境说明），不算人说的。 */
-const NOT_SAID = /^\s*<(command-|local-command|system-reminder|environment_context|user_instructions|permissions|user_shell_command)|^\s*# AGENTS\.md|^\s*Caveat:/;
+/**
+ * 工具自己塞进对话里的话（命令、提醒、环境说明、后台任务通知、技能脚手架、被打断的标记），不算人说的。
+ * 句式照 mindbus 的 isInjectedUserText，加上 Codex、Cursor 自己的几种。
+ */
+const NOT_SAID =
+  /^\s*<(command-|local-command|system-reminder|environment_context|user_instructions|permissions|user_shell_command|task-notification|turn_aborted|app-context|user_info|rules)|^\s*# AGENTS\.md|^\s*Caveat:|^\s*Base directory for this skill:|^\s*\[Request interrupted by user/;
+
+/** 接力台自己派的活、群聊、投票的开头：列「你自己在工具里开的对话」时不算。 */
+const RELAY_PROMPT = /^\s*(?:你是「接力台」派来|你在参加「接力台」里|还是「接力台」里的这场)/;
+
+/**
+ * 人说的那句话本身：去掉夹在里面的系统提醒（<system-reminder>…</system-reminder>，没有收尾的照原样留），
+ * Cursor 包着的 <user_query> 只取里面，前面的 <timestamp> 不要。剩下空的、整句是工具塞的，返回空。
+ */
+export function saidText(raw: string): string {
+  let t = raw;
+  for (let i = t.indexOf('<system-reminder>'); i >= 0; i = t.indexOf('<system-reminder>', i)) {
+    const end = t.indexOf('</system-reminder>', i);
+    if (end < 0) break;
+    t = t.slice(0, i) + t.slice(end + '</system-reminder>'.length);
+  }
+  const q = t.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/);
+  if (q) t = q[1];
+  t = t.replace(/^\s*<timestamp>[\s\S]*?<\/timestamp>\s*/, '').trim();
+  return t && !NOT_SAID.test(t) ? t : '';
+}
 
 function toolLine(name: string, input: unknown): string {
   const i = o(input);
@@ -135,12 +168,14 @@ function claudeMessages(entries: J[]): SessionMessage[] {
     if (e.type === 'user') {
       const c = msg.content;
       if (typeof c === 'string') {
-        if (c.trim() && !NOT_SAID.test(c)) out.push({ role: 'user', text: c, at });
+        const t = saidText(c);
+        if (t) out.push({ role: 'user', text: t, at });
         continue;
       }
       for (const b of Array.isArray(c) ? c : []) {
         const blk = o(b);
-        if (blk.type === 'text' && str(blk.text).trim() && !NOT_SAID.test(str(blk.text))) out.push({ role: 'user', text: str(blk.text), at });
+        const t = blk.type === 'text' ? saidText(str(blk.text)) : '';
+        if (t) out.push({ role: 'user', text: t, at });
       }
     } else if (e.type === 'assistant') {
       for (const b of Array.isArray(msg.content) ? msg.content : []) {
@@ -211,7 +246,7 @@ function codexMessages(entries: J[]): SessionMessage[] {
       const joined = (Array.isArray(p.content) ? p.content : []).map((c) => str(o(c).text)).join('\n');
       // Codex 桌面版把人写的行首「1.」「- 」存成「1\.」「\- 」（不让它变成列表），读回来去掉这道转义
       // Codex 回答末尾带的记忆出处（<oai-mem-citation>…</oai-mem-citation>）是给它自己看的，不算说的话
-      const text = p.role === 'user' ? unescapeListMarks(joined) : joined.replace(/<oai-mem-citation>[\s\S]*?(<\/oai-mem-citation>|$)/g, '').trimEnd();
+      const text = p.role === 'user' ? saidText(unescapeListMarks(joined)) : joined.replace(/<oai-mem-citation>[\s\S]*?(<\/oai-mem-citation>|$)/g, '').trimEnd();
       if (text.trim() && !NOT_SAID.test(text)) out.push({ role: p.role, text, at });
     } else if (p.type === 'function_call' || p.type === 'custom_tool_call' || p.type === 'local_shell_call') {
       let args: unknown = p.arguments ?? p.input ?? o(p.action).command;
@@ -228,20 +263,219 @@ function codexMessages(entries: J[]): SessionMessage[] {
   return out;
 }
 
-function codexMeta(file: string): { id: string; cwd: string; source: string } | null {
-  const first = lines(readSlice(file, 'head', 64 * 1024))[0];
+function codexMeta(file: string): { id: string; cwd: string; source: string; thread: string } | null {
+  const first = lines(readSlice(file, 'head', 256 * 1024))[0];
   const p = o(first?.payload);
   if (first?.type !== 'session_meta' || !str(p.id)) return null;
-  // 子代理的来源是一个对象（{ subagent: … }），不是字符串
-  return { id: str(p.id), cwd: str(p.cwd), source: typeof p.source === 'string' ? p.source : 'subagent' };
+  // 子代理的来源是一个对象（{ subagent: … }），不是字符串；带 parent_thread_id 的也是子代理
+  const source = typeof p.source === 'string' && !str(p.parent_thread_id) ? p.source : 'subagent';
+  // 压缩、分叉会把整段历史抄进一份新文件（编号是新的，forked_from_id 指回原来那段）：归到原来那段，只列最新的一份
+  return { id: str(p.id), cwd: str(p.cwd), source, thread: str(p.forked_from_id) || str(p.id) };
 }
 
-function codexInfo(file: string): (SessionInfo & { cwd: string }) | null {
+function codexInfo(file: string): (SessionInfo & { cwd: string; thread: string }) | null {
   const meta = codexMeta(file);
   if (!meta) return null;
   const title = codexMessages(lines(readSlice(file, 'head', HEAD))).find((m) => m.role === 'user')?.text ?? '';
-  return { tool: 'codex', id: meta.id, title: clip(oneLine(title), 80), at: fs.statSync(file).mtime.toISOString(), entry: meta.source, cwd: meta.cwd };
+  return { tool: 'codex', id: meta.id, title: clip(oneLine(title), 80), at: fs.statSync(file).mtime.toISOString(), entry: meta.source, cwd: meta.cwd, thread: meta.thread };
 }
+
+// ---- DeepSeek Harness ----
+// ~/.dsh/sessions/<文件夹编码>/session-<编号>/session(.vN).jsonl(.zstd)：第一行是头（编号、cwd、子代理的 parentSession），
+// 之后一行一个事件 {type, seq, time, data}。zstd 是一批一批追加的独立帧，Node 自带的解压只解第一帧，要一帧一帧解。
+// user/message 只有 data.source.kind = user 的是人打的字（别的是工具塞的说明、技能清单、运行环境）；session/title 是标题。
+// 它没有按编号接着一段对话的命令。
+
+const ZSTD = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+/** 一份 zstd 记录解成文字：按帧头切开一帧帧解；切错了（数据里碰巧有帧头）就和下一段并起来再解。只解最后 max 字节附近的帧。 */
+function unzstd(buf: Buffer, max = TAIL): string {
+  const unzip = (zlib as unknown as { zstdDecompressSync?: (b: Buffer) => Buffer }).zstdDecompressSync;
+  if (!unzip) return '';
+  const starts: number[] = [];
+  for (let i = buf.indexOf(ZSTD, Math.max(0, buf.length - max)); i >= 0; i = buf.indexOf(ZSTD, i + 1)) starts.push(i);
+  let out = '';
+  for (let k = 0; k < starts.length; ) {
+    let end = k + 1;
+    for (;;) {
+      try {
+        out += unzip(buf.subarray(starts[k], starts[end] ?? buf.length)).toString('utf8');
+        break;
+      } catch {
+        if (end >= starts.length) break;
+        end++;
+      }
+    }
+    k = end;
+  }
+  return out;
+}
+
+/** 一个 dsh 对话文件夹里最新格式的那一份（session.v4.jsonl.zstd 比 session.jsonl 新）。 */
+function dshFileIn(dir: string): string | null {
+  let best: { f: string; v: number } | null = null;
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  for (const n of names) {
+    const m = n.match(/^session(?:\.v(\d+))?\.jsonl(\.zstd)?$/);
+    if (m && (!best || Number(m[1] ?? 1) > best.v)) best = { f: path.join(dir, n), v: Number(m[1] ?? 1) };
+  }
+  return best?.f ?? null;
+}
+
+function dshText(file: string, from: 'head' | 'tail'): string {
+  if (!file.endsWith('.zstd')) return readSlice(file, from, from === 'head' ? HEAD : TAIL);
+  let buf: Buffer;
+  try {
+    buf = fs.readFileSync(file);
+  } catch {
+    return '';
+  }
+  if (from === 'head') {
+    const second = buf.indexOf(ZSTD, 4);
+    const unzip = (zlib as unknown as { zstdDecompressSync?: (b: Buffer) => Buffer }).zstdDecompressSync;
+    try {
+      return unzip ? unzip(buf.subarray(0, second > 0 ? second : buf.length)).toString('utf8') : '';
+    } catch {
+      return unzstd(buf, buf.length).slice(0, HEAD);
+    }
+  }
+  return unzstd(buf);
+}
+
+/** 所有 dsh 对话文件夹（每个里最新的那份）。 */
+function dshFiles(): string[] {
+  const out: string[] = [];
+  let cwds: string[] = [];
+  try {
+    cwds = fs.readdirSync(dshRoot());
+  } catch {
+    return out;
+  }
+  for (const c of cwds) {
+    let ss: string[] = [];
+    try {
+      ss = fs.readdirSync(path.join(dshRoot(), c));
+    } catch {
+      continue;
+    }
+    for (const sdir of ss) {
+      if (!sdir.startsWith('session-')) continue;
+      const f = dshFileIn(path.join(dshRoot(), c, sdir));
+      if (f) out.push(f);
+    }
+  }
+  return out;
+}
+
+function dshHead(file: string): { id: string; cwd: string; sub: boolean } | null {
+  const first = lines(dshText(file, 'head'))[0];
+  if (first?.type !== 'session' || !str(first.id)) return null;
+  return { id: str(first.id), cwd: str(first.cwd), sub: !!str(first.parentSession) || Number(first.delegationDepth ?? 0) > 0 };
+}
+
+function dshMessages(entries: J[]): SessionMessage[] {
+  const out: SessionMessage[] = [];
+  for (const e of entries) {
+    const d = o(e.data);
+    const at = typeof e.time === 'number' ? new Date(e.time).toISOString() : str(e.time) || undefined;
+    if (e.type === 'user/message') {
+      if (o(d.source).kind !== 'user') continue;
+      const t = saidText((Array.isArray(d.content) ? d.content : []).map((c) => str(o(c).text)).join('\n'));
+      if (t) out.push({ role: 'user', text: t, at });
+    } else if (e.type === 'assistant/message') {
+      for (const b of Array.isArray(o(d.message).content) ? (o(d.message).content as unknown[]) : []) {
+        const blk = o(b);
+        if (blk.type === 'text' && str(blk.text).trim()) out.push({ role: 'assistant', text: str(blk.text), at });
+        else if (blk.type === 'tool-call') {
+          let args: unknown = blk.arguments;
+          try {
+            args = typeof args === 'string' ? JSON.parse(args) : args;
+          } catch {
+            /* 不是 JSON：原样 */
+          }
+          out.push({ role: 'tool', text: toolLine(str(blk.name), args), at });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function dshInfo(file: string): (SessionInfo & { cwd: string; sub: boolean; firstSaid: string }) | null {
+  const head = dshHead(file);
+  if (!head) return null;
+  const all = lines(dshText(file, 'tail'));
+  const title = str(o([...all].reverse().find((e) => e.type === 'session/title')?.data).title);
+  const first = dshMessages(lines(dshText(file, 'head'))).find((m) => m.role === 'user')?.text ?? dshMessages(all).find((m) => m.role === 'user')?.text ?? '';
+  return { tool: 'dsh', id: head.id, title: clip(oneLine(title || first), 80), at: fs.statSync(file).mtime.toISOString(), cwd: head.cwd, sub: head.sub, firstSaid: first };
+}
+
+// ---- Cursor 命令行（cursor-agent） ----
+// ~/.cursor/chats/<md5(文件夹)>/<编号>/meta.json 写着在哪个文件夹开的、什么时候、是不是子代理；正文是它另写的文字记录：
+// ~/.cursor/projects/<文件夹路径非字母数字换成 ->/agent-transcripts/<编号>/<编号>.jsonl（老版本是 <编号>.jsonl）。
+// 每行 {role, message: {content: [{type: text | tool_use, …}]}}；人打的字包在 <user_query> 里。cursor-agent --resume 编号 接着说。
+
+const md5 = (s: string) => crypto.createHash('md5').update(s).digest('hex');
+
+function cursorChatDirs(root: string): string[] {
+  const out: string[] = [];
+  for (const r of new Set([root, realOf(root)])) {
+    const dir = path.join(cursorConfig(), 'chats', md5(r));
+    try {
+      for (const id of fs.readdirSync(dir)) out.push(path.join(dir, id));
+    } catch {
+      /* 这个文件夹没用过 Cursor 命令行 */
+    }
+  }
+  return out;
+}
+
+function cursorMeta(chatDir: string): { id: string; cwd: string; title: string; at: string; sub: boolean } | null {
+  try {
+    const m = o(JSON.parse(fs.readFileSync(path.join(chatDir, 'meta.json'), 'utf8')));
+    if (m.hasConversation === false) return null;
+    const at = typeof m.updatedAtMs === 'number' ? new Date(m.updatedAtMs).toISOString() : fs.statSync(chatDir).mtime.toISOString();
+    return { id: path.basename(chatDir), cwd: str(m.cwd), title: str(m.title), at, sub: m.isSubagent === true };
+  } catch {
+    return null;
+  }
+}
+
+function cursorTranscript(cwd: string, id: string): string | null {
+  const slug = cwd.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!slug || !ID.test(id)) return null;
+  const dir = path.join(cursorData(), 'projects', slug, 'agent-transcripts');
+  return [path.join(dir, id, `${id}.jsonl`), path.join(dir, `${id}.jsonl`)].find((f) => fs.existsSync(f)) ?? null;
+}
+
+function cursorMessages(entries: J[]): SessionMessage[] {
+  const out: SessionMessage[] = [];
+  for (const e of entries) {
+    const role = e.role;
+    if (role !== 'user' && role !== 'assistant') continue;
+    for (const b of Array.isArray(o(e.message).content) ? (o(e.message).content as unknown[]) : []) {
+      const blk = o(b);
+      if (blk.type === 'text') {
+        const t = role === 'user' ? saidText(str(blk.text)) : str(blk.text).replace(/\n*\[REDACTED\]\s*$/, '').trim();
+        if (t) out.push({ role, text: t });
+      } else if (blk.type === 'tool_use' && role === 'assistant') out.push({ role: 'tool', text: toolLine(str(blk.name), blk.input) });
+    }
+  }
+  return out;
+}
+
+const realOf = (p: string) => {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+};
 
 // ---- 对外 ----
 
@@ -256,22 +490,41 @@ const same = (a: string, b: string) => {
   return real(a) === real(b);
 };
 
+/** Codex 归档了的对话（~/.codex/archived_sessions，平铺）：棒上记着的编号在 sessions 里找不到时到这里找。 */
+function codexArchived(id: string): string[] {
+  const dir = path.join(codexHome(), 'archived_sessions');
+  try {
+    return fs.readdirSync(dir).filter((n) => n.endsWith(`-${id}.jsonl`)).map((n) => path.join(dir, n));
+  } catch {
+    return [];
+  }
+}
+
 /** 这个对话的记录文件（只认在这个项目文件夹里开的）。找不到是 null。 */
 export function sessionFile(root: string, tool: SessionTool, id: string): string | null {
   if (!ID.test(id)) return null;
   if (tool === 'claude') return claudeDirs(root).map((d) => path.join(d, `${id}.jsonl`)).find((f) => fs.existsSync(f)) ?? null;
-  // Codex 的文件名末尾是编号；按修改时间从新到旧找
-  const hit = codexFiles(0)
-    .filter((f) => f.endsWith(`-${id}.jsonl`))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+  if (tool === 'dsh') {
+    // 编号就是它的文件夹名（session-…）；文件夹按 cwd 分，直接找，再核对头里的 cwd
+    for (const f of dshFiles()) if (path.basename(path.dirname(f)) === id) return same(dshHead(f)?.cwd ?? '', root) ? f : null;
+    return null;
+  }
+  if (tool === 'cursor-agent') {
+    const dir = cursorChatDirs(root).find((d) => path.basename(d) === id);
+    const meta = dir ? cursorMeta(dir) : null;
+    return meta && same(meta.cwd || root, root) ? cursorTranscript(meta.cwd || root, id) : null;
+  }
+  // Codex 的文件名末尾是编号；按修改时间从新到旧找（压缩、分叉后同一段对话可能有几份，最新的最全）
+  const hit = [...codexFiles(0).filter((f) => f.endsWith(`-${id}.jsonl`)), ...codexArchived(id)].sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
   if (!hit) return null;
   const meta = codexMeta(hit);
   return meta && same(meta.cwd, root) ? hit : null;
 }
 
 /**
- * 这个项目文件夹里、你自己在工具里开的对话（接力台派的不列：它们挂在每一棒上）。新的在前，最多 limit 条。
- * Claude Code 按文件夹放，只读这个文件夹的；Codex 按日期放，只看最近 60 天里在这个文件夹开的。
+ * 这个项目文件夹里、你自己在工具里开的对话（接力台派的、群聊里的不列：它们挂在每一棒、每条回答上）。新的在前，最多 limit 条。
+ * Claude Code、Cursor 按文件夹放，只读这个文件夹的；Codex 按日期放，只看最近 60 天里在这个文件夹开的；
+ * DeepSeek Harness 每段对话的头里写着文件夹，对上了才算。子代理的、压缩后抄出来的重复记录不列。
  */
 export function projectSessions(root: string, limit = 30): SessionInfo[] {
   const out: SessionInfo[] = [];
@@ -289,11 +542,30 @@ export function projectSessions(root: string, limit = 30): SessionInfo[] {
     const { cwd: _cwd, ...info } = i;
     out.push(info);
   }
+  // Codex：同一段对话（分叉、压缩出来的几份）只列最新的一份
+  const threads = new Map<string, SessionInfo>();
   for (const f of codexFiles(Date.now() - 60 * 86_400_000)) {
     const i = codexInfo(f);
     if (!i || i.entry === 'exec' || i.entry === 'subagent' || !same(i.cwd, root)) continue;
-    const { cwd: _cwd, ...info } = i;
+    const { cwd: _cwd, thread, ...info } = i;
+    const had = threads.get(thread);
+    if (!had || had.at < info.at) threads.set(thread, info);
+  }
+  out.push(...threads.values());
+  for (const f of dshFiles()) {
+    const i = dshInfo(f);
+    if (!i || i.sub || !same(i.cwd, root) || RELAY_PROMPT.test(i.firstSaid)) continue;
+    const { cwd: _cwd, sub: _sub, firstSaid: _f, ...info } = i;
     out.push(info);
+  }
+  for (const dir of cursorChatDirs(root)) {
+    const m = cursorMeta(dir);
+    if (!m || m.sub) continue;
+    const t = cursorTranscript(m.cwd || root, m.id);
+    if (!t) continue;
+    const first = cursorMessages(lines(readSlice(t, 'head', HEAD))).find((x) => x.role === 'user')?.text ?? '';
+    if (RELAY_PROMPT.test(first)) continue;
+    out.push({ tool: 'cursor-agent', id: m.id, title: clip(oneLine(m.title || first), 80), at: m.at });
   }
   return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
 }
@@ -303,11 +575,23 @@ export function readSession(root: string, tool: SessionTool, id: string): { info
   const file = sessionFile(root, tool, id);
   if (!file) throw new RelayError('这段对话在这个项目文件夹里找不到了', 'no-session');
   const size = fs.statSync(file).size;
-  const entries = lines(readSlice(file, 'tail', TAIL));
-  const info = tool === 'claude' ? claudeInfo(file) : codexInfo(file);
+  let info: SessionInfo | null;
+  let all: SessionMessage[];
+  if (tool === 'dsh') {
+    const i = dshInfo(file);
+    info = i ? { tool: i.tool, id: i.id, title: i.title, at: i.at } : null;
+    all = dshMessages(lines(dshText(file, 'tail')));
+  } else if (tool === 'cursor-agent') {
+    const m = cursorChatDirs(root).map(cursorMeta).find((x) => x?.id === id) ?? null;
+    all = cursorMessages(lines(readSlice(file, 'tail', TAIL)));
+    info = m ? { tool, id, title: clip(oneLine(m.title || all.find((x) => x.role === 'user')?.text || ''), 80), at: m.at } : null;
+  } else {
+    const i = tool === 'claude' ? claudeInfo(file) : codexInfo(file);
+    info = i ? { tool: i.tool, id: i.id, title: i.title, at: i.at, ...(i.entry ? { entry: i.entry } : {}) } : null;
+    const entries = lines(readSlice(file, 'tail', TAIL));
+    all = tool === 'claude' ? claudeMessages(entries) : codexMessages(entries);
+  }
   if (!info) throw new RelayError('这段对话读不出来', 'no-session');
-  const { cwd: _cwd, ...rest } = info;
-  const all = tool === 'claude' ? claudeMessages(entries) : codexMessages(entries);
   const messages = all.slice(-400).map((m) => ({ ...m, text: clip(m.text, 6000) }));
-  return { info: rest, messages, cut: size > TAIL || all.length > 400 };
+  return { info, messages, cut: size > TAIL || all.length > 400 };
 }

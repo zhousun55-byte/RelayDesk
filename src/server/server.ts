@@ -19,7 +19,7 @@ import { forgetProject, lastProject, loadMemory, rememberProject } from '../core
 import { appNameOf, llmName, toolName } from '../core/names';
 import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
 import { isInside } from '../core/paths';
-import { untilText } from '../core/quota';
+import { clearBlocked, untilText } from '../core/quota';
 import { agentKind, findAgent, isOpenCommand, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
 import { adoptSummary, archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, summarize, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
@@ -116,6 +116,8 @@ function memberViewsUnsafe() {
     canWork: m.canWork,
     canTalk: m.canTalk,
     why: m.why ?? null,
+    /** 先停用着：model = 这个账号用不了这个模型，auth = 没登录；why 是带原话的原因。 */
+    blocked: m.blocked ?? null,
     cooling: m.cooling ?? null,
     coolingText: m.cooling ? untilText(m.cooling, now) : null,
     /** 工具自己报的额度窗口（kind：5h / 7d / 7d-opus，used：百分比，resetsAt：恢复时间）；没报过就不带。 */
@@ -601,6 +603,11 @@ export function createServer(opts: ServerOptions): http.Server {
     },
     '/api/members/crew': (_q, b) => {
       setCrew(str(b.name) ?? '', str(b.crew) ?? '');
+      return { members: memberViews() };
+    },
+    // 停用着的那一位（模型用不了、没登录）：人说已经弄好了，下次照常派
+    '/api/members/unblock': (_q, b) => {
+      clearBlocked(str(b.name) ?? undefined);
       return { members: memberViews() };
     },
     // 桌面程序：核实这台电脑上真有这个程序（程序包在、读得出标识）才收

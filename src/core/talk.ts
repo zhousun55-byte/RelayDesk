@@ -11,7 +11,8 @@ import { runLlmAgent } from './llm-agent';
 import { llmName, toolName } from './names';
 import { shellArgv } from './proc';
 import { redactSecrets } from './redact';
-import { detectQuota, noteLimits } from './quota';
+import { sessionFile, sessionToolOf } from './sessions';
+import { blockMember, detectQuota, failureKind, noteLimits } from './quota';
 import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, type RunResult } from './runner';
 import { cause, plain } from './cause';
 import { agentKind, agentLabel, canTalk, findAgent, loadRegistry, OUT_PLACEHOLDER } from './registry';
@@ -38,6 +39,8 @@ export interface TalkRow {
   summary?: boolean;
   /** 这一条说的是「采纳了哪条总结」（那条总结的时间）。 */
   adopt?: string;
+  /** 这句回答在它自己工具里的那段对话（工具、对话编号）：同一段群聊里它下一次接着这段说，人也能回到工具里接着说。 */
+  session?: { tool: string; id: string };
 }
 
 /** turn = 讨论：轮流说（后面的看得到前面的）；solo = 对比：同时问，互相看不到，回答并排放。 */
@@ -94,6 +97,9 @@ export function readTalk(root: string, limit = 400, p = talkPath(root)): TalkRow
       ...(r.mode === 'turn' || r.mode === 'solo' ? { mode: r.mode } : {}),
       ...(r.summary === true ? { summary: true } : {}),
       ...(typeof r.adopt === 'string' ? { adopt: r.adopt } : {}),
+      ...(r.session && typeof r.session === 'object' && typeof (r.session as { tool?: unknown }).tool === 'string' && typeof (r.session as { id?: unknown }).id === 'string'
+        ? { session: { tool: (r.session as { tool: string }).tool, id: (r.session as { id: string }).id } }
+        : {}),
     });
   }
   return out.slice(-limit);
@@ -305,7 +311,8 @@ const TALK_STEP = 12;
  * 顺序按「不变的在前、变的在后」：规则 → 讨论记录（只往后接）→ 任务状态、轮到谁。
  * 各家接口按开头相同的部分算缓存：开头一变，后面整段都要按全价重读。
  */
-export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean; file?: string }): string {
+export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean; file?: string; since?: boolean }): string {
+  if (input.since) return followUpPrompt(input);
   const max = input.maxChars ?? TALK_HISTORY_CHARS;
   const lines = input.rows
     .filter((r) => !r.error)
@@ -339,6 +346,29 @@ export function buildTalkPrompt(input: { speaker: string; root: string; rows: Ta
       (input.solo
         ? `这一轮是「对比」：几个 AI 同时回答最后那个问题，互相看不到，回答会并排放在一起给人对比。请给出你自己独立的判断，不用顾及别人会怎么说。现在请你（${input.speaker}）回答。`
         : `现在轮到你（${input.speaker}）发言。`),
+  ];
+  return redactSecrets(parts.join('\n\n'));
+}
+
+/**
+ * 接着它工具里那段对话说：前面的讨论、规矩它都看过了，只给它上次说完之后的新消息、现在的任务状态、轮到它。
+ * 新消息太多放不下时，和第一次一样只留最后那些，告诉它完整记录在哪。
+ */
+function followUpPrompt(input: { speaker: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean; file?: string }): string {
+  const max = input.maxChars ?? TALK_HISTORY_CHARS;
+  const lines = input.rows.filter((r) => !r.error).map((r) => `[${hhmm(r.ts)}] ${r.kind === 'system' ? '（接力台）' : r.who}：${r.text.trim()}`);
+  let from = lines.length;
+  for (let size = 0; from > 0 && size + lines[from - 1].length + 2 <= max; from--) size += lines[from - 1].length + 2;
+  if (from === lines.length && from > 0) from--;
+  const kept = lines.slice(from);
+  const t = input.context?.task;
+  const parts = [
+    `还是「接力台」里的这场多 AI 讨论，规矩和上面一样（只说话，不改文件）。`,
+    `你上次说完之后的新消息（${from > 0 ? `较早的 ${from} 句没放进来${input.file ? `，完整记录在 \`${input.file}\`` : ''}；` : ''}最新的在最后）：\n${kept.join('\n\n') || '（没有新消息）'}`,
+    t ? `当前任务：${t.title}\n任务状态：${t.phaseText}` : '现在没有进行中的任务。',
+    input.solo
+      ? `这一轮是「对比」：几个 AI 同时回答最后那个问题，互相看不到。请给出你自己独立的判断。现在请你（${input.speaker}）回答。`
+      : `现在轮到你（${input.speaker}）发言。`,
   ];
   return redactSecrets(parts.join('\n\n'));
 }
@@ -384,6 +414,16 @@ function replyOf(raw: string): string {
 
 /** 让一个 AI 回答。接口型用内置小代理，只给读文件的工具；编程工具、自定义命令见下面。 */
 export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, timeoutMs = TALK_MAX_MS, idleMs = TALK_IDLE_MS): Promise<string> {
+  return (await askAgentRun(agent, prompt, cwd, { timeoutMs, idleMs })).text;
+}
+
+/**
+ * askAgent，另外带回这次回答在它工具里的对话（工具、编号）；给了 resume 就接着那段对话说
+ * （工具自己记下来的对话一直是同一段：群聊里的话同步进了工具的历史，人在工具里也接得上）。
+ */
+export async function askAgentRun(agent: AgentConfig, prompt: string, cwd: string, opts: { timeoutMs?: number; idleMs?: number; resume?: string } = {}): Promise<{ text: string; session?: { tool: string; id: string } }> {
+  const timeoutMs = opts.timeoutMs ?? TALK_MAX_MS;
+  const idleMs = opts.idleMs ?? TALK_IDLE_MS;
   prompt += langNote();
   if (agentKind(agent) === 'api') {
     if (!agent.api) throw new RelayError('没有配置接口', 'no-api');
@@ -402,8 +442,12 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
       maxSteps: 30,
     });
     const text = replyOf(r.finalText);
-    if (!text) throw new RelayError(r.error ? (quotaWhy(r.error) ?? plain(r.error)) : r.timedOut ? cause.overtime(timeoutMs) : cause.silent(), 'ask-empty');
-    return text;
+    if (!text) {
+      const kind = r.error ? failureKind(r.error) : null;
+      if (kind) blockMember(agent.name, kind, r.error ?? '', agent.api.model);
+      throw new RelayError(r.error ? (quotaWhy(r.error) ?? plain(r.error)) : r.timedOut ? cause.overtime(timeoutMs) : cause.silent(), 'ask-empty');
+    }
+    return { text };
   }
   // 编程工具用它的只读模式回答；自定义命令把提示从标准输入喂进去，回答是它的标准输出（或 {{out}} 文件）。
   // 两种都交给 startRun：计时、太久没动静就停、不传宿主的会话变量（agentEnv）、认没成的原因都是同一套。
@@ -422,7 +466,7 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
     const loc = spec ? locateCached(spec) : null;
     if (!spec || !loc) throw new RelayError('没有配置讨论命令', 'no-ask');
     harness = spec.id;
-    make = () => spec.invoke(loc, { cwd, prompt, level: 'safe', readOnly: true, model: agent.model?.trim() || undefined, effort: agent.effort, outFile });
+    make = () => spec.invoke(loc, { cwd, prompt, level: 'safe', readOnly: true, model: agent.model?.trim() || undefined, effort: agent.effort, outFile, ...(opts.resume ? { resume: opts.resume } : {}) });
   }
   const inv = make();
   let r = await startRun({ invocation: inv, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
@@ -445,8 +489,14 @@ export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, 
   const log = logTail(logPath, 6000);
   fs.rmSync(logPath, { force: true });
   const text = replyOf(r.finalText);
-  if (!text) throw new RelayError(r.error ? plain(r.error) : r.timedOut ? (r.late ?? cause.overtime(timeoutMs)) : silentWhy(harness, log, r), 'ask-empty');
-  return text;
+  if (!text) {
+    // 模型用不了、没登录：和派活一样先停用这一位（换了模型、重新登录、过一阵再算）
+    const toolSaid = `${r.error ?? ''}\n${r.stderrTail}\n${toolLines(log)}`;
+    const kind = harness ? failureKind(toolSaid) : null;
+    if (kind) blockMember(agent.name, kind, toolSaid, memberModel(agent, loadDetected()));
+    throw new RelayError(r.error ? plain(r.error) : r.timedOut ? (r.late ?? cause.overtime(timeoutMs)) : silentWhy(harness, log, r), 'ask-empty');
+  }
+  return { text, ...(harness && r.session ? { session: { tool: harness, id: r.session } } : {}) };
 }
 
 /** 一段群聊里谁在说、谁在排队。 */
@@ -492,6 +542,31 @@ function safeContext(context: () => TalkContext): TalkContext {
   }
 }
 
+/** 工具说接不上那段对话（被删了、过期了）的说法。 */
+const LOST_THREAD = /no (?:conversation|session|rollout|thread)s? found|(?:session|conversation|thread|rollout).{0,40}(?:not found|does ?n[o']t exist)|could not (?:find|resume)|找不到(?:这段)?(?:对话|会话)/i;
+
+/** 这几家能按编号接着一段对话说（只读也行）。 */
+const RESUMABLE = new Set(['claude', 'claude-official', 'codex', 'cursor-agent', 'agy']);
+
+/**
+ * 它在这段群聊里上一次回答留下的工具对话：同一个工具、同一个模型、对话记录还在（读得到的两家先核实文件在不在），
+ * 返回编号和从第几行起是它没看过的新消息。换了工具、换了模型、从没答过的返回 null（另开一段，带上整段记录）。
+ */
+function ownThread(root: string, agent: AgentConfig, rows: TalkRow[]): { id: string; after: number } | null {
+  if (!agent.harness || !RESUMABLE.has(agent.harness) || agent.ask?.trim()) return null;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (r.kind !== 'ai' || r.agent !== agent.name || r.error) continue;
+    if (!r.session || r.session.tool !== agent.harness) return null;
+    const now = memberModel(agent, loadDetected());
+    if (r.model && now && r.model !== now) return null;
+    const tool = sessionToolOf(r.session.tool);
+    if (tool && !sessionFile(root, tool, r.session.id)) return null;
+    return { id: r.session.id, after: i + 1 };
+  }
+  return null;
+}
+
 async function speakOne(root: string, th: Thread, name: string, rows: TalkRow[], context: () => TalkContext, solo?: string): Promise<void> {
   const agent = findAgent(name);
   try {
@@ -500,11 +575,23 @@ async function speakOne(root: string, th: Thread, name: string, rows: TalkRow[],
     // 问话里写了 /技能名：附上这个技能的做法
     const asked = [...rows].reverse().find((r) => r.kind === 'human');
     const file = path.relative(root, th.file).split(path.sep).join('/');
-    const prompt = buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), file, ...(solo ? { solo: true } : {}) }) + skillNote(root, asked?.text ?? '');
-    const text = await askAgent(agent, prompt, root);
+    const note = skillNote(root, asked?.text ?? '');
+    const full = () => buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), file, ...(solo ? { solo: true } : {}) }) + note;
+    // 它在这段群聊里说过话、工具里那段对话还在：接着那段说，只带它上次说完之后的新消息
+    const own = ownThread(root, agent, rows);
+    let r: { text: string; session?: { tool: string; id: string } };
+    if (own) {
+      try {
+        r = await askAgentRun(agent, buildTalkPrompt({ speaker: who, root, rows: rows.slice(own.after), context: safeContext(context), file, since: true, ...(solo ? { solo: true } : {}) }) + note, root, { resume: own.id });
+      } catch (e) {
+        // 工具里那段对话接不上了（被删、过期）：另开一段，带上整段记录
+        if (!LOST_THREAD.test(errorMessage(e))) throw e;
+        r = await askAgentRun(agent, full(), root);
+      }
+    } else r = await askAgentRun(agent, full(), root);
     // 问的过程中可能换了模型（比如命令行太旧、换成了它用得了的）：署名按答完之后的算。
     const m = memberModel(agent, loadDetected());
-    appendTalk(root, { kind: 'ai', who: speakerName(agent), agent: agent.name, ...(m ? { model: m } : {}), text, ...(solo ? { round: solo } : {}) }, th.file);
+    appendTalk(root, { kind: 'ai', who: speakerName(agent), agent: agent.name, ...(m ? { model: m } : {}), text: r.text, ...(solo ? { round: solo } : {}), ...(r.session ? { session: r.session } : {}) }, th.file);
   } catch (e) {
     appendTalk(root, { kind: 'system', who: '接力台', agent: name, text: `${agent ? speakerName(agent) : name} 没有回答：${plain(errorMessage(e))}`, error: true, ...(solo ? { round: solo } : {}) }, th.file);
   }

@@ -95,7 +95,7 @@ test('额度窗口和额度用完记在同一个 quota.json，互不冲掉；过
     assert.equal(fullUntil(full), later, '两个都用满了，等晚的那个');
     assert.equal(fullUntil(full.slice(2)), undefined);
     fs.writeFileSync(quotaPath(), JSON.stringify({ members: { x: { until: later, note: '', at: later } } }));
-    assert.deepEqual(loadQuotaFile(), { members: { x: { until: later, note: '', at: later } }, limits: {}, errors: {} }, '旧的 quota.json 照样读');
+    assert.deepEqual(loadQuotaFile(), { members: { x: { until: later, note: '', at: later } }, limits: {}, errors: {}, blocked: {} }, '旧的 quota.json 照样读');
     // 出过错：第 1 次歇 1 分钟，连着错翻倍，最多 10 分钟；做成一棒就清掉
     assert.deepEqual([1, 2, 3, 4, 5, 9].map((n) => errorBackoffMs(n) / 60_000), [1, 2, 4, 8, 10, 10]);
     noteError('codex', now);

@@ -669,10 +669,11 @@ const codex: HarnessSpec = {
     return { model: s.model, label: s.model, effort: s.effort, efforts: s.efforts, via: s.provider };
   },
   invoke(loc, i) {
-    // 接着一段对话：codex exec resume 编号（它不认 -C、-s、--color：在项目文件夹里起，沙箱用 -c 写）
-    const resume = !!i.resume && !i.readOnly;
+    // 接着一段对话：codex exec resume 编号（它不认 -C、-s、--color：在项目文件夹里起，沙箱用 -c 写）。
+    // 只读（群聊、复核）也留对话记录、也能接着说：接力台里说的话同步进 Codex 自己的历史，人在 Codex 里接得上。
+    const resume = !!i.resume;
     const a = resume ? [...loc.exec, 'exec', 'resume', '--skip-git-repo-check', '--json', '-o', i.outFile] : [...loc.exec, 'exec', '--skip-git-repo-check', '--color', 'never', '-C', i.cwd, '--json', '-o', i.outFile];
-    if (i.readOnly) a.push('-s', 'read-only', '--ephemeral');
+    if (i.readOnly) a.push(...(resume ? ['-c', 'sandbox_mode="read-only"'] : ['-s', 'read-only']));
     else if (i.level === 'full') a.push('--dangerously-bypass-approvals-and-sandbox');
     // 安全档：Codex 自己的沙箱，只能写工作目录，默认不联网。
     else a.push(...(resume ? ['-c', 'sandbox_mode="workspace-write"'] : ['-s', 'workspace-write']));
@@ -688,7 +689,7 @@ const codex: HarnessSpec = {
 };
 
 /**
- * Codex 每次运行在 ~/.codex/sessions/年/月/日/ 下留一份 rollout-时间-编号.jsonl（群聊用的 --ephemeral 不留）：
+ * Codex 每次运行在 ~/.codex/sessions/年/月/日/ 下留一份 rollout-时间-编号.jsonl（群聊、复核也留）：
  * 第一行 session_meta 写着在哪个文件夹跑的，之后每轮一条 token_count，带着 rate_limits。
  * 取 sinceMs 之后在这个项目里跑的最新一份，读它最后一条 rate_limits。
  */

@@ -198,6 +198,20 @@ export interface QuotaFile {
   limits: Record<string, { at: string; windows: Limit[] }>;
   /** 调度时出过错的成员：最近一次在什么时候、连着错了几次（做成一棒就清掉）。 */
   errors: Record<string, { at: string; n: number }>;
+  /** 先停用的成员：模型这个账号用不了、没登录（不换模型、不重新登录，派它也是白跑）。 */
+  blocked: Record<string, BlockEntry>;
+}
+
+/** model = 这个账号用不了这个模型；auth = 没登录、登录过期、密钥不对。 */
+export type BlockKind = 'model' | 'auth';
+
+export interface BlockEntry {
+  kind: BlockKind;
+  /** 一句话：怎么了，带工具的原话。 */
+  note: string;
+  at: string;
+  /** 停用时用的模型：换了模型就不算了。 */
+  model?: string;
 }
 
 export function quotaPath(): string {
@@ -209,9 +223,9 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object'
 export function loadQuotaFile(): QuotaFile {
   try {
     const j = obj(JSON.parse(fs.readFileSync(quotaPath(), 'utf8')));
-    return { members: obj(j.members) as QuotaFile['members'], limits: obj(j.limits) as QuotaFile['limits'], errors: obj(j.errors) as QuotaFile['errors'] };
+    return { members: obj(j.members) as QuotaFile['members'], limits: obj(j.limits) as QuotaFile['limits'], errors: obj(j.errors) as QuotaFile['errors'], blocked: obj(j.blocked) as QuotaFile['blocked'] };
   } catch {
-    return { members: {}, limits: {}, errors: {} };
+    return { members: {}, limits: {}, errors: {}, blocked: {} };
   }
 }
 
@@ -238,12 +252,75 @@ export function markQuota(member: string, hit: QuotaHit, now = new Date()): Quot
   return e;
 }
 
-/** 这一位好好做完了一棒：额度用完、出过错的记号都清掉。 */
+/** 这一位好好做完了一棒：额度用完、出过错、停用的记号都清掉。 */
 export function markOk(member: string): void {
   const f = loadQuotaFile();
-  if (!(member in f.members) && !(member in f.errors)) return;
+  if (!(member in f.members) && !(member in f.errors) && !(member in f.blocked)) return;
   delete f.members[member];
   delete f.errors[member];
+  delete f.blocked[member];
+  saveQuota(f);
+}
+
+// ---- 停用：模型用不了、没登录（借 magpie 给失败分类：这两种换个时间再试也一样，只有换模型、重新登录才好） ----
+
+/**
+ * 工具说「这个模型用不了」：账号没开通、模型名不对、这种登录方式不支持（2026-10-01 Codex 用 ChatGPT 账号调 gpt-6.1-sol 就是这种）。
+ * 句式照 magpie 的 unservedWords；额度、限流的话不算（那是等恢复）。
+ */
+const MODEL_REFUSED =
+  /model.{0,80}(?:not (?:supported|accessible|available|found|enabled|allowed)|unsupported|does ?n[o']t exist|is (?:unknown|invalid))|(?:no such|unknown|invalid|unsupported) model\b|model_not_found|模型.{0,12}(?:不存在|不支持|无权|未开通)/i;
+
+/** 没登录、登录过期、密钥不对。只认成句的（文件名 login.ts、行号 401 不算）。 */
+const AUTH_REFUSED =
+  /not logged in|please (?:log ?in|sign ?in|run \/login)|(?:log ?in|sign ?in|authentication) (?:is )?required|\bunauthori[sz]ed\b|(?:http|status|error|code)[ :=]*401\b|\b401 unauthori|(?:token|session|credentials?) (?:has )?expired|invalid (?:x-)?api[ _-]?key|incorrect api key|api key not valid|authentication_error|ACCOUNT_SIGN_IN_REQUIRED|ACCOUNT_TOKEN_INVALID|未登录|登录(?:已)?(?:过期|失效)|(?:鉴权|认证)失败|密钥(?:无效|错误)/i;
+
+/**
+ * 一棒、一次回答没成：是不是「换个时间再试也一样」的那种。只看工具自己报的话（出错信息、标准错误、日志里的出错行），
+ * 不看 AI 说的话——任务本身讲模型、登录时，那些话里全是这些词。认不出返回 null（照旧按出错往后放）。
+ */
+export function failureKind(toolSaid: string): BlockKind | null {
+  if (!toolSaid.trim() || detectQuota(toolSaid).hit) return null;
+  if (MODEL_REFUSED.test(toolSaid)) return 'model';
+  if (AUTH_REFUSED.test(toolSaid)) return 'auth';
+  return null;
+}
+
+/** 原话里最像报错的那一行。 */
+function refusedLine(toolSaid: string, kind: BlockKind): string {
+  const re = kind === 'model' ? MODEL_REFUSED : AUTH_REFUSED;
+  return (toolSaid.split('\n').find((l) => re.test(l)) ?? '').trim().replace(/[。.]+$/, '').slice(0, 200);
+}
+
+/** 停用多久：没登录的过 30 分钟再试（人可能已经重新登录了）；模型用不了的等换了模型，最多 12 小时再试一次。 */
+export const BLOCK_MS: Record<BlockKind, number> = { auth: 30 * 60_000, model: 12 * 3600_000 };
+
+export function blockMember(member: string, kind: BlockKind, toolSaid: string, model?: string, now = new Date()): BlockEntry {
+  const line = refusedLine(toolSaid, kind);
+  const head = kind === 'model' ? `${model ? `模型 ${model} ` : '这个模型'}用不了` : '没登录或登录过期';
+  const e: BlockEntry = { kind, note: line ? `${head}，原话：${line}` : head, at: now.toISOString(), ...(model ? { model } : {}) };
+  const f = loadQuotaFile();
+  f.blocked[member] = e;
+  delete f.errors[member];
+  saveQuota(f);
+  return e;
+}
+
+/** 这一位现在停用着吗：过了时间、换了模型的不算。 */
+export function blockedOf(member: string, model: string | undefined, now = new Date(), all = loadQuotaFile().blocked): BlockEntry | null {
+  const e = all[member];
+  if (!e) return null;
+  if (now.getTime() - Date.parse(e.at) >= (BLOCK_MS[e.kind] ?? 0)) return null;
+  if (e.kind === 'model' && e.model && model && e.model !== model) return null;
+  return e;
+}
+
+/** 人在设置里点了「再试一次」、重新识别过：把停用清掉。 */
+export function clearBlocked(member?: string): void {
+  const f = loadQuotaFile();
+  if (member ? !(member in f.blocked) : !Object.keys(f.blocked).length) return;
+  if (member) delete f.blocked[member];
+  else f.blocked = {};
   saveQuota(f);
 }
 

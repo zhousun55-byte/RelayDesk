@@ -70,6 +70,11 @@ const EN = {
   '删除 {}': 'Delete {}',
   '删除 {}？': 'Delete {}?',
   '已删除 {}': 'Deleted {}',
+  再试一次: 'Try again',
+  在工具里接着说: 'Continue in the tool',
+  模型用不了: 'Model unavailable',
+  没登录: 'Not signed in',
+  '下次照常派给 {}': '{} will get work again',
   添加: 'Add',
   已添加: 'Added',
   更新: 'Update',
@@ -217,8 +222,8 @@ const EN = {
   列出工具里的对话: 'List conversations in tools',
   '同一个任务里，一位成员的下一棒顺着它上一棒在工具里的那段话说下去，一个任务在工具里就是一整段对话。关掉则每棒另起一段，token 用得少。':
     "Within a task, a member's next leg continues its previous conversation in the tool, so each task is one conversation there. Off: a new conversation per leg, fewer tokens.",
-  '接力页左边列出在这个文件夹里、用 Claude Code 和 Codex 开过的对话，点开是全文。别的文件夹不读。':
-    'List the Claude Code and Codex conversations started in this project folder on the left of the Relay page. Only this folder is read.',
+  '接力页左边列出在这个文件夹里、用 Claude Code、Codex、DeepSeek Harness、Cursor 命令行开过的对话，点开是全文。别的文件夹不读。':
+    'The Relay page lists conversations started in this folder with Claude Code, Codex, DeepSeek Harness or the Cursor CLI; click one to read it in full. Other folders are not read.',
   指挥: 'Lead',
   干活: 'Crew',
   强模型按顺序: 'Strong models in order',
@@ -703,6 +708,8 @@ const SRV = [
   [/^第 (\d+) 棒（(.+?)）正在(.+)$/, (_, n, who, k) => `Leg ${n} (${tr(who)}): ${tr(k)}`],
   [/^第 (\d+) 棒（(.+?)）(已交接|没交接|额度用完|出错|已停止)(：(.*))?$/s, (_, n, who, st, __, x) => `Leg ${n} (${tr(who)}) ${tr(st).toLowerCase()}${x ? `: ${tr(x)}` : ''}`],
   [/^找不到文件夹：(.+)$/, (_, x) => `Folder not found: ${x}`],
+  [/^(?:模型 (.+?) |这个模型)用不了(?:，原话：(.*))?$/s, (_, m, x) => `${m ? `Model ${m}` : 'This model'} is unavailable${x ? `: ${x}` : ''}`],
+  [/^没登录或登录过期(?:，原话：(.*))?$/s, (_, x) => `Not signed in, or the sign-in expired${x ? `: ${x}` : ''}`],
   [/^(.+?) ?官方账号$/, (_, x) => `${brand(x)} (official account)`],
   [/^(.+?) ?命令行$/, (_, x) => `${brand(x)} CLI`],
   [/^(.+?) ?桌面版$/, (_, x) => `${brand(x)} desktop`],

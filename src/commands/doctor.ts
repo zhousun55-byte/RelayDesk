@@ -70,6 +70,7 @@ export function doctor(dir: string): DoctorLine[] {
     else add('warn', '没有能派活的成员：没装、没登录或额度都用完了');
     if (ready.length && !strong.length) add('warn', '能派活的成员里没有强模型');
     for (const m of list.filter((x) => x.cooling)) add('warn', `${m.label} ${cause.quota(m.cooling)}`);
+    for (const m of list.filter((x) => x.blocked)) add('warn', `${m.label} 先停用着：${m.why}（换了模型、重新登录后在网页「设置 → 成员」里点「再试一次」）`);
   } catch (e) {
     add('warn', errorMessage(e));
   }

@@ -12,7 +12,7 @@ import type { Sandbox } from './helpers';
  * - 终审：写终审结论，交接状态写「全部完成」；
  * - 拆解（派活）：把任务清单换成 4 步；
  * - 只读（群聊 / 投票）：按提示词回答（投票时不投自己）。
- * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail / slow（先把进程号写进 FAKE_DIR/<名字>.pid，
+ * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail / model-refused（账号用不了这个模型）/ logged-out（没登录）/ slow（先把进程号写进 FAKE_DIR/<名字>.pid，
  * 睡 30 秒再干活）/ offline（像断网时的 Codex：一直报「Reconnecting... waiting for network」，永远不结束），FAKE_<名字>_WHO = 交接里写的身份；FAKE_REVIEW_SAY = 复核完说的那句话。
  * claude 带着把地址写回 api.anthropic.com 的 --settings（盖掉接别家模型的设置）时扮演「官方账号」：FAKE_CLAUDE_OFFICIAL=pro 算登录了，
  * 身份和行为看 FAKE_CLAUDE_OFFICIAL_WHO / FAKE_CLAUDE_OFFICIAL_MODE；这时环境里还带着 ANTHROPIC_* 就报错（说明接力台没去掉）。
@@ -53,6 +53,8 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '  [ "$a" = "-" ] && RID="$prev"',
     '  [ "$a" = "--tools" ] && ro=1',
     '  [ "$prev" = "-s" ] && [ "$a" = "read-only" ] && ro=1',
+    // codex exec resume 不认 -s：只读写成 -c sandbox_mode="read-only"
+    '  [ "$a" = \'sandbox_mode="read-only"\' ] && ro=1',
     '  [ "$prev" = "-o" ] && out="$a"',
     '  prev="$a"',
     'done',
@@ -80,9 +82,12 @@ function fakeScript(name: 'claude' | 'codex'): string {
     'SID="fake-$$"; [ "$NAME" = claude ] && SID="fake-claude-$$"; [ -n "$RES" ] && SID="$RES"; [ -n "$RESUME" ] && [ -n "$RID" ] && SID="$RID"',
     `[ "$NAME" = claude ] && printf '{"type":"system","subtype":"init","model":"%s","session_id":"%s"}\\n' "$INIT_MODEL" "$SID"`,
     `[ "$NAME" = codex ] && printf '{"type":"thread.started","thread_id":"%s"}\\n' "$SID"`,
-    'if [ "$NAME" = claude ] && [ $ro -eq 0 ]; then',
+    // 只读（群聊、复核）也留对话记录，和真的一样
+    'if [ "$NAME" = claude ]; then',
     '  CD="$HOME/.claude/projects/$(printf %s "$(pwd -P)" | perl -CS -pe \'s/[^A-Za-z0-9]/-/g\')"; mkdir -p "$CD"',
     `  printf '{"type":"user","cwd":"%s","entrypoint":"sdk-cli","sessionId":"%s","message":{"role":"user","content":"接着做"}}\\n' "$(pwd -P)" "$SID" >> "$CD/$SID.jsonl"`,
+    // 和真的一样记下回答用的模型（「这台电脑上最近用过的最新 Opus」从这里认）
+    `  printf '{"type":"assistant","sessionId":"%s","message":{"model":"%s","role":"assistant","content":[]}}\\n' "$SID" "$MODEL" >> "$CD/$SID.jsonl"`,
     'fi',
     // 命令行太旧（2026-09-25 真实遇到的）：除了简称 opus，别的模型都说要更新的版本。
     'if [ "$MODE" = too-old ]; then',
@@ -102,7 +107,7 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '    ST=allowed; [ "$1" -ge 100 ] && ST=rejected',
     '    U5=$(awk "BEGIN{print $1/100}"); U7=$(awk "BEGIN{print $L7/100}")',
     '    printf \'{"type":"rate_limit_event","rate_limit_info":{"status":"%s","rateLimitType":"five_hour","utilization":%s,"resetsAt":%s,"unifiedWindows":{"five_hour":{"utilization":%s,"resetsAt":%s},"seven_day":{"utilization":%s,"resetsAt":%s}}},"uuid":"fake","session_id":"fake"}\\n\' "$ST" "$U5" $((NOW+$2)) "$U5" $((NOW+$2)) "$U7" $((NOW+172800))',
-    '  elif [ $ro -eq 0 ]; then',
+    '  else',
     '    D="${CODEX_HOME:-$HOME/.codex}/sessions/$(date +%Y/%m/%d)"; mkdir -p "$D"; F="$D/rollout-$(date +%Y-%m-%dT%H-%M-%S)-$SID.jsonl"',
     '    printf \'{"type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec","source":"exec"}}\\n\' "$SID" "$(pwd -P)" > "$F"',
     '    printf \'{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":%s,"window_minutes":300,"resets_at":%s},"secondary":{"used_percent":%s,"window_minutes":10080,"resets_at":%s},"plan_type":"plus"}}}\\n\' "$1" $((NOW+$2)) "$L7" $((NOW+172800)) >> "$F"',
@@ -158,6 +163,9 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '    fi',
     '    exit 1 ;;',
     '  fail) echo "something broke" >&2; exit 2 ;;',
+    // 账号用不了这个模型（2026-10-01 Codex 用 ChatGPT 账号调 gpt-6.1-sol 时的原话）；没登录（Claude Code 的原话）
+    '  model-refused) echo "ERROR: {\\"detail\\":\\"The \'gpt-6.1-sol\' model is not supported when using Codex with a ChatGPT account.\\"}" >&2; exit 1 ;;',
+    '  logged-out) echo "Invalid API key · Please run /login" >&2; exit 1 ;;',
     // 新版 Claude Code 额度用完：一句工具自己拼的话（模型是 <synthetic>），结果标出错，退出码 1。
     '  session-limit)',
     '    [ -n "$FAKE_RESETS_IN" ] && limits 100 "$FAKE_RESETS_IN"',

@@ -1,6 +1,6 @@
 import { listMembers, loadDetected, memberModel, siblingOf, type DetectReport } from './detect';
 import type { Level } from './harness';
-import { coolingUntil, limitsOf, loadQuotaFile, type Limit } from './quota';
+import { blockedOf, coolingUntil, limitsOf, loadQuotaFile, type BlockKind, type Limit } from './quota';
 import { agentKind, agentLabel, canTalk, loadRegistry } from './registry';
 import { memberTier, type MemberLike } from './tier';
 import type { AgentConfig } from './types';
@@ -21,6 +21,8 @@ export interface MemberInfo extends MemberLike {
   why?: string;
   /** 额度用完、在等恢复（ISO 时间）。 */
   cooling?: string;
+  /** 先停用着：模型这个账号用不了（model）、没登录（auth）。停用时 canWork 是 false，why 是原因。 */
+  blocked?: BlockKind;
   /** 工具自己报的额度窗口（limitsAt 是什么时候读到的）；没报过就没有。 */
   limits?: Limit[];
   limitsAt?: string;
@@ -40,7 +42,10 @@ export function allMembers(level: Level = 'safe', report: DetectReport | null = 
     const lim = limitsOf(a.name, now, quota.limits);
     const m = auto.get(a.name);
     const base = { name: a.name, label: agentLabel(a), ...(model ? { model } : {}), tier, agent: a, canTalk: canTalk(a), tierSet: !!a.tierSet, ...(cooling ? { cooling } : {}), ...(lim ? { limits: lim.windows, limitsAt: lim.at } : {}) };
-    if (m) {
+    const blocked = m?.canWork ? blockedOf(a.name, model, now, quota.blocked) : null;
+    if (m && blocked) {
+      out.push({ ...base, kind: m.kind, ...(m.harness ? { harness: m.harness } : {}), canWork: false, why: blocked.note, blocked: blocked.kind });
+    } else if (m) {
       out.push({ ...base, kind: m.kind, ...(m.harness ? { harness: m.harness } : {}), canWork: m.canWork, ...(m.why ? { why: m.why } : {}) });
     } else if (kind === 'app') {
       out.push({ ...base, kind: 'app', canWork: false, why: '桌面程序：打开它亲手接着做，接力台在一旁记账。' });

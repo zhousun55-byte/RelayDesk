@@ -1757,7 +1757,7 @@ function drawLeft() {
               [
                 ...team.map((m) => ({
                   label: memberName(m),
-                  sub: [tr(m.tool), m.name === busy ? T`干活中` : m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : !m.canWork && m.kind !== 'app' ? T`不可调度` : limitsText(m)].filter(Boolean).join(' · '),
+                  sub: [tr(m.tool), m.name === busy ? T`干活中` : m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : m.blocked ? blockedText(m) : !m.canWork && m.kind !== 'app' ? T`不可调度` : limitsText(m)].filter(Boolean).join(' · '),
                   tile: tile(m, 's20', look(m)),
                   run: () => openSettings('members'),
                 })),
@@ -3352,7 +3352,7 @@ function aiRow(r, compact, live) {
   const canAdopt = !!r.summary && live && !adopted && /^\s*[#*\-\s]*结论\s*[：:]/m.test(r.text);
   return h(
     'div',
-    { class: `ai${r.summary ? ' summary' : ''}`, oncontextmenu: (e) => ctx(e, msgMenuItems(r.text)) },
+    { class: `ai${r.summary ? ' summary' : ''}`, oncontextmenu: (e) => ctx(e, [...msgMenuItems(r.text), ...(r.session ? ['-', ...sessionItems(r.session, name)] : [])]) },
     h('span', { class: 'who-tile', 'data-tip': memberByName(r.agent) ? memberTip(memberByName(r.agent)) : name }, tile({ agent: r.agent, label: r.who, model: r.model })),
     h(
       'div',
@@ -3361,7 +3361,7 @@ function aiRow(r, compact, live) {
       ...foldable(h('div', { class: `text doc-md${r.error ? ' err' : ''}`, html: md(r.text) }), r.text),
       canAdopt ? h('div', { class: 'sum-acts' }, h('button', { class: 'btn small primary', 'data-tip': T`把「结论」写进任务的约定`, onclick: (e) => act(e.currentTarget, () => api('/api/talk/adopt', { ts: r.ts }), T`已写进任务的约定`).then(loadTalk) }, T`采纳`)) : null
     ),
-    compact ? null : h('div', { class: 'hover-acts' }, iconBtn(T`复制`, 'copy', () => copyToast(r.text)))
+    compact ? null : h('div', { class: 'hover-acts' }, iconBtn(T`复制`, 'copy', () => copyToast(r.text)), r.session && RESUME_TOOLS.includes(r.session.tool) ? iconBtn(T`在工具里接着说`, 'arrow', () => resumeSession(r.session)) : null)
   );
 }
 
@@ -4241,8 +4241,11 @@ function openLog(s) {
   openTab({ type: 'log', id: s.id, path: s.log });
 }
 
-/** 对话记录属于哪个工具（接力台读得懂的两家）。 */
-const SESSION_TOOL = { claude: 'Claude Code', 'claude-official': 'Claude Code', codex: 'Codex' };
+/** 能回到原来那段对话接着说的工具。 */
+const RESUME_TOOLS = ['claude', 'claude-official', 'codex', 'cursor-agent', 'agy'];
+
+/** 对话记录属于哪个工具（接力台读得懂的四家）。 */
+const SESSION_TOOL = { claude: 'Claude Code', 'claude-official': 'Claude Code', codex: 'Codex', dsh: 'DeepSeek Harness', 'cursor-agent': 'Cursor' };
 
 /** 一棒（或列出来的一段对话）在工具里的对话：看整段对话、回到原工具接着说。 */
 function sessionItems(sess, title) {
@@ -6099,7 +6102,7 @@ function settingsBody(tab, redraw) {
       setRow(T`卡住的那一步交给指挥`, T`派活时，弱模型在同一步上没做下去（换过人还不行，或者没人可换），这一步由指挥的那位做，做完接着交给弱模型。关掉就停在这一步。`, sw('escalate', T`卡住的那一步交给指挥`)),
       setSec(T`对话`),
       setRow(T`接着同一段对话`, T`同一个任务里，一位成员的下一棒顺着它上一棒在工具里的那段话说下去，一个任务在工具里就是一整段对话。关掉则每棒另起一段，token 用得少。`, sw('sameThread', T`接着同一段对话`)),
-      setRow(T`列出工具里的对话`, T`接力页左边列出在这个文件夹里、用 Claude Code 和 Codex 开过的对话，点开是全文。别的文件夹不读。`, sw('showSessions', T`列出工具里的对话`)),
+      setRow(T`列出工具里的对话`, T`接力页左边列出在这个文件夹里、用 Claude Code、Codex、DeepSeek Harness、Cursor 命令行开过的对话，点开是全文。别的文件夹不读。`, sw('showSessions', T`列出工具里的对话`)),
     ];
   }
   const theme = store.get('theme') || '';
@@ -6230,6 +6233,7 @@ function membersPane(redraw) {
         oncontextmenu: (e) =>
           ctx(e, [
             canModel(m) ? { label: T`换模型`, icon: 'sync', run: () => modelMenu(row.querySelector('.mname') || row, m, redraw) } : null,
+            m.blocked ? { label: T`再试一次`, icon: 'sync', run: () => unblockMember(m) } : null,
             m.tierSet ? { label: T`强弱改回自动`, icon: 'sync', run: () => setTier('auto') } : null,
             { label: T`删除`, icon: 'trash', run: () => removeMember(m, row) },
           ]),
@@ -6369,7 +6373,7 @@ function newerNote(m, redraw) {
 function memberNote(m) {
   const name = memberName(m);
   const tool = m.kind === 'app' ? (m.tool && m.tool !== name ? T`${m.tool} 桌面版` : T`桌面程序`) : m.tool && m.tool !== name ? tr(m.tool) : '';
-  const state = m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : !m.canWork && m.kind !== 'app' ? T`不可调度` : limitsText(m);
+  const state = m.cooling ? T`额度用完 · ${tr(m.coolingText)}` : m.blocked ? blockedText(m) : !m.canWork && m.kind !== 'app' ? T`不可调度` : limitsText(m);
   return [tool, TESTED_WORD[m.tested], state, m.update ? T`命令行需要更新` : ''].filter(Boolean).join(' · ');
 }
 
@@ -6405,6 +6409,20 @@ function aheadDay(ts) {
   if (n === 1) return T`明天`;
   if (n > 1 && n < 7) return [T`周日`, T`周一`, T`周二`, T`周三`, T`周四`, T`周五`, T`周六`][d.getDay()];
   return T`${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+/** 先停用着的一位（派活、群聊里工具说模型用不了、没登录）：灰字写哪一种，悬停看原话。 */
+function blockedText(m) {
+  return m.blocked === 'model' ? T`模型用不了` : T`没登录`;
+}
+
+/** 换好模型、重新登录了：清掉停用，下次照常派。 */
+async function unblockMember(m) {
+  const r = await act(null, () => api('/api/members/unblock', { name: m.name }), T`下次照常派给 ${memberName(m)}`);
+  if (r && r.members) {
+    S.st.members = r.members;
+    updateComposer();
+  }
 }
 
 /** 删掉一位：它那一行淡出，下面的行滑上来补位。 */

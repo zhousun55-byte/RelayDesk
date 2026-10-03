@@ -17,7 +17,7 @@ import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, editTask, fileStamp, handoffFileFor, listHandoffFiles, parseReview, readHandoff, readReview, readTask, REVIEW_DIR, reviewFileFor, saveTaskCopy, TASK_REL, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
 import { finalPrompt, planPrompt, reviewPrompt, sideReviewPrompt, splitSideReview, stepPrompt, workPrompt } from '../core/prompts';
 import { sessionFile, sessionToolOf } from '../core/sessions';
-import { detectQuota, fullUntil, markOk, markQuota, noteError, noteLimits, recentErrors, untilText, type Limit } from '../core/quota';
+import { blockMember, detectQuota, failureKind, fullUntil, markOk, markQuota, noteError, noteLimits, recentErrors, untilText, type Limit } from '../core/quota';
 import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, usageTotal, type RunHandle, type RunResult } from '../core/runner';
 import { cause, plain } from '../core/cause';
 import { takeSnapshot } from '../core/snap';
@@ -306,6 +306,8 @@ interface SideOutcome {
   session?: Stint['session'];
   limits?: Limit[];
   quotaText: string;
+  /** 没成时工具自己说的话（不含 AI 说的话）。 */
+  toolSaid?: string;
 }
 
 interface SideJob {
@@ -593,6 +595,8 @@ class GoRunner {
     let error: string | undefined;
     let stopped = false;
     let quotaText = '';
+    /** 没成时工具自己说的话（出错信息、标准错误、日志里的出错行），不含 AI 说的话：认「模型用不了」「没登录」用。 */
+    let toolSaid = '';
     /** 工具自己报出来的实际模型（比如 --model opus 实际是 claude-opus-5-5）。 */
     let actualModel: string | undefined;
     /** 工具自己报的额度窗口：Claude Code 在输出里报，Codex 记在它自己的会话里。 */
@@ -623,6 +627,7 @@ class GoRunner {
         const own = toolLines(logTail(logAbs, 6000));
         quotaText = `${r.error ?? ''}\n${r.stderrTail}\n${own}\n${r.finalText.slice(-2000)}`;
         if (failed) {
+          toolSaid = `${r.error ?? ''}\n${r.stderrTail}\n${own}`;
           const hint = explainFailure(m.harness, `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}`);
           error = r.error ?? (r.timedOut ? (r.late ?? cause.overtime(timeoutMs)) : hint ?? cause.exit(r.code, clip(lastError(r.stderrTail, own), 200)));
         }
@@ -650,6 +655,7 @@ class GoRunner {
         stopped = r.stopped;
         error = r.error ? plain(r.error) : r.timedOut ? cause.overtime(timeoutMs) : undefined;
         quotaText = `${r.error ?? ''}`;
+        toolSaid = r.error ?? '';
         log(`结束（${r.steps} 步${error ? `，${error}` : ''}）`);
       } else {
         throw new RelayError('桌面程序不能派活', 'cannot-drive');
@@ -686,7 +692,10 @@ class GoRunner {
     } else if (error) {
       status = 'failed';
       note = error;
-      noteError(m.name);
+      // 模型用不了、没登录：换个时间再试也一样，先停用这一位（换了模型、重新登录、过一阵再算）
+      const kind = failureKind(toolSaid);
+      if (kind) log(`先停用这一位：${blockMember(m.name, kind, toolSaid, m.model).note}`);
+      else noteError(m.name);
     } else {
       markOk(m.name);
     }
@@ -859,6 +868,7 @@ class GoRunner {
             ...(r.session ? { session: { tool: spec.id, id: r.session } } : {}),
             limits: r.limits ?? spec.limits?.(root, Date.parse(startedAt)) ?? undefined,
             quotaText: `${r.error ?? ''}\n${r.stderrTail}\n${own}\n${r.finalText.slice(-2000)}`,
+            ...(failed ? { toolSaid: `${r.error ?? ''}\n${r.stderrTail}\n${own}` } : {}),
           };
         }
         if (m.kind === 'api' && m.agent.api) {
@@ -884,7 +894,7 @@ class GoRunner {
           }
           const tokens = usageTotal(logText) ?? undefined;
           const error = r.error ? plain(r.error) : r.timedOut ? cause.overtime(timeoutMs) : undefined;
-          return { finalText: r.finalText, stopped: r.stopped, ...(error ? { error } : {}), ...(tokens ? { tokens } : {}), quotaText: r.error ?? '' };
+          return { finalText: r.finalText, stopped: r.stopped, ...(error ? { error } : {}), ...(tokens ? { tokens } : {}), quotaText: r.error ?? '', ...(r.error ? { toolSaid: r.error } : {}) };
         }
         throw new RelayError('桌面程序不能派活', 'cannot-drive');
       } catch (e) {
@@ -947,7 +957,9 @@ class GoRunner {
     } else if (r.error) {
       status = 'failed';
       note = r.error;
-      noteError(m.name);
+      const kind = failureKind(r.toolSaid ?? '');
+      if (kind) blockMember(m.name, kind, r.toolSaid ?? '', m.model);
+      else noteError(m.name);
     } else {
       markOk(m.name);
       if (parts.size < ids.length) note = `边做边复核：第 ${ids.filter((x) => !parts.has(x)).join('、')} 棒没写出结论，留给终审`;
@@ -1021,7 +1033,8 @@ class GoRunner {
       if (this.opts.who) {
         m = all.find((x) => x.name === this.opts.who) ?? null;
         if (!m) throw new RelayError(`名单里没有「${this.opts.who}」`, 'no-agent');
-        if (!m.canWork) throw new RelayError(`${nameOf(m)} 不能派活：${plain(m.why ?? '不能用')}`, 'cannot-drive');
+        // 先停用着的（模型用不了、没登录）：点名派给它就是要再试一次，照派
+        if (!m.canWork && !m.blocked) throw new RelayError(`${nameOf(m)} 不能派活：${plain(m.why ?? '不能用')}`, 'cannot-drive');
         // 网页上在等额度的点不了；命令行指名也一样先拦下（它其实已经恢复了就加 --force）
         if (m.cooling && !this.opts.force) throw new RelayError(`${nameOf(m)} ${cause.quota(m.cooling)}；确定已经恢复了就加 --force`, 'cooling');
       } else {
