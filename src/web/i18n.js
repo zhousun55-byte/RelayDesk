@@ -578,6 +578,8 @@ const SRV_WORD = {
   '手动接着做时打开它。': 'Opened when continuing by hand.',
   '检查命令和这台电脑上确认过的不一样（可能是项目自带的，或者被改过），没有执行。到「设置 → 项目」看一眼再保存，或运行 relay config --gate 定下来。':
     "The check command differs from the one confirmed on this computer (it may have come with the project, or been changed), so it didn't run. Review it in Settings → Project and save, or set it with relay config --gate.",
+  '这个文件夹还没在接力台里打开过：点左边「项目」旁的 +，选它。': "This folder hasn't been opened in RelayDesk yet: click + next to Projects on the left and choose it.",
+  '这个文件夹不是项目，不读里面的文件。': "This folder isn't a project, so its files aren't read.",
   '这一位的打开命令不是 open -a 程序 {{dir}} 的写法，没有执行。到「设置 → 成员」里改一下。': "This member's open command isn't in the open -a App {{dir}} form, so it didn't run. Fix it in Settings → Members.",
   '最后一问还没有两份回答，用不着总结': 'The last question has fewer than two answers; nothing to summarize',
   '这条总结已经采纳过了': 'This summary was already adopted',

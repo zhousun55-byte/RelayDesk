@@ -11,9 +11,10 @@ const DIR_PLACEHOLDERS = ['{{dir}}', '{{worktree}}'];
 
 /**
  * 桌面程序的打开命令是网页上一点就交给 shell 执行的：只认 open -a 程序 {{dir}} 这一种写法
- * （程序名带空格用引号；{{worktree}} 是旧写法）。程序名里不许有 shell 会展开的符号，别的写法一律不认。
+ * （程序名带空格用引号；{{worktree}} 是旧写法）。程序名里不许有 shell 会展开的符号，也不许有 /：
+ * open -a 按名字找装好的程序，给一个路径就能拉起随便丢在哪儿的程序包。别的写法一律不认。
  */
-const OPEN_CMD_RE = /^open\s+-a\s+(?:"[^"$`\\]+"|'[^']+'|[^\s"'$`\\;&|<>(){}[\]*?!#~]+)\s+(["']?)\{\{(?:dir|worktree)\}\}\1$/;
+const OPEN_CMD_RE = /^open\s+-a\s+(?:"[^"$`\\/]+"|'[^'/]+'|[^\s"'$`\\;&|<>(){}[\]*?!#~/]+)\s+(["']?)\{\{(?:dir|worktree)\}\}\1$/;
 
 export function isOpenCommand(cmd: string | undefined): boolean {
   return typeof cmd === 'string' && OPEN_CMD_RE.test(cmd.trim());
@@ -48,6 +49,8 @@ export function registryPath(): string {
 /** 名单文件没变就不重读（接力台每几秒刷新一次状态，时间线里每一行都要查显示名）。 */
 let cache: { path: string; mtimeMs: number; size: number; reg: AgentsRegistry } | null = null;
 
+const REGISTRY_MAX = 512 * 1024;
+
 export function loadRegistry(): AgentsRegistry {
   const p = registryPath();
   let st: fs.Stats;
@@ -57,6 +60,8 @@ export function loadRegistry(): AgentsRegistry {
     return { agents: [] };
   }
   if (cache && cache.path === p && cache.mtimeMs === st.mtimeMs && cache.size === st.size) return copyOf(cache.reg);
+  // 正常的名单几 KB：大得离谱的当坏了（不然塞几万位成员进来，每次刷新状态都要花几秒对重名）
+  if (st.size > REGISTRY_MAX) throw new RelayError(`成员名单 ${p} 有 ${Math.round(st.size / 1024)} KB，大得不正常，像是被改坏了`, 'bad-registry');
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(p, 'utf8'));

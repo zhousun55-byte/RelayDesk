@@ -261,6 +261,9 @@ export interface BadLine {
  * 读账本。坏掉的行不让整个接力台打不开，但也不悄悄跳过：记下是第几行，验收会说「没法验收」
  * （坏的可能正好是一次退回、一份复核，跳过了结论就不对了）。
  */
+/** 账本一行最长多少字：正常一行几 KB。 */
+const LINE_MAX = 512 * 1024;
+
 export function readLedgerFull(root: string): { events: LedgerEvent[]; bad: BadLine[] } {
   let text: string;
   try {
@@ -272,6 +275,11 @@ export function readLedgerFull(root: string): { events: LedgerEvent[]; bad: BadL
   const bad: BadLine[] = [];
   text.split('\n').forEach((line, i) => {
     if (!line.trim()) return;
+    // 正常的一行几 KB（实测最长 9 KB）：超长的当坏行不解析，不然塞一行几十 MB 进来，网页每次刷新都要白白解析一遍
+    if (line.length > LINE_MAX) {
+      bad.push({ line: i + 1, text: line.slice(0, 120) });
+      return;
+    }
     try {
       const ev = JSON.parse(line) as LedgerEvent;
       if (ev && typeof ev === 'object' && typeof ev.type === 'string') events.push(ev);
@@ -309,6 +317,8 @@ export interface LedgerView {
 const SNAP_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const okSnap = (x: unknown): boolean => typeof x === 'string' && SNAP_RE.test(x);
 const okStintId = (x: unknown): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x > 0;
+/** 棒号是一个接一个编的：新出现的棒号比已有的最大号跳得太远，就是改出来的，不采信（不然下一棒的号会编到安全整数外面去）。 */
+const STINT_GAP = 1000;
 
 /** 把账本折成现在的样子。 */
 export function viewLedger(events: LedgerEvent[], bad: BadLine[] = []): LedgerView {
@@ -316,6 +326,7 @@ export function viewLedger(events: LedgerEvent[], bad: BadLine[] = []): LedgerVi
   let init: InitEvent | null = null;
   let base: string | null = null;
   let lastRollback: RollbackEvent | null = null;
+  let maxId = 0;
   for (const ev of events) {
     if (ev.type === 'init') {
       if (!okSnap(ev.snap)) continue;
@@ -324,6 +335,8 @@ export function viewLedger(events: LedgerEvent[], bad: BadLine[] = []): LedgerVi
     } else if (ev.type === 'stint') {
       if (!okStintId(ev.stint?.id)) continue;
       const prev = byId.get(ev.stint.id);
+      if (!prev && ev.stint.id > maxId + STINT_GAP) continue;
+      maxId = Math.max(maxId, ev.stint.id);
       const s = { ...ev.stint };
       if (prev?.rolledBack) s.rolledBack = true;
       byId.set(s.id, s);

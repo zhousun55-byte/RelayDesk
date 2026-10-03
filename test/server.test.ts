@@ -607,6 +607,8 @@ test('还没有项目（从小程序启动，停在家目录）：网页请你�
   fs.writeFileSync(path.join(s.home, '私人笔记.txt'), '不该出现在网页上');
   const ui = await startUi(s);
   try {
+    // 小程序在家目录拉起接力台（这里接力台已经开着：relay ui 家目录，网页就认这个文件夹）
+    s.relay(['ui', s.home, '--port', String(ui.port), '--no-open']);
     const home = `?dir=${encodeURIComponent(s.home)}`;
     const st = await ui.call(`/api/state${home}`);
     assert.equal(st.json.project.pick, true);
@@ -688,6 +690,39 @@ test('网页接口：名单文件被直接改成别的打开命令，「打开�
     assert.equal((await ui.call('/api/workers/save', { agent: { name: 'evil2', kind: 'app', tier: 'weak', cmd: `touch ${mark} # {{dir}}` } })).status, 400);
     assert.ok(JSON.parse(fs.readFileSync(regPath, 'utf8')).agents.some((a: { name: string }) => a.name === 'evil'), '名单里这一位还在，到设置里改');
     for (const id of ['+1', '0x1', '1e0', ' 1']) assert.equal((await ui.call(`/api/stint${q(s)}&id=${encodeURIComponent(id)}`)).json.code, 'bad-number', id);
+  } finally {
+    ui.child.kill();
+  }
+});
+
+test('网页接口只对打开过的文件夹做事：别的路径列不了、读不了、接入不了（2026-10-03 红蓝对抗：拿任意 dir 就能读 /etc/passwd、往任意目录写）', async () => {
+  const s = sandbox('srv-known');
+  const ui = await startUi(s);
+  const other = fs.realpathSync(fs.mkdtempSync(path.join(path.dirname(s.repo), 'other-')));
+  fs.writeFileSync(path.join(other, 'secret.txt'), '机密\n');
+  fs.mkdirSync(path.join(s.home, '.ssh'), { recursive: true });
+  fs.writeFileSync(path.join(s.home, '.ssh', 'id_test'), '私钥\n');
+  const at = (d: string) => `?dir=${encodeURIComponent(d)}`;
+  try {
+    for (const p of [`/api/tree${at(other)}`, `/api/file${at(other)}&path=secret.txt`, `/api/state${at(other)}`, `/api/raw${at(other)}&path=secret.txt`]) {
+      const r = await ui.call(p);
+      assert.equal(r.status, 400, p);
+      assert.equal(r.json.code, 'dir-not-open', p);
+    }
+    const init = await ui.call('/api/init', { dir: other });
+    assert.equal(init.json.code, 'dir-not-open');
+    assert.equal(fs.existsSync(path.join(other, '.relay')), false, '没往那个文件夹里写东西');
+
+    // 接力台开着的时候在终端里 relay ui 那个文件夹：记成打开过，网页就认它了
+    s.relay(['ui', other, '--port', String(ui.port), '--no-open']);
+    assert.equal((await ui.call(`/api/tree${at(other)}`)).status, 200);
+    assert.equal((await ui.call('/api/init', { dir: other })).status, 200);
+
+    // 从「接力台」小程序启动时停在家目录：家目录里的文件不读
+    s.relay(['ui', s.home, '--port', String(ui.port), '--no-open']);
+    const key = await ui.call(`/api/file${at(s.home)}&path=${encodeURIComponent('.ssh/id_test')}`);
+    assert.equal(key.json.code, 'not-project', JSON.stringify(key.json));
+    assert.deepEqual((await ui.call(`/api/tree${at(s.home)}`)).json.files, []);
   } finally {
     ui.child.kill();
   }

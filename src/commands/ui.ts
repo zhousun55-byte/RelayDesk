@@ -4,7 +4,7 @@ import { Command } from 'commander';
 import fs from 'node:fs';
 import { errorMessage } from '../core/errors';
 import { augmentPath } from '../core/launch';
-import { lastProject, rememberProject } from '../core/memory';
+import { lastProject, rememberOpened, rememberProject } from '../core/memory';
 import { anyTalkBusy } from '../core/talk';
 import { voteBusy } from '../core/vote';
 import { goBusy, reapLeftover, stopAllGo } from '../ops/go';
@@ -56,13 +56,22 @@ export function uiCommand(): Command {
       guardProcess();
       let dir = folder ? path.resolve(folder) : findRoot();
       if (!folder && !fs.existsSync(path.join(dir, '.relay', 'journal.jsonl')) && lastProject()) dir = lastProject()!;
+      // 网页接口只认打开过的文件夹：接入过的记进最近的项目，还没接入的记成打开过（接力台已经在跑时也认得它）
       if (fs.existsSync(path.join(dir, '.relay', 'journal.jsonl'))) rememberProject(dir);
+      else rememberOpened(dir);
       const q = `?dir=${encodeURIComponent(dir)}`;
       const wanted = Number(opts.port) || 7388;
       // 由「接力台」小程序拉起的：它在后台看着，退出了会重新拉起（见 ops/keeper.ts）。
       const keeper = keeperMode();
 
       for (let port = wanted; port < wanted + 10; port++) {
+        // 这个端口上已经是接力台：打开网页就走。先问再起服务——起了用不上的服务会去盯所有项目，命令也退不出来
+        if (await pingRelay(port)) {
+          const url = `http://127.0.0.1:${port}/${q}`;
+          ok(`接力台已经在运行：${url}`);
+          if (opts.open !== false) openBrowser(url);
+          return;
+        }
         let stopping = false;
         const stop = () => {
           if (stopping) return;
@@ -110,12 +119,7 @@ export function uiCommand(): Command {
         } catch (e) {
           const code = (e as NodeJS.ErrnoException).code;
           if (code !== 'EADDRINUSE') throw e;
-          if (await pingRelay(port)) {
-            const url = `http://127.0.0.1:${port}/${q}`;
-            ok(`接力台已经在运行：${url}`);
-            if (opts.open !== false) openBrowser(url);
-            return;
-          }
+          unwatchAll();
           warn(`端口 ${port} 被别的程序占着，换一个试试……`);
         }
       }

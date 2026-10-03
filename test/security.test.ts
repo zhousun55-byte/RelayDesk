@@ -147,3 +147,80 @@ test('桌面程序的打开命令只认 open -a 程序 {{dir}}：带 shell 写�
   // 命令行成员的启动命令不经过 shell：Windows 路径里的反斜杠照样能存（「再加一位」会照抄它）
   assert.equal(registry.normalizeAgent({ name: 'w', kind: 'cli', tier: 'weak', cmd: 'C:\\Users\\me\\claude.exe' }).cmd, 'C:\\Users\\me\\claude.exe');
 });
+
+// ---- 2026-10-03 第二轮（GLM-5.3 红蓝对抗）复核后的反例 ----
+
+test('账本：塞一棒 2^53-1 的假棒号，下一棒照常编成 2（以前编到安全整数外面，写进去的棒从此看不见）；一行几十 MB 的当坏行不解析', () => {
+  const { root } = project('stint-gap');
+  const T = '2026-10-03T12:00:00.000Z';
+  const head = ledger.loadLedger(root).init!.snap;
+  const lines = [
+    { type: 'stint', ts: T, stint: { id: 1, kind: 'work', status: 'handed', startedAt: T, endedAt: T, from: head, to: head } },
+    { type: 'stint', ts: T, stint: { id: Number.MAX_SAFE_INTEGER, kind: 'work', status: 'handed', startedAt: T, endedAt: T, from: head, to: head } },
+  ];
+  const jp = path.join(root, '.relay', 'journal.jsonl');
+  fs.appendFileSync(jp, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const v = ledger.loadLedger(root);
+  assert.deepEqual(v.stints.map((s) => s.id), [1], '跳得离谱的棒号不采信');
+  assert.equal(ledger.nextStintId(v), 2);
+
+  fs.appendFileSync(jp, JSON.stringify({ type: 'base', ts: T, snap: head, pad: 'x'.repeat(600 * 1024) }) + '\n');
+  const full = ledger.readLedgerFull(root);
+  assert.equal(full.bad.length, 1, '超长的一行记成坏行');
+  assert.equal(full.bad[0].text.length, 120);
+});
+
+test('桌面程序的打开命令：程序名不许带路径（open -a /某处/evil.app 能拉起随便丢在哪儿的程序包）；成员名单大得离谱当坏了', () => {
+  for (const bad of ['open -a /tmp/evil.app {{dir}}', 'open -a "/tmp/evil.app" {{dir}}', "open -a '/tmp/evil.app' {{dir}}", 'open -a ../evil {{dir}}']) {
+    assert.equal(registry.isOpenCommand(bad), false, bad);
+  }
+  assert.equal(registry.isOpenCommand('open -a "DeepSeek Harness" {{dir}}'), true);
+  const p = registry.registryPath();
+  const keep = fs.readFileSync(p, 'utf8');
+  try {
+    const agents = Array.from({ length: 6000 }, (_, i) => ({ name: `m${i}`, label: `M${i}`, kind: 'cli', cmd: 'codex', tier: 'weak', harness: 'codex' }));
+    fs.writeFileSync(p, JSON.stringify({ agents }));
+    assert.throws(() => registry.loadRegistry(), (e: { code?: string }) => e.code === 'bad-registry');
+  } finally {
+    fs.writeFileSync(p, keep);
+  }
+  assert.equal(registry.loadRegistry().agents.length, 1, '换回正常的名单又能读');
+});
+
+test('快照仓库：config 里写上 sha256、换掉存法，或者 HEAD 换成文件夹，下次用之前自己理回来，以前的快照都在', () => {
+  const { root, write } = project('snap-values');
+  const s1 = snap.takeSnapshot(root, '一');
+  const dir = path.join(root, '.relay', 'snapshots');
+  fs.writeFileSync(path.join(dir, 'config'), '[core]\n\trepositoryformatversion = 1\n\tfilemode = true\n\tbare = false\n[extensions]\n\tobjectformat = sha256\n\trefstorage = reftable\n');
+  write('a.txt', '1\n');
+  const s2 = snap.takeSnapshot(root, '二');
+  assert.equal(s2.changed, true, '以前 sha256 留在 config 里，git 认不出这个仓库');
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'config'), 'utf8'), /sha256|reftable|bare = false/);
+
+  fs.rmSync(path.join(dir, 'HEAD'));
+  fs.mkdirSync(path.join(dir, 'HEAD'));
+  write('b.txt', '2\n');
+  const s3 = snap.takeSnapshot(root, '三');
+  assert.equal(s3.changed, true, '以前 HEAD 是文件夹时一直报「不是 git 仓库」');
+  assert.ok(fs.statSync(path.join(dir, 'HEAD')).isFile());
+  assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('HEAD.broken-')), '那个文件夹挪到一边，不删');
+  assert.ok(snap.snapExists(root, s1.sha) && snap.snapExists(root, s2.sha));
+});
+
+test('网页接口认的文件夹：接入过的、最近的、打开过的（同一个文件夹换种写法也认）；别的不认', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const memory = require('../src/core/memory') as typeof import('../src/core/memory');
+  const { root } = project('known-proj');
+  const other = tmpDir('known-other');
+  assert.equal(memory.knownDir(root), true, '接入过的项目');
+  assert.equal(memory.knownDir(other), false);
+  assert.equal(memory.knownDir(other, other), true, '这个接力台启动时给的那个');
+  memory.rememberOpened(other);
+  const link = path.join(tmpDir('known-link'), 'to-other');
+  fs.symlinkSync(other, link);
+  assert.equal(memory.knownDir(link), true, '经过链接的写法认成同一个');
+  memory.rememberProject(root);
+  assert.deepEqual(memory.loadMemory().opened, [other], '记最近的项目不会把打开过的冲掉');
+  memory.forgetProject(other);
+  assert.equal(memory.knownDir(other), false);
+});

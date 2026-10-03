@@ -15,7 +15,7 @@ import { projectSessions, readSession, resumeHow, sessionToolOf } from '../core/
 import { listSkills } from '../core/skills';
 import { loadLedger, markReview, pendingReviews } from '../core/ledger';
 import { allMembers, orderMembers } from '../core/members';
-import { forgetProject, lastProject, loadMemory, rememberProject } from '../core/memory';
+import { forgetProject, knownDir, lastProject, loadMemory, rememberOpened, rememberProject } from '../core/memory';
 import { appNameOf, llmName, toolName } from '../core/names';
 import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
 import { isInside } from '../core/paths';
@@ -306,7 +306,18 @@ export function createServer(opts: ServerOptions): http.Server {
   };
   if (opts.watch) for (const r of liveProjects()) watchOn(r);
   const fallbackDir = () => lastProject() ?? opts.defaultDir;
-  const dirOf = (q: URLSearchParams, body: Record<string, unknown>) => resolveDir(str(body.dir) ?? q.get('dir') ?? undefined, fallbackDir());
+  // 网页接口只对打开过的文件夹做事（接入过的、最近的、选择器选过的、relay ui 打开的，见 knownDir）
+  const openDir = (raw: string | null | undefined): string => {
+    const dir = resolveDir(raw ?? undefined, fallbackDir());
+    if (!knownDir(dir, opts.defaultDir)) throw new RelayError('这个文件夹还没在接力台里打开过：点左边「项目」旁的 +，选它。', 'dir-not-open');
+    return dir;
+  };
+  const dirOf = (q: URLSearchParams, body: Record<string, unknown>) => openDir(str(body.dir) ?? q.get('dir'));
+  // 家目录、桌面这种不是项目的大文件夹（从「接力台」小程序启动时停在这里）：不读里面的文件
+  const fileRoot = (root: string): string => {
+    if (pickFolder(root, !!loadLedger(root).init)) throw new RelayError('这个文件夹不是项目，不读里面的文件。', 'not-project');
+    return root;
+  };
 
   const get: Record<string, Handler> = {
     '/api/ping': () => ({ app: 'relay', version: VERSION }),
@@ -363,7 +374,7 @@ export function createServer(opts: ServerOptions): http.Server {
       const to = s.to ?? takeSnapshot(root, '看改动').sha;
       return { files: snapChanges(root, s.from, to), diff: snapDiff(root, s.from, to, file) };
     },
-    '/api/log': (q) => ({ text: readRunLog(dirOf(q, {}), q.get('path') ?? '') }),
+    '/api/log': (q) => ({ text: readRunLog(fileRoot(dirOf(q, {})), q.get('path') ?? '') }),
     '/api/brief': (q) => {
       const root = dirOf(q, {});
       try {
@@ -397,7 +408,7 @@ export function createServer(opts: ServerOptions): http.Server {
       // 家目录这种不是项目的：不列里面的文件
       return pickFolder(root, !!loadLedger(root).init) ? { files: [], truncated: false } : projectFiles(root);
     },
-    '/api/file': (q) => readProjectFile(dirOf(q, {}), q.get('path') ?? ''),
+    '/api/file': (q) => readProjectFile(fileRoot(dirOf(q, {})), q.get('path') ?? ''),
     '/api/detect': () => ({ report: loadDetected(), members: memberViews(), detecting: !!detecting }),
     '/api/models': (q) => modelOptions(q.get('name') ?? ''),
     // 这个项目能用的技能（输入框打 / 挑）
@@ -701,6 +712,7 @@ export function createServer(opts: ServerOptions): http.Server {
         throw new RelayError(e.message ?? '弹不出选文件夹的对话框', e.code === 'no-picker' ? 'no-picker' : 'error');
       });
       if (!picked) throw new RelayError('没有选文件夹。', 'cancelled');
+      rememberOpened(picked);
       return { dir: picked };
     },
     '/api/forget': (_q, b) => {
@@ -726,14 +738,14 @@ export function createServer(opts: ServerOptions): http.Server {
         }
         // 传文件：请求体就是文件本身，边收边写进项目的 .relay/uploads
         if (req.method === 'POST' && url.pathname === '/api/upload') {
-          const root = resolveDir(url.searchParams.get('dir') ?? undefined, fallbackDir());
+          const root = openDir(url.searchParams.get('dir'));
           requireProject(root);
           if (Number(req.headers['content-length'] ?? 0) > UPLOAD_MAX) throw new RelayError(`文件太大，上限 ${UPLOAD_MAX / 1024 / 1024} MB。`, 'too-large');
           send(res, 200, { ok: true, path: await saveUpload(root, url.searchParams.get('name') ?? '', req) });
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/raw') {
-          serveRaw(resolveDir(url.searchParams.get('dir') ?? undefined, fallbackDir()), url.searchParams.get('path') ?? '', res);
+          serveRaw(fileRoot(openDir(url.searchParams.get('dir'))), url.searchParams.get('path') ?? '', res);
           return;
         }
         if (url.pathname.startsWith('/api/')) {
@@ -815,7 +827,7 @@ function serveStatic(pathname: string, res: http.ServerResponse): void {
     // 字体很大又不常变：浏览器记住就行（换字体时改网址后面的 ?v=）；别的每次都拿最新的
     'Cache-Control': ext === '.woff2' ? 'public, max-age=31536000, immutable' : 'no-store',
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   });
   res.end(fs.readFileSync(file));
 }

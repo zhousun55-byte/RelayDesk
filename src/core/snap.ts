@@ -133,11 +133,14 @@ export function hasSnapRepo(root: string): boolean {
 /**
  * 快照仓库在项目的 .relay 里：干活的 AI、克隆来的仓库都改得到它的 config。
  * config 里的 filter、diff 驱动、别名、include 都能让 git add / checkout 去执行命令，所以每次用之前整份对一遍，
- * 只留 git 建库时自己写的这几项，别的都去掉。接力台从来不往这份 config 里写别的。
+ * 只留 git 建库时自己写的这几项、而且值得是建库时会写的那几种，别的都去掉（去掉的按 git 的默认值算）。
+ * 值也要管：写上 sha256（对象其实是 sha1）、换一种引用的存法，git 就认不得这个仓库，快照、退回、看改动全都用不了。
+ * 接力台从来不往这份 config 里写别的。
  */
-const SNAP_CONFIG_KEEP: Record<string, Set<string>> = {
-  core: new Set(['repositoryformatversion', 'filemode', 'bare', 'ignorecase', 'precomposeunicode', 'symlinks', 'logallrefupdates']),
-  extensions: new Set(['objectformat', 'refstorage']),
+const BOOL = /^(true|false)$/i;
+const SNAP_CONFIG_KEEP: Record<string, Record<string, RegExp>> = {
+  core: { repositoryformatversion: /^[01]$/, filemode: BOOL, bare: /^true$/i, ignorecase: BOOL, precomposeunicode: BOOL, symlinks: BOOL, logallrefupdates: BOOL },
+  extensions: { objectformat: /^sha1$/i, refstorage: /^files$/i },
 };
 
 function tidySnapConfig(dir: string): void {
@@ -149,7 +152,7 @@ function tidySnapConfig(dir: string): void {
     return;
   }
   const out: string[] = [];
-  let keep: Set<string> | null = null;
+  let keep: Record<string, RegExp> | null = null;
   for (const line of cur.split('\n')) {
     const sec = line.match(/^\s*\[\s*([A-Za-z0-9.-]+)\s*\]\s*$/);
     if (sec) {
@@ -162,7 +165,8 @@ function tidySnapConfig(dir: string): void {
       continue;
     }
     const kv = line.match(/^\s*([A-Za-z][A-Za-z0-9-]*)\s*=\s*([^\n]*?)\s*$/);
-    if (keep && kv && keep.has(kv[1].toLowerCase()) && !/[\\"]/.test(kv[2])) out.push(`\t${kv[1].toLowerCase()} = ${kv[2]}`);
+    const ok = kv && keep?.[kv[1].toLowerCase()];
+    if (kv && ok && ok.test(kv[2])) out.push(`\t${kv[1].toLowerCase()} = ${kv[2]}`);
   }
   const next = out.join('\n') + '\n';
   if (next !== cur) fs.writeFileSync(p, next);
@@ -173,7 +177,9 @@ function repairSnapHead(dir: string): void {
   const p = path.join(dir, 'HEAD');
   let head = '';
   try {
-    head = fs.readFileSync(p, 'utf8').trim();
+    // 被换成了同名的文件夹：git 就认不出这是仓库了。挪到一边（不删，里面的东西还在），下面写回一个正常的 HEAD
+    if (fs.statSync(p).isDirectory()) fs.renameSync(p, `${p}.broken-${Date.now()}`);
+    else head = fs.readFileSync(p, 'utf8').trim();
   } catch {
     return;
   }
