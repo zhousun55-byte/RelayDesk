@@ -1,0 +1,81 @@
+name: 安装实测
+
+# 在干净的 Mac 和 Windows 上，照用户的做法从下载包装一遍：解开、双击安装文件、接力台在后台起来、再去掉。
+# 发布流程只验了包里的启动器能起来；这里验的是双击的那个安装文件本身。推 v 标签时跑，也能手动跑；不拦发布。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/pack.js
+      - name: 解开（和右键「全部解压缩」一样）
+        shell: pwsh
+        run: Expand-Archive -Path release/RelayDesk-windows.zip -DestinationPath "$env:RUNNER_TEMP\pkg"
+      - name: 双击 install-windows.cmd
+        shell: cmd
+        run: call "%RUNNER_TEMP%\pkg\RelayDesk\install-windows.cmd" < NUL
+      - name: 开始菜单和登录启动里有「接力台」，接力台在跑
+        shell: pwsh
+        run: |
+          foreach ($f in 'Programs', 'Startup') {
+            $lnk = Join-Path ([Environment]::GetFolderPath($f)) '接力台.lnk'
+            if (-not (Test-Path $lnk)) { throw "$f 里没有接力台" }
+          }
+          $p = Invoke-RestMethod http://127.0.0.1:7388/api/ping -TimeoutSec 5
+          if ($p.app -ne 'relay') { throw '接力台没在跑' }
+      - name: 去掉
+        shell: cmd
+        run: call "%RUNNER_TEMP%\pkg\RelayDesk\install-windows.cmd" --remove < NUL
+      - name: 去掉以后
+        shell: pwsh
+        run: |
+          Start-Sleep 5
+          foreach ($f in 'Programs', 'Startup') {
+            if (Test-Path (Join-Path ([Environment]::GetFolderPath($f)) '接力台.lnk')) { throw "$f 里还有接力台" }
+          }
+          $up = $true
+          try { Invoke-RestMethod http://127.0.0.1:7388/api/ping -TimeoutSec 2 | Out-Null } catch { $up = $false }
+          if ($up) { throw '去掉以后接力台还在跑' }
+
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/pack.js
+      - name: 解开（和在访达里双击一样用 ditto）
+        run: ditto -x -k release/RelayDesk-mac.zip "$RUNNER_TEMP/pkg"
+      - name: 双击「安装接力台（Mac）.command」
+        env:
+          RELAY_NO_BROWSER: '1'
+        run: zsh "$RUNNER_TEMP/pkg/RelayDesk/安装接力台（Mac）.command"
+      - name: 「应用程序」里有接力台，登录时启动，接力台在跑
+        run: |
+          test -d "/Applications/接力台.app"
+          test -f "$HOME/Library/LaunchAgents/local.relay.login.plist"
+          curl -sf -m 5 http://127.0.0.1:7388/api/ping | grep -q '"app":"relay"'
+      - name: 去掉
+        run: zsh "$RUNNER_TEMP/pkg/RelayDesk/scripts/make-desktop-app.sh" --remove
+      # 请小程序退出要发 Apple Event，机器上没人点「允许」，接力台可能还开着：只核对程序和登录启动去掉了，再自己关掉它
+      - name: 去掉以后
+        run: |
+          test ! -d "/Applications/接力台.app"
+          test ! -f "$HOME/Library/LaunchAgents/local.relay.login.plist"
+          curl -s -m 3 -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:7388/api/quit || true

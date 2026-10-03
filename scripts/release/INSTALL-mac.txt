@@ -16,7 +16,8 @@
 3. 窗口里出现「装好了」，「应用程序」里就多了一个「接力台」，浏览器会自己打开网页。这个终端窗口可以关掉。
    以后在启动台里点「接力台」就行；它在后台运行，程序坞里没有图标，登录电脑时自己启动。
 4. 双击还是打不开时，用终端装：打开「终端」，输入 zsh 和一个空格，再把「安装接力台（Mac）.command」拖进终端窗口，按回车。
-5. 不想要了：同第 4 条，拖进去之后再输入一个空格和 --remove，按回车。
+5. 以后更新：下载新的包，解压后替换原来的 RelayDesk 文件夹，再双击一次「安装接力台（Mac）.command」。
+6. 不想要了：同第 4 条，拖进去之后再输入一个空格和 --remove，按回车。
 
 三、用起来
 1. 左边「项目」旁的 + 选一个项目文件夹，在中间写一句要做什么，回车。
@@ -38,6 +39,7 @@ You need: Node.js 20 or newer (https://nodejs.org), git, and at least one AI cod
 1. Move the RelayDesk folder somewhere it will stay, for example Documents.
 2. Double-click "安装接力台（Mac）.command" (install RelayDesk). If macOS says it can't verify the developer, click Done, then "Open Anyway" at the bottom of System Settings → Privacy & Security, and double-click again.
 3. When it says it's done, a RelayDesk app (named 接力台) is in Applications and the web page opens. It runs in the background with no Dock icon and starts at login.
-4. To remove it: open Terminal, type "zsh ", drag the .command file in, add " --remove" and press Return.
+4. To update, download the new package, replace the RelayDesk folder and double-click the .command file again.
+5. To remove it: open Terminal, type "zsh ", drag the .command file in, add " --remove" and press Return.
 
 Logs: ~/.relay/ui.log

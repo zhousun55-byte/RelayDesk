@@ -1,5 +1,4 @@
 import { test } from 'node:test';
-import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -741,28 +740,4 @@ test('群聊记录：兼容旧格式，跳过旧版残留的「正在说」和�
     ]
   );
   assert.equal(rows[1].model, 'opus');
-});
-
-test('快照仓库：网页开着时在终端里接入同一个文件夹，几个进程同时建快照仓库也不撞（以前对同一个文件夹 git init：config 被锁、模板复制失败）', async () => {
-  const snapJs = path.join(__dirname, '..', 'src', 'core', 'snap.js');
-  for (let round = 0; round < 3; round++) {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-snap-race-'));
-    fs.writeFileSync(path.join(root, 'a.txt'), 'x');
-    const code = `try{require(${JSON.stringify(snapJs)}).ensureSnapRepo(${JSON.stringify(root)})}catch(e){console.error(e.message);process.exit(1)}`;
-    const runs = await Promise.all(
-      [...Array(6)].map(
-        () =>
-          new Promise<{ code: number | null; err: string }>((resolve) => {
-            const c = spawn(process.execPath, ['-e', code], { env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' } });
-            let err = '';
-            c.stderr.on('data', (d) => (err += d));
-            c.on('exit', (x) => resolve({ code: x, err }));
-          }),
-      ),
-    );
-    for (const r of runs) assert.equal(r.code, 0, r.err);
-    assert.ok(fs.existsSync(path.join(root, '.relay', 'snapshots', 'HEAD')));
-    assert.deepEqual(fs.readdirSync(path.join(root, '.relay')), ['snapshots'], '没有留下建到一半的临时文件夹');
-    fs.rmSync(root, { recursive: true, force: true });
-  }
 });

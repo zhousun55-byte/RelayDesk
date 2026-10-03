@@ -375,3 +375,14 @@ test('成员名单的额度：第二行写「5 小时 5% · 一周 72%」，悬�
   assert.equal(limitsText({}), '');
   assert.equal(limitsTip({}), null);
 });
+
+test('弹不出选文件夹的对话框时给的那行命令：路径里有空格、单引号也照原样传给 relay ui（Mac/Linux 单引号，Windows 双引号）', () => {
+  const ctx: Record<string, unknown> = {};
+  runWeb(`${pick('openCmd')}\nresult = openCmd;`, ctx);
+  const openCmd = ctx.result as (cli: string, dir: string, win: boolean, port?: string) => string;
+  assert.equal(openCmd('/opt/relay/dist/src/cli.js', "/home/me/my project's", false), `node '/opt/relay/dist/src/cli.js' ui '/home/me/my project'\\''s'`);
+  assert.equal(openCmd('C:\\RelayDesk\\dist\\src\\cli.js', 'C:\\Users\\me\\my project', true), 'node "C:\\RelayDesk\\dist\\src\\cli.js" ui "C:\\Users\\me\\my project"');
+  assert.match(openCmd('/x/cli.js', '', false), /ui '\/path\/to\/project'$/, '还没贴路径时给个样子');
+  assert.equal(openCmd('/x/cli.js', '/p', false, '7388'), `node '/x/cli.js' ui '/p'`, '默认端口不写');
+  assert.equal(openCmd('/x/cli.js', '/p', false, '7390'), `node '/x/cli.js' ui '/p' --port 7390`, '顺延到别的端口时带上，不然会另起一个接力台');
+});

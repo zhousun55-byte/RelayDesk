@@ -35,7 +35,7 @@
 
 ## 派活
 
-一棒做不完的大任务，交给同一个工具里的一强一快。强模型读代码，把任务拆成小步；同一家更快的模型一棒做一步；强模型在旁边只看不改地复核。Claude Code 里是 Opus 拆、Haiku 做，GLM-5.3 派给 GLM-5.3 Flash、MiMo V2.6 Pro 派给 MiMo V2.6 Flash 也一样。快模型在哪一步卡住了，那一步交回强模型做。
+一棒做不完的大任务，可以交给同一个工具里的一强一快（派活页输入框下面选谁派给谁）。强模型读代码，把任务拆成小步；同一家更快的模型一棒做一步；强模型在旁边只看不改地复核。Claude Code 里是 Opus 拆、Haiku 做，GLM-5.3 派给 GLM-5.3 Flash、MiMo V2.6 Pro 派给 MiMo V2.6 Flash 也一样。快模型在哪一步卡住了，那一步交回强模型做。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dispatch-dark.png">
@@ -57,7 +57,7 @@
 2. 下载上面对应系统的包，解压，把文件夹放在以后不挪动的地方。
 3. Mac 双击「安装接力台（Mac）.command」，Windows 双击 `install-windows.cmd`。
 
-装好后浏览器会打开接力台，以后从启动台或开始菜单打开。它在后台运行，不挂图标。被系统拦下时怎么办，写在包里的 `INSTALL.txt`。
+装好后浏览器会打开接力台，以后从启动台或开始菜单打开。它在后台运行，不挂图标。被系统拦下时怎么办，写在包里的 `INSTALL.txt`。以后更新：下载新的包，替换原来的文件夹，再双击一次。
 
 Linux，或者想从源码跑：
 
@@ -74,7 +74,7 @@ npm install && npm run build && npm start
 
 ## 能接进来的
 
-Claude Code、Codex、Cursor、ZCode、DeepSeek Harness、Antigravity、Gemini CLI、Qwen Code、OpenCode，以及 DeepSeek、Kimi、智谱、MiMo 这类 OpenAI 兼容接口。派出去的活跑在各家自己的命令行里，技能、MCP 和规则照常用。
+Claude Code、Codex、Cursor、ZCode、DeepSeek Harness、Antigravity、Gemini CLI、Qwen Code、OpenCode，以及 DeepSeek、Kimi、智谱、MiMo 这类 OpenAI 兼容接口。派给编程工具的活跑在它们自己的命令行里，技能、MCP 和规则照常用。
 
 ## 先说清楚
 

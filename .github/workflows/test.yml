@@ -37,3 +37,12 @@ jobs:
       # 一个文件一个文件跑、逐项打印；一项最多 60 秒，测完强制退出（有没关的句柄也不会一直挂着）
       - run: node --test --test-reporter=spec --test-timeout=60000 --test-force-exit dist/test/windows.test.js
       - run: node --test --test-reporter=spec --test-timeout=60000 --test-force-exit dist/test/i18n.test.js
+      # 建快照仓库先建在旁边再挪过去：Windows 上挪文件夹的规矩不一样（杀毒软件会占着刚建的文件）
+      - run: node --test --test-reporter=spec --test-timeout=60000 --test-force-exit dist/test/snap-race.test.js
+      # 安装脚本在 Windows 自带的 PowerShell 5 里读得通（写错一个括号，双击安装就整个装不上）
+      - name: 安装脚本的语法
+        shell: powershell
+        run: |
+          $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'scripts/windows/install.ps1'), [ref]$null, [ref]$errs)
+          if ($errs) { $errs | ForEach-Object { $_.ToString() }; exit 1 }

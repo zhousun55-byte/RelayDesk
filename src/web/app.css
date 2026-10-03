@@ -3795,6 +3795,19 @@ button.busy::after {
   font-size: 13.5px;
   color: var(--ink);
 }
+.open-cmd {
+  display: block;
+  padding: 9px 12px;
+  border-radius: 6px;
+  background: var(--slip);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  font: 12px/1.6 var(--mono);
+  word-break: break-all;
+  user-select: all;
+}
+.field > .btn.small {
+  align-self: flex-start;
+}
 .field > small {
   margin: -4px 0 2px;
 }

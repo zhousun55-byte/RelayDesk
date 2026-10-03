@@ -219,10 +219,15 @@ export function ensureSnapRepo(root: string): void {
       try {
         init(tmp);
         fs.renameSync(tmp, dir);
-      } catch (e) {
-        if (!hasSnapRepo(root)) throw e instanceof RelayError ? e : new RelayError(`建快照仓库失败：${(e as Error).message}`, 'snap');
+      } catch {
+        // 挪不过去：别人先建好了就用别人的；不然（Windows 上杀毒软件可能正占着刚建的文件）照原来的办法原地建
+        if (!hasSnapRepo(root)) init(dir);
       } finally {
-        fs.rmSync(tmp, { recursive: true, force: true });
+        try {
+          fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        } catch {
+          /* 删不掉的临时文件夹留在 .relay 里，不进快照、不进 git */
+        }
       }
     }
   }

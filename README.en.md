@@ -35,7 +35,7 @@ RelayDesk lets these AIs take turns in the same folder. Every leg starts by read
 
 ## Dispatch
 
-For a job too big for one leg, pair a strong model with a faster one from the same tool. The strong model reads the code and splits the task into small steps, the faster model does one step per leg, and the strong model reviews alongside without touching files. In Claude Code that is Opus splitting and Haiku doing; GLM-5.3 handing to GLM-5.3 Flash or MiMo V2.6 Pro handing to MiMo V2.6 Flash works the same way. If the faster model gets stuck on a step, that step goes back to the strong model.
+For a job too big for one leg, you can pair a strong model with a faster one from the same tool (pick who hands to whom under the input box on the Dispatch page). The strong model reads the code and splits the task into small steps, the faster model does one step per leg, and the strong model reviews alongside without touching files. In Claude Code that is Opus splitting and Haiku doing; GLM-5.3 handing to GLM-5.3 Flash or MiMo V2.6 Pro handing to MiMo V2.6 Flash works the same way. If the faster model gets stuck on a step, that step goes back to the strong model.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/dispatch-en-dark.png">
@@ -57,7 +57,7 @@ When you're not sure, ask several AIs at once. In *Compare* they answer at the s
 2. Download the package for your system above, unzip it, and put the folder somewhere it will stay.
 3. On a Mac, double-click `安装接力台（Mac）.command` ("install RelayDesk"). On Windows, double-click `install-windows.cmd`.
 
-The web app opens when it is done. Open it later from Launchpad or the Start menu; it runs in the background with no icon. If macOS or Windows blocks it, see `INSTALL.txt` in the package.
+The web app opens when it is done. Open it later from Launchpad or the Start menu; it runs in the background with no icon. If macOS or Windows blocks it, see `INSTALL.txt` in the package. To update, download the new package, replace the old folder and double-click again.
 
 On Linux, or to run from source:
 
@@ -76,7 +76,7 @@ The web app switches between English and Chinese with **EN / 中** at the bottom
 
 ## Works with
 
-Claude Code, Codex, Cursor, ZCode, DeepSeek Harness, Antigravity, Gemini CLI, Qwen Code, OpenCode, and OpenAI-compatible APIs such as DeepSeek, Kimi, Zhipu and MiMo. Work runs in each tool's own CLI, with its own skills, MCP servers and rules.
+Claude Code, Codex, Cursor, ZCode, DeepSeek Harness, Antigravity, Gemini CLI, Qwen Code, OpenCode, and OpenAI-compatible APIs such as DeepSeek, Kimi, Zhipu and MiMo. Coding tools run the work in their own CLI, with their own skills, MCP servers and rules.
 
 ## Good to know
 

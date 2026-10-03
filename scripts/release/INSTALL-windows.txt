@@ -8,12 +8,13 @@
 1. 右键压缩包 →「全部解压缩」，把解压出来的 RelayDesk 文件夹放在一个以后不会挪动的地方（比如「文档」里）。
    不要在压缩包里面直接双击。
 2. 打开 RelayDesk 文件夹，双击 install-windows.cmd。
-   如果弹出「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」。
+   如果弹出「打开文件 - 安全警告」，点「运行」；如果是「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」。
 3. 没装 Node.js、Git 的，它会用系统自带的 winget 装（会弹出安装程序或管理员确认，点「是」）。
    包里是编译好的，不用编译。装好后浏览器会自己打开网页，开始菜单里多一个「接力台」。
    以后从开始菜单点「接力台」就行；它在后台运行，不弹黑窗口，登录电脑时自己启动。
 4. AI 编程工具装在 Windows 上并登录（比如在 PowerShell 里 npm install -g @anthropic-ai/claude-code，再运行 claude 登录）。接力台会自己找出装了哪些。
-5. 不想要了：在 RelayDesk 文件夹的地址栏输入 cmd 回车，再输入 install-windows.cmd --remove
+5. 以后更新：下载新的包，解压后替换原来的 RelayDesk 文件夹，再双击一次 install-windows.cmd。
+6. 不想要了：在 RelayDesk 文件夹的地址栏输入 cmd 回车，再输入 install-windows.cmd --remove
 
 二、用起来
 1. 左边「项目」旁的 + 选一个项目文件夹，在中间写一句要做什么，回车。
@@ -31,9 +32,10 @@ Docs, updates and issues: https://github.com/zhousun55-byte/RelayDesk
 Several AI coding tools take turns in the same project folder: when one runs out of quota the next picks up, a stronger model reviews the weaker models' legs, and any leg can be rolled back. Switch the web app between English and Chinese with "EN / 中" at the bottom left.
 
 1. Right-click the zip → Extract All, and move the RelayDesk folder somewhere it will stay, for example Documents. Don't run it from inside the zip.
-2. Double-click install-windows.cmd. If SmartScreen says "Windows protected your PC", click More info → Run anyway.
+2. Double-click install-windows.cmd. If an "Open File - Security Warning" appears, click Run; if SmartScreen says "Windows protected your PC", click More info → Run anyway.
 3. It installs Node.js and Git with winget if they are missing (confirm the prompts). Nothing is compiled; the web page opens and RelayDesk (接力台) is in the Start menu. It runs in the background with no console window and starts at login.
 4. Install and sign in to at least one AI coding tool on Windows, for example: npm install -g @anthropic-ai/claude-code, then run claude.
-5. To remove it: type cmd in the folder's address bar, then run: install-windows.cmd --remove
+5. To update, download the new package, replace the RelayDesk folder and double-click install-windows.cmd again.
+6. To remove it: type cmd in the folder's address bar, then run: install-windows.cmd --remove
 
 Logs: %USERPROFILE%\.relay\ui.log

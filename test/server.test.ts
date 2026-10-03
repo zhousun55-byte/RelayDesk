@@ -728,6 +728,11 @@ test('网页接口只对打开过的文件夹做事：别的路径列不了、�
     assert.equal(init.json.code, 'dir-not-open');
     assert.equal(fs.existsSync(path.join(other, '.relay')), false, '没往那个文件夹里写东西');
 
+    // 弹不出选文件夹的对话框时，网页给出的那行命令用的就是这个接力台自己（贴进来的路径不能直接算数）
+    const hint = (await ui.call('/api/open-hint')).json as { cli: string; win: boolean };
+    assert.equal(path.resolve(hint.cli), path.resolve(CLI));
+    assert.equal(hint.win, process.platform === 'win32');
+
     // 接力台开着的时候在终端里 relay ui 那个文件夹：记成打开过，网页就认它了
     s.relay(['ui', other, '--port', String(ui.port), '--no-open']);
     assert.equal((await ui.call(`/api/tree${at(other)}`)).status, 200);

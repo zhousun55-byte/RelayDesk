@@ -321,6 +321,8 @@ export function createServer(opts: ServerOptions): http.Server {
 
   const get: Record<string, Handler> = {
     '/api/ping': () => ({ app: 'relay', version: VERSION }),
+    // 弹不出选文件夹的对话框时，网页给出一行在终端里运行的命令（relay ui 那个文件夹）：要接力台自己的位置
+    '/api/open-hint': () => ({ cli: path.join(__dirname, '..', 'cli.js'), win: process.platform === 'win32' }),
     '/api/state': (q) => {
       const root = dirOf(q, {});
       const pv = projectView(root);

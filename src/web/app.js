@@ -2018,20 +2018,51 @@ async function chooseFolder() {
   }
 }
 
-/** 这台电脑弹不出选文件夹的对话框（比如没装 zenity 的 Linux）：把文件夹的完整路径贴进来。 */
-function typeFolder() {
+/**
+ * 在终端里打开一个文件夹的那行命令：接力台已经在运行时，relay ui 把它记成打开过，再用浏览器打开。
+ * 接力台不在默认的 7388 上（被别的程序占着、顺延了）时带上端口，不然命令会另起一个接力台。
+ */
+function openCmd(cli, dir, win, port) {
+  const q = (s) => (win ? `"${s.replace(/"/g, '')}"` : `'${s.replace(/'/g, `'\\''`)}'`);
+  const at = port && String(port) !== '7388' ? ` --port ${port}` : '';
+  return `node ${q(cli)} ui ${q(dir || (win ? 'C:\\path\\to\\project' : '/path/to/project'))}${at}`;
+}
+
+/**
+ * 这台电脑弹不出选文件夹的对话框（比如没装 zenity 的 Linux）：把文件夹的完整路径贴进来，在终端里运行给出的那行命令。
+ * 网页接口只认打开过的文件夹（选择器选的、终端里 relay ui 的），贴进来的路径不能直接算数：
+ * 不然本机任何程序都能经网页接口打开任意文件夹，「只认打开过的」就白设了。
+ */
+async function typeFolder() {
   const win = /Windows/i.test(navigator.userAgent);
+  const hint = await api('/api/open-hint').catch(() => null);
   const input = h('input', { class: 'input mono', placeholder: MAC ? '/Users/me/project' : win ? 'C:\\Users\\me\\project' : '/home/me/project', 'aria-label': T`文件夹路径` });
-  const go = () => {
-    const v = input.value.trim().replace(/^["']|["']$/g, '');
+  const path = () => input.value.trim().replace(/^["']|["']$/g, '');
+  const cmd = h('code', { class: 'open-cmd' });
+  const show = () => hint && (cmd.textContent = openCmd(hint.cli, path(), hint.win, location.port));
+  input.addEventListener('input', show);
+  show();
+  const go = async () => {
+    const v = path();
     if (!v) return input.focus();
+    try {
+      await api(`/api/state?dir=${encodeURIComponent(v)}`);
+    } catch (e) {
+      if (e.code === 'dir-not-open') return toast(T`这个文件夹还没打开过：先在终端里运行上面那一行`, { bad: true });
+      return fail(L('打开文件夹', '设置'), e);
+    }
     close();
     switchProject(v);
   };
   input.addEventListener('keydown', (e) => e.key === 'Enter' && !e.isComposing && go());
   const close = sheet({
     title: T`打开文件夹`,
-    body: h('div', null, field(T`文件夹路径`, input)),
+    body: h(
+      'div',
+      null,
+      field(T`文件夹路径`, input),
+      hint && h('div', { class: 'field' }, h('span', null, T`这台电脑弹不出选文件夹的对话框。在终端里运行这一行，接力台就打开这个文件夹：`), cmd, h('button', { class: 'btn small', onclick: () => copyToast(cmd.textContent) }, T`复制`)),
+    ),
     foot: [h('button', { class: 'btn ghost', onclick: () => close() }, T`取消`), h('button', { class: 'btn primary', onclick: go }, T`打开`)],
   });
   setTimeout(() => input.focus(), 50);

@@ -146,6 +146,8 @@ const EN = {
   在文件夹中显示: 'Show in folder',
   没能打开文件夹: "Couldn't open the folder",
   文件夹路径: 'Folder path',
+  '这台电脑弹不出选文件夹的对话框。在终端里运行这一行，接力台就打开这个文件夹：': "This computer can't show a folder picker. Run this line in a terminal and RelayDesk opens the folder:",
+  '这个文件夹还没打开过：先在终端里运行上面那一行': 'This folder hasn\'t been opened yet: run the line above in a terminal first',
   打开访达: 'open Finder',
   没能打开访达: "Couldn't open Finder",
   复制路径: 'Copy path',
