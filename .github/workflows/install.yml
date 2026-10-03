@@ -44,12 +44,15 @@ jobs:
       - name: 双击 install-windows.cmd
         shell: cmd
         run: call "%RUNNER_TEMP%\pkg\RelayDesk\install-windows.cmd" < NUL
-      - name: 开始菜单和登录启动里有「接力台」，接力台在跑
+      # 英文版 Windows（这台就是）上叫 RelayDesk：以前存成「接力台.lnk」会变成「???.lnk」存不下
+      - name: 开始菜单和登录启动里有 RelayDesk，接力台在跑
         shell: pwsh
         run: |
           foreach ($f in 'Programs', 'Startup') {
-            $lnk = Join-Path ([Environment]::GetFolderPath($f)) '接力台.lnk'
-            if (-not (Test-Path $lnk)) { throw "$f 里没有接力台" }
+            $lnk = Join-Path ([Environment]::GetFolderPath($f)) 'RelayDesk.lnk'
+            if (-not (Test-Path -LiteralPath $lnk)) { throw "$f 里没有 RelayDesk" }
+            $t = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+            if ($t.Arguments -notmatch 'relaydesk\.vbs') { throw "$f 里的快捷方式指错了：$($t.TargetPath) $($t.Arguments)" }
           }
           $p = Invoke-RestMethod http://127.0.0.1:7388/api/ping -TimeoutSec 5
           if ($p.app -ne 'relay') { throw '接力台没在跑' }
@@ -61,7 +64,7 @@ jobs:
         run: |
           Start-Sleep 5
           foreach ($f in 'Programs', 'Startup') {
-            if (Test-Path (Join-Path ([Environment]::GetFolderPath($f)) '接力台.lnk')) { throw "$f 里还有接力台" }
+            if (Test-Path -LiteralPath (Join-Path ([Environment]::GetFolderPath($f)) 'RelayDesk.lnk')) { throw "$f 里还有 RelayDesk" }
           }
           $up = $true
           try { Invoke-RestMethod http://127.0.0.1:7388/api/ping -TimeoutSec 2 | Out-Null } catch { $up = $false }

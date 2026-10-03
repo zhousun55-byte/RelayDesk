@@ -7,8 +7,11 @@
 
 $Win = $PSScriptRoot
 $Dir = Split-Path -Parent (Split-Path -Parent $Win)
-$Menu = Join-Path ([Environment]::GetFolderPath('Programs')) '接力台.lnk'
-$Boot = Join-Path ([Environment]::GetFolderPath('Startup')) '接力台.lnk'
+# 开始菜单里叫什么：中文系统叫「接力台」，别的语言叫「RelayDesk」（英文版 Windows 的开始菜单里一串汉字认不出来）
+$Name = if ((Get-UICulture).Name -like 'zh*') { '接力台' } else { 'RelayDesk' }
+$Folders = @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Startup'))
+$Menu = Join-Path $Folders[0] "$Name.lnk"
+$Boot = Join-Path $Folders[1] "$Name.lnk"
 
 function Die($why) {
   Write-Host ''
@@ -22,10 +25,14 @@ function Has($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 if ($args -contains '--remove') {
   if (Has node) { & node (Join-Path $Win 'launch.js') --quit }
   Add-Type -AssemblyName Microsoft.VisualBasic
-  foreach ($p in @($Menu, $Boot)) {
-    if (Test-Path $p) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin') }
+  # 两种名字都看：换过系统语言、装过旧版的，留下的可能是另一个名字
+  foreach ($folder in $Folders) {
+    foreach ($n in @('接力台', 'RelayDesk')) {
+      $p = Join-Path $folder "$n.lnk"
+      if (Test-Path -LiteralPath $p) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin') }
+    }
   }
-  Write-Host '已去掉开始菜单和登录启动里的「接力台」。'
+  Write-Host "已去掉开始菜单和登录启动里的「$Name」。"
   Start-Sleep 3
   exit 0
 }
@@ -62,15 +69,30 @@ if (Test-Path (Join-Path $Dir 'src')) {
 }
 
 # 快捷方式指向 wscript + relaydesk.vbs：点开不弹黑窗口。
+# WScript.Shell 存快捷方式时会把文件名转成系统的代码页：英文版 Windows 上「接力台.lnk」变成「???.lnk」，存不下。
+# 先用英文名存好，再用 .NET（认 Unicode）改成要的名字；存不下就说出来，不说「装好了」。
 $shell = New-Object -ComObject WScript.Shell
 function Link($path, $arg) {
-  $l = $shell.CreateShortcut($path)
-  $l.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
-  $l.Arguments = ('//B //Nologo "{0}" {1}' -f (Join-Path $Win 'relaydesk.vbs'), $arg).Trim()
-  $l.WorkingDirectory = $Dir
-  $l.IconLocation = (Join-Path $Win 'icon.ico') + ',0'
-  $l.Description = '接力台（RelayDesk）'
-  $l.Save()
+  $tmp = Join-Path (Split-Path -Parent $path) 'RelayDesk-new.lnk'
+  try {
+    $l = $shell.CreateShortcut($tmp)
+    $l.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
+    $l.Arguments = ('//B //Nologo "{0}" {1}' -f (Join-Path $Win 'relaydesk.vbs'), $arg).Trim()
+    $l.WorkingDirectory = $Dir
+    $l.IconLocation = (Join-Path $Win 'icon.ico') + ',0'
+    $l.Description = 'RelayDesk'
+    $l.Save()
+    Move-Item -LiteralPath $tmp -Destination $path -Force -ErrorAction Stop
+  } catch {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    Die "没能在 $(Split-Path -Parent $path) 里放「$Name」：$($_.Exception.Message)"
+  }
+}
+# 换过系统语言、装过旧版的：另一个名字的快捷方式去掉，免得开始菜单里有两个
+foreach ($folder in $Folders) {
+  foreach ($n in @('接力台', 'RelayDesk')) {
+    if ($n -ne $Name) { Remove-Item -LiteralPath (Join-Path $folder "$n.lnk") -Force -ErrorAction SilentlyContinue }
+  }
 }
 Link $Menu ''
 Link $Boot '--background'
@@ -79,5 +101,5 @@ Write-Host '打开接力台……'
 & node (Join-Path $Win 'launch.js')
 if ($LASTEXITCODE -ne 0) { Die "接力台没能启动。记录在 $env:USERPROFILE\.relay\ui.log，最后几行写了原因。" }
 Write-Host ''
-Write-Host '装好了。以后从开始菜单打开「接力台」；登录电脑时它会在后台启动。这个窗口 5 秒后自己关掉。' -ForegroundColor Green
+Write-Host "装好了。以后从开始菜单打开「$Name」；登录电脑时它会在后台启动。这个窗口 5 秒后自己关掉。" -ForegroundColor Green
 Start-Sleep 5

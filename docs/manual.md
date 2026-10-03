@@ -16,7 +16,7 @@ From a downloaded package: unzip it and double-click `安装接力台（Mac）.c
 
 This installs dependencies, builds, puts a **RelayDesk** app (named 接力台) in `/Applications` (or `~/Applications` without write access) that starts in the background at login, and opens the web page. No Dock or desktop icon, no terminal window. Open it later from Launchpad or Spotlight, or at http://127.0.0.1:7388. To remove it: `zsh scripts/make-desktop-app.sh --remove`.
 
-Windows 10 / 11: put the folder somewhere it will stay and double-click `install-windows.cmd`. It installs Node.js and Git with winget if they are missing, installs dependencies, builds, adds **接力台** (RelayDesk) to the Start menu, starts it in the background at login, and opens the web page. No console window, no desktop icon. To remove it: `install-windows.cmd --remove`.
+Windows 10 / 11: put the folder somewhere it will stay and double-click `install-windows.cmd`. It installs Node.js and Git with winget if they are missing, installs dependencies, builds, adds **RelayDesk** to the Start menu (named 接力台 on Chinese Windows), starts it in the background at login, and opens the web page. No console window, no desktop icon. To remove it: `install-windows.cmd --remove`.
 
 Linux (or if you don't want it running in the background):
 

@@ -33,7 +33,7 @@ Several AI coding tools take turns in the same project folder: when one runs out
 
 1. Right-click the zip → Extract All, and move the RelayDesk folder somewhere it will stay, for example Documents. Don't run it from inside the zip.
 2. Double-click install-windows.cmd. If an "Open File - Security Warning" appears, click Run; if SmartScreen says "Windows protected your PC", click More info → Run anyway.
-3. It installs Node.js and Git with winget if they are missing (confirm the prompts). Nothing is compiled; the web page opens and RelayDesk (接力台) is in the Start menu. It runs in the background with no console window and starts at login.
+3. It installs Node.js and Git with winget if they are missing (confirm the prompts). Nothing is compiled; the web page opens and RelayDesk is in the Start menu (named 接力台 on Chinese Windows). It runs in the background with no console window and starts at login.
 4. Install and sign in to at least one AI coding tool on Windows, for example: npm install -g @anthropic-ai/claude-code, then run claude.
 5. To update, download the new package, replace the RelayDesk folder and double-click install-windows.cmd again.
 6. To remove it: type cmd in the folder's address bar, then run: install-windows.cmd --remove
