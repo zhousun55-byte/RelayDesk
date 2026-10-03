@@ -165,6 +165,14 @@ osacompile -s -o "$BUILD" \
 
 PLIST="$BUILD/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName 接力台" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleName string 接力台" "$PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 接力台" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 接力台" "$PLIST"
+# 英文系统上叫 RelayDesk（启动台里认得出、聚焦搜索搜得到），中文系统上还是接力台；程序的文件名不变
+/usr/libexec/PlistBuddy -c "Set :LSHasLocalizedDisplayName true" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :LSHasLocalizedDisplayName bool true" "$PLIST"
+for loc in en zh-Hans; do
+  mkdir -p "$BUILD/Contents/Resources/$loc.lproj"
+  [[ $loc == en ]] && shown=RelayDesk || shown=接力台
+  printf '"CFBundleName" = "%s";\n"CFBundleDisplayName" = "%s";\n' "$shown" "$shown" >"$BUILD/Contents/Resources/$loc.lproj/InfoPlist.strings"
+done
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST"
 # 不在程序坞里挂图标、没有菜单栏：它只是在后台看着接力台。
 /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$PLIST"

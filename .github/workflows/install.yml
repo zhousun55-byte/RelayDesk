@@ -93,6 +93,12 @@ jobs:
           test -d "/Applications/接力台.app"
           test -f "$HOME/Library/LaunchAgents/local.relay.login.plist"
           curl -sf -m 5 http://127.0.0.1:7388/api/ping | grep -q '"app":"relay"'
+      # 英文系统（这台就是）上程序叫 RelayDesk：启动台里认得出、聚焦搜索搜得到；文件名还是 接力台.app
+      - name: 英文系统上显示 RelayDesk
+        run: |
+          shown=$(osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSFileManager.defaultManager.displayNameAtPath("/Applications/接力台.app").js')
+          echo "显示的名字：$shown"
+          [[ "$shown" == RelayDesk* ]]
       - name: 去掉
         run: zsh "$RUNNER_TEMP/pkg/RelayDesk/scripts/make-desktop-app.sh" --remove
       # 请小程序退出要发 Apple Event，机器上没人点「允许」，接力台可能还开着：只核对程序和登录启动去掉了，再自己关掉它
