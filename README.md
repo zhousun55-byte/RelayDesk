@@ -175,7 +175,7 @@ git clone https://github.com/zhousun55-byte/RelayDesk.git && cd RelayDesk && npm
 接力台派出去的每一棒，都记下它在工具里的对话编号（Claude Code、Codex、Cursor、Antigravity 在输出里报的）：
 
 - **在原工具里接着说**：卡片的「在 Claude 里打开」用 Claude 桌面版打开这段对话（和终端里 `/desktop` 一样的链接）；Codex、Cursor、Antigravity 是「复制命令」，在终端里粘贴就接着这段对话说（`codex resume 编号` 这类）。Codex 桌面版的列表只放它自己开的对话，接力台跑的要按编号打开；DeepSeek Harness 和接口成员没有能接着说的对话。
-- **在接力台里看**：卡片的「对话」按编号读工具自己的记录，显示人说的、AI 答的、用了什么工具。你回到工具里接着说的，下次打开也在里面。现在读得懂 Claude Code、Codex、DeepSeek Harness、Cursor 命令行的记录（工具自己塞进去的系统提醒、技能说明不显示；Codex 分叉、压缩出来的几份只列最新的）；别家的看这一棒的「日志」。
+- **在接力台里看**：卡片的「对话」按编号读工具自己的记录，显示人说的、AI 答的、用了什么工具。你回到工具里接着说的，下次打开也在里面。现在读得懂 Claude Code、Codex、DeepSeek Harness、Cursor 命令行的记录（DeepSeek Harness 压成 zstd 的记录要 Node 22.15 或更新；工具自己塞进去的系统提醒、技能说明不显示；Codex 分叉、压缩出来的几份只列最新的）；别家的看这一棒的「日志」。
 - **工具里的对话**：接力页左边多一行「工具里的对话」，列的是这个项目文件夹里你自己在 Claude Code、Codex、DeepSeek Harness、Cursor 命令行里开的对话（接力台派的不列，它们挂在每一棒上），点开能看全文。
 - **群聊也接得上**：群聊里每一位在自己工具里一直是同一段对话，下一轮按编号接着说，只带它上次说完之后的新消息；回答底下能「在工具里接着说」。工具里那段对话没了（删了、过期了），就另开一段、带上整段记录。
 

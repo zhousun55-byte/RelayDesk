@@ -495,7 +495,7 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
 
   // 官方账号额度用完（新版的原话）：记成额度用完，按提示里的时区记下恢复时间，不是「出错」。
   s.env.FAKE_CLAUDE_OFFICIAL_MODE = 'session-limit';
-  assert.match(s.relay(['go', 'claude-official']), /额度用完.*3:50 恢复/);
+  const out = s.relay(['go', 'claude-official']);
   const third = s.stints()[2];
   assert.equal(third.status, 'quota');
   assert.equal(third.who.model, 'claude-opus-5-5', '没等到回复，只有开头报的简写 claude-opus-5：用调用时给的完整名字（不然卡片上一会儿 Opus 5、一会儿 Opus 5.5）');
@@ -503,6 +503,9 @@ test('两个 Claude：接了 DeepSeek 的算弱、官方账号的算强；派官
   const until = new Date(q.until);
   assert.equal(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(until), '03:50');
   assert.ok(until.getTime() > Date.now() && until.getTime() - Date.now() <= 24 * 3600_000, '下一个 3:50');
+  // 屏幕上按这台电脑的时区写（上海是 03:50，GitHub 的机器用 UTC 是 19:50）
+  const hm = [until.getHours(), until.getMinutes()].map((n) => String(n).padStart(2, '0')).join(':');
+  assert.match(out, new RegExp(`额度用完.*${hm} 恢复`));
   assert.equal(third.quotaUntil, q.until);
 
   // 命令行太旧、用不了最新的 Opus：当场换成 opus 再干，这一棒照样做完；记下来，下次直接用 opus，升级之后再换回来。

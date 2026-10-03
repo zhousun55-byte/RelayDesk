@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 
-const zstd = (zlib as unknown as { zstdCompressSync: (b: Buffer) => Buffer }).zstdCompressSync;
+// Node 22.15 起才自带 zstd；更旧的 Node 上接力台读不了压缩过的 DeepSeek Harness 记录（读到的是空，不报错），这一项跳过
+const zstd = (zlib as unknown as { zstdCompressSync?: (b: Buffer) => Buffer }).zstdCompressSync;
 
 /**
  * 工具 → 接力台：读各家工具自己记的对话（学 mindbus、magpie 读各家记录的做法）。
@@ -38,7 +39,7 @@ test('人说的话：去掉夹在里面的系统提醒、Cursor 的 <user_query>
   assert.equal(sessions.saidText('没写完的 <system-reminder> 留着'), '没写完的 <system-reminder> 留着');
 });
 
-test('DeepSeek Harness：zstd 一批批追加的几帧都读得出来；只认人打的字，标题用它最后起的；子代理、接力台派的不列', () => {
+test('DeepSeek Harness：zstd 一批批追加的几帧都读得出来；只认人打的字，标题用它最后起的；子代理、接力台派的不列', { skip: !zstd && '这个 Node 没有自带 zstd' }, () => {
   const dir = path.join(HOME, '.dsh', 'sessions', '--some-encoded-cwd--');
   const head = { type: 'session', version: 4, id: 'session-aaaa1111', createdAt: 1790610662758, cwd: ROOT, isSeeded: false, delegationDepth: 0 };
   const frames = [
@@ -49,7 +50,7 @@ test('DeepSeek Harness：zstd 一批批追加的几帧都读得出来；只认�
       { type: 'session/title', seq: 5, data: { title: '导出做成 CSV' } },
     ]),
   ];
-  write(path.join(dir, 'session-aaaa1111', 'session.v4.jsonl.zstd'), Buffer.concat(frames.map((f) => zstd(Buffer.from(f)))));
+  write(path.join(dir, 'session-aaaa1111', 'session.v4.jsonl.zstd'), Buffer.concat(frames.map((f) => zstd!(Buffer.from(f)))));
   // 旧格式留下的那份不读
   write(path.join(dir, 'session-aaaa1111', 'session.jsonl'), jl([{ ...head, cwd: '/别处' }]));
   // 子代理
