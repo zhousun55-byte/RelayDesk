@@ -24,8 +24,8 @@ node dist/src/cli.js ui --port 7500        # 用刚编译的版本打开网页
 | `src/server/` | 本机网页的接口 |
 | `src/web/` | 网页（纯 HTML / CSS / JS，不用框架、不用打包） |
 | `test/` | 测试；`fakes.ts` 里是假的 `claude` / `codex` 和假的模型接口 |
-| `scripts/` | macOS 的「接力台.app」安装脚本、`windows/` 里是 Windows 的安装和启动器、`build.js`、`e2e.py` |
-| `docs/` | 设计说明；`images/` 是 README 里的截图 |
+| `scripts/` | macOS 的「接力台.app」安装脚本、`windows/` 里是 Windows 的安装和启动器、`build.js`、`e2e.py`，`pack.js` 做 Mac、Windows 两个下载包 |
+| `docs/` | 使用手册、设计说明；`images/` 是 README 和手册里的图 |
 
 整体设计、为什么这么做，见 [docs/设计说明.md](docs/设计说明.md)。
 
@@ -47,16 +47,16 @@ node dist/src/cli.js ui --port 7500        # 用刚编译的版本打开网页
 
 ## 测试
 
-- 测试**不调用真的 AI**（花钱、结果不稳定）。要测调度，就在 `test/fakes.ts` 里让假工具多一种行为（比如「额度用完」「不写交接」）。
-- 测试名用中文写清楚在测什么，比如「额度用完：认得各家的提示，算出恢复时间」。
-- 提交前 `npm test` 要全部通过。
-- 改了网页：界面上新写的中文套一层 `T\`…\``，在 `src/web/i18n.js` 的 `EN` 表里补上英文（漏了 `test/i18n.test.ts` 会报出来）；后台送来的新说法要在网页上显示成英文，在同一个文件的 `SRV_WORD` / `SRV` 里加。新加的 AI 工具不画图标也行：认不出来的模型图标是它名字的头一个字母；要画就在 `app.js` 的 `GLYPHS`、`brandOf` 里加。再跑 `python3 scripts/e2e.py`（要装 playwright），用浏览器真的点一遍切页、划过纸面、收起侧栏、设置、换语言。没装 playwright 会跳过；它不在 `npm test` 里，CI 上没有浏览器。
+1. 测试**不调用真的 AI**（花钱、结果不稳定）。要测调度，就在 `test/fakes.ts` 里让假工具多一种行为（比如「额度用完」「不写交接」）。
+2. 测试名用中文写清楚在测什么，比如「额度用完：认得各家的提示，算出恢复时间」。
+3. 提交前 `npm test` 要全部通过。
+4. 改了网页：界面上新写的中文套一层 `T\`…\``，在 `src/web/i18n.js` 的 `EN` 表里补上英文（漏了 `test/i18n.test.ts` 会报出来）；后台送来的新说法要在网页上显示成英文，在同一个文件的 `SRV_WORD` / `SRV` 里加。新加的 AI 工具不画图标也行：认不出来的模型图标是它名字的头一个字母；要画就在 `app.js` 的 `GLYPHS`、`brandOf` 里加。再跑 `python3 scripts/e2e.py`（要装 playwright），用浏览器真的点一遍切页、划过纸面、收起侧栏、设置、换语言。没装 playwright 会跳过；它不在 `npm test` 里，CI 上没有浏览器。
 
 ## 几条约定
 
-- **三种系统都要能跑**：起程序用 `src/core/proc.ts` 的 `spawnTool` / `shellArgv`（不要直接写 `sh -c`），结束用 `killTree`；找命令用 `env.ts` 的 `which`；路径用 `path.join`，给网页和账本的相对路径一律写 `/`；读 AI 写的文件要认 `\r\n` 换行。Windows 上的写法在 `test/windows.test.ts` 里按 Windows 的规矩算。
+1. **三种系统都要能跑**：起程序用 `src/core/proc.ts` 的 `spawnTool` / `shellArgv`（不要直接写 `sh -c`），结束用 `killTree`；找命令用 `env.ts` 的 `which`；路径用 `path.join`，给网页和账本的相对路径一律写 `/`；读 AI 写的文件要认 `\r\n` 换行。Windows 上的写法在 `test/windows.test.ts` 里按 Windows 的规矩算。
 
-- **不碰用户自己的 git**：快照只用 `.relay/snapshots` 这个独立仓库。
-- **密钥不落盘、不进日志**：配置里只写环境变量的名字；发给模型的材料用 `redactSecrets` 抹掉像密钥的东西。
-- **给用户看的文字说人话**：不说 worktree、commit、stdout 这类词，说「快照」「退回」「改了哪些文件」。
-- **弱模型也要看得懂**：接力本和规矩要短、要具体，命令和文件名直接写出来。
+2. **不碰用户自己的 git**：快照只用 `.relay/snapshots` 这个独立仓库。
+3. **密钥不落盘、不进日志**：配置里只写环境变量的名字；发给模型的材料用 `redactSecrets` 抹掉像密钥的东西。
+4. **给用户看的文字说人话**：不说 worktree、commit、stdout 这类词，说「快照」「退回」「改了哪些文件」。
+5. **弱模型也要看得懂**：接力本和规矩要短、要具体，命令和文件名直接写出来。

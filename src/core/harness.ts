@@ -1346,7 +1346,7 @@ const grok: HarnessSpec = {
 
 export const HARNESSES: HarnessSpec[] = [claude, claudeOfficial, codex, cursorAgent, dsh, zcode, antigravity, gemini, qwen, opencode, droid, copilot, grok];
 
-/** 认得的工具报错：翻成一句说明（只写是什么情况，怎么处理写在 README「常见问题」；认不出返回 null）。 */
+/** 认得的工具报错：翻成一句说明（只写是什么情况，怎么处理写在使用手册的「常见问题」；认不出返回 null）。 */
 export function explainFailure(harnessId: string | undefined, text: string): string | null {
   if (harnessId === 'zcode' && /Select a model before continuing|Model creation failed/i.test(text)) {
     return 'ZCode 命令行没有默认模型';
