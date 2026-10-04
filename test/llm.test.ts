@@ -199,3 +199,26 @@ test('小助手干活：没调用 finish 就停下，提醒一次再收；写到
     s.close();
   }
 });
+
+test('只看不改：看文件看到时间快用完，停下来照已经看到的直接回答，边调工具边说的那句不算回答', async () => {
+  // 2026-10-04 群聊：GLM-5.3 Flash 读一份 1 万多行的总结，一步一分多钟，15 分钟到了一个字没交
+  const s = await server((b, res) => {
+    const last = JSON.stringify((b.messages as unknown[]).at(-1));
+    const reply = /不要再调用工具/.test(last)
+      ? [{ choices: [{ delta: { content: '答案' } }] }]
+      : [{ choices: [{ delta: { content: '我先看看文件', tool_calls: [{ index: 0, id: `c${s.bodies.length}`, function: { name: 'list_files', arguments: '{}' } }] } }] }];
+    setTimeout(() => sse(res, reply), 400);
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-reserve-'));
+  const lines: string[] = [];
+  process.env.RELAY_ANSWER_RESERVE_MS = '1500';
+  try {
+    const r = await runLlmAgent({ spec: { baseUrl: s.url, model: 'm', apiKeyEnv: '' }, cwd: dir, brief: '问', level: 'safe', readOnly: true, gateCommand: '', protectedPaths: [], log: (l) => lines.push(l), shouldStop: () => false, deadline: Date.now() + 6000, maxSteps: 30 });
+    assert.equal(r.finalText, '答案');
+    assert.equal(r.timedOut, false);
+    assert.ok(lines.some((l) => /时间快到了/.test(l)));
+  } finally {
+    delete process.env.RELAY_ANSWER_RESERVE_MS;
+    s.close();
+  }
+});

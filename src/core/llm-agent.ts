@@ -63,6 +63,8 @@ const SYSTEM = [
 /** 只看不改（群聊、投票、边做边复核）：只给看文件的工具，看够了直接回答。 */
 const READ_SYSTEM = '你是「接力台」里的一位成员，这一回只看不改：可以用 list_files / read_file / search 看当前项目文件夹里的文件，不能改任何东西。看够了就直接回答。';
 const READ_TOOLS = new Set(['list_files', 'read_file', 'search']);
+/** 只看不改时最后留给回答的时间（最多占总时限的四分之一）。 */
+const answerReserveMs = () => Number(process.env.RELAY_ANSWER_RESERVE_MS ?? 3 * 60_000);
 
 function tools(level: Level, hasGate: boolean): ToolDef[] {
   const t: ToolDef[] = [
@@ -267,11 +269,14 @@ function search(root: string, args: Record<string, unknown>): string {
   if (typeof args.pattern !== 'string' || !args.pattern) throw new ToolError('缺少 pattern。');
   const where = typeof args.path === 'string' && args.path.trim() ? resolveIn(root, args.path).rel : '.';
   // 项目不是 git 仓库也要能搜：用 --no-index（照样认 .gitignore），大目录手动跳过。
-  const inRepo = git(root, ['rev-parse', '--is-inside-work-tree']).stdout === 'true';
-  const mode = inRepo ? ['--untracked'] : ['--no-index', '--exclude-standard'];
-  const skip = inRepo ? [] : [...SKIP_DIRS].map((d) => `:(exclude,glob)**/${d}/**`);
+  // 人传上来的附件（.relay/uploads/）要搜得到：那里有自己的 .gitignore（*），平时整个 .relay 也不搜。
+  // 2026-10-04 群聊里 GLM-5.3、GLM-5.3 Flash 搜一份 1 万多行的附件总是「没找到」，只好一段段读，一步一分多钟。
+  const upload = /^\.relay\/uploads(?:\/|$)/.test(where.split(path.sep).join('/'));
+  const inRepo = !upload && git(root, ['rev-parse', '--is-inside-work-tree']).stdout === 'true';
+  const mode = upload ? ['--no-index'] : inRepo ? ['--untracked'] : ['--no-index', '--exclude-standard'];
+  const skip = upload || inRepo ? [] : [...SKIP_DIRS].map((d) => `:(exclude,glob)**/${d}/**`);
   const secrets = SECRET_GLOBS.map((g) => `:(exclude,glob)**/${g}`);
-  const r = git(root, ['grep', '-n', '-I', '-E', ...mode, '--no-color', '-e', args.pattern, '--', where, ':(exclude).relay', ...skip, ...secrets]);
+  const r = git(root, ['-c', 'core.quotePath=false', 'grep', '-n', '-I', '-E', ...mode, '--no-color', '-e', args.pattern, '--', where, ...(upload ? [] : [':(exclude).relay']), ...skip, ...secrets]);
   if (r.code === 1) return '（没找到）';
   if (r.code !== 0) throw new ToolError(`搜索出错：${r.stderr || r.code}`);
   const lines = r.stdout.split('\n');
@@ -315,6 +320,13 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
   const chat = new ToolChat(input.spec, ro ? READ_SYSTEM : SYSTEM, tools(input.level, hasGate).filter((t) => !ro || READ_TOOLS.has(t.name)));
   chat.user(redactSecrets(ro ? input.brief : `${input.brief}\n\n---\n现在开始工作。记住：做完调用 finish。`));
   const maxSteps = input.maxSteps ?? 60;
+  // 只看不改（群聊、投票）：最后留一段时间让它照已经看到的直接回答，看文件不许吃掉这一段。
+  // 2026-10-04 群聊 GLM-5.3 Flash 读一份 1 万多行的总结，一步要一分多钟，15 分钟到了一个字没交，整轮白等。
+  const reserve = ro ? Math.min(answerReserveMs(), Math.max(0, (input.deadline - Date.now()) / 4)) : 0;
+  /** 至少还剩这么久才值得请它回答（留了回答时间的，按留的一半算）。 */
+  const minAnswer = reserve ? Math.min(10_000, reserve / 2) : 10_000;
+  /** 最后一步是直接说话、没再调用工具：那就是它的回答。 */
+  let answered = false;
   let finalText = '';
   let steps = 0;
   let finished = false;
@@ -352,12 +364,20 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
       if (input.shouldStop()) return { finalText, steps, stopped: true, timedOut: false };
       const left = input.deadline - Date.now();
       if (left <= 0) return { finalText, steps, stopped: false, timedOut: true };
+      if (reserve && left <= reserve) {
+        input.log('时间快到了：不再看文件，请它直接回答。');
+        break;
+      }
       steps++;
       // 不再一次最多等 3 分钟：边写边收，一直在出字就等到这一棒的时限；写长东西时日志里报写了多少
       let r: Awaited<ReturnType<ToolChat['next']>>;
       try {
-        r = await chat.next(Math.max(10_000, left), (n) => input.log(`正在写（${n} 字）`));
+        r = await chat.next(Math.max(10_000, left - reserve), (n) => input.log(`正在写（${n} 字）`));
       } catch (e) {
+        if (reserve && e instanceof RelayError && e.code === 'llm-deadline' && input.deadline - Date.now() > minAnswer) {
+          input.log('这一步写到留给回答的时间还没写完：不再看文件，请它直接回答。');
+          break;
+        }
         // 接口说上下文太长（模型的窗口比 40 万字小）：丢掉一半最早的往来再试一次，任务说明一直留着
         if (!(e instanceof RelayError && e.code === 'llm-http' && TOO_LONG.test(e.message))) throw e;
         const n = chat.prune(Math.floor(chat.size() / 2));
@@ -374,7 +394,10 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
       if (r.cut) input.log('这一段写到一次能写的上限被截断，请它分几次写。');
       if (!r.calls.length) {
         // 干活时没调用 finish 就停了：提醒它（做完了就 finish，没做完接着做）；只看不改的直接收下回答
-        if (ro || nudged >= 2 || (!r.cut && r.text.trim() && nudged >= 1)) break;
+        if (ro || nudged >= 2 || (!r.cut && r.text.trim() && nudged >= 1)) {
+          answered = true;
+          break;
+        }
         nudged++;
         chat.user(r.cut ? cutNote : '还没调用 finish。做完了就调用 finish 写三行总结；没做完就接着做。');
         continue;
@@ -411,10 +434,12 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
     if (!finished && steps >= maxSteps) input.log(`到了 ${maxSteps} 步上限，停下。`);
     // 群聊、投票：看文件看到步数用完了、或者一句话没说就停了，回答还是空的：请它不再看文件，照已经看到的直接回答。
     // （2026-09-29 投票时 GLM-5.3 出方案一句话没写，记成了「没有输出」；它投票时说读了很多项目文件，多半是读到步数用完。）
-    if (ro && !finalText.trim() && !input.shouldStop() && input.deadline - Date.now() > 10_000) {
+    // 一边调用工具一边说的那句（「我先看看文件」）不算回答。
+    if (ro && (!answered || !finalText.trim()) && !input.shouldStop() && input.deadline - Date.now() > minAnswer) {
       chat.user('文件就看到这里：不要再调用工具，根据已经看到的内容，现在直接回答。');
       const r = await chat.next(input.deadline - Date.now());
-      if (r.text.trim()) finalText = r.text;
+      // 这一下还是没说话（又去调工具）：前面边调工具边说的那句也不当回答
+      finalText = r.text;
     }
   } catch (e) {
     if (e instanceof RelayError && e.code === 'llm-deadline') return { finalText, steps, stopped: false, timedOut: true };

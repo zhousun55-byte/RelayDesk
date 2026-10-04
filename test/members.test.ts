@@ -158,6 +158,22 @@ test('删掉的成员：再识别也不加回来（连同记在它名下的桌�
     registry.upsertAgent({ name: 'codex', kind: 'cli', cmd: 'codex', harness: 'codex', tier: 'strong' });
     reg = registry.loadRegistry();
     assert.deepEqual(reg.removed?.sort(), ['app:ChatGPT', 'h:opencode'], '自己加回来的不再算删掉的');
+
+    // 删掉的原样留着，能一键加回来：模型、强弱照旧，排在最后；识别时的记号去掉，名字被占了后面加数字
+    assert.deepEqual(registry.trashedAgents().map((x) => x.agent.name), ['codex', 'opencode'], '最近删的在前');
+    const back = registry.restoreAgent('opencode');
+    reg = registry.loadRegistry();
+    assert.deepEqual(reg.agents.map((a) => a.name), ['codex', 'opencode']);
+    assert.equal(back.tier, 'weak');
+    assert.deepEqual(reg.removed, ['app:ChatGPT']);
+    assert.deepEqual(registry.trashedAgents().map((x) => x.agent.name), ['codex']);
+    const again = registry.restoreAgent('codex');
+    assert.equal(again.name, 'codex2', '名字被自己加回来的那位占了');
+    assert.equal(again.model, 'gpt-6-sol');
+    assert.equal(again.app, 'open -a ChatGPT {{dir}}', '删之前记在它名下的桌面程序也回来了');
+    assert.deepEqual(registry.loadRegistry().removed ?? [], []);
+    assert.deepEqual(registry.trashedAgents(), []);
+    assert.throws(() => registry.restoreAgent('codex'), /删掉的成员里没有/);
   } finally {
     process.env.PATH = PATH;
   }

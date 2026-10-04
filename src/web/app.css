@@ -2370,9 +2370,26 @@ button.busy::after {
   color: var(--ink-3);
   font-size: 12.5px;
 }
-.typing .tiles {
-  display: flex;
-  gap: 6px;
+.typing .stack .tile {
+  box-shadow: 0 0 0 1.5px var(--paper), inset 0 0 0 1px var(--hair);
+}
+/* 叠着的时候整枚变淡会透出下面那枚：只让记号变淡 */
+.typing .stack .tile.cooling {
+  opacity: 1;
+}
+.typing .stack .tile.cooling .g {
+  opacity: 0.35;
+}
+/* 悬停时一枚接一枚往右散开：后面跟着让出同样宽的地方，「+N」不压到后面的三个点 */
+.typing .stack {
+  padding-left: 7px;
+  transition: margin-right 0.32s var(--pop);
+}
+.typing:hover .stack {
+  margin-right: 24px;
+}
+.typing:hover .stack > * {
+  transform: translateX(calc(var(--k, 0) * 6px));
 }
 .tally {
   display: inline-flex;
@@ -3702,6 +3719,33 @@ button.busy::after {
 .member:hover .mname svg.i,
 .member .mname:focus-visible svg.i {
   opacity: 1;
+}
+/* 删掉的几位：名单下面一行小字，点开是淡一点的几行，每行后面「加回来」 */
+.trash-box {
+  margin-top: 6px;
+}
+.trash-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  transition: color 0.14s;
+}
+.trash-head:hover {
+  color: var(--ink);
+}
+.trash-head .caret {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.2s var(--ease);
+}
+.trash-head[aria-expanded='true'] .caret {
+  transform: rotate(90deg);
+}
+.member.gone .mn b {
+  color: var(--ink-3);
 }
 .member {
   display: flex;

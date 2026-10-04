@@ -3474,14 +3474,20 @@ function roundBox(rows) {
   return h('div', { class: 'round' }, h('span', { class: 'cap' }, T`对比 · ${rows.length}`), h('div', { class: 'round-cols' }, rows.map((r) => aiRow(r, true))));
 }
 
+/** 谁在说、谁在排队：叠成一叠（和输入框旁边那叠一样），在说的在最上面，排队的浅一点；多了收成「+N」，悬停散开。 */
 function typingLine(st) {
   const names = st.speaking.map((x) => nameOf(x.label));
+  const who = [...st.speaking.map((x) => ({ agent: x.agent, label: x.label, on: true })), ...st.queue.map((x) => ({ agent: x.agent, label: x.label }))];
   return h(
     'div',
-    { class: 'typing' },
-    h('span', { class: 'tiles' }, st.speaking.map((x) => tile({ agent: x.agent, label: x.label })), st.queue.map((x) => tile({ agent: x.agent, label: x.label }, '', 'cooling'))),
+    {
+      class: 'typing',
+      'data-tip': [names.length > 2 ? T`正在输入：${names.join(T`、`)}` : '', st.queue.length ? T`排队：${st.queue.map((x) => nameOf(x.label)).join(T`、`)}` : ''].filter(Boolean).join('\n') || null,
+    },
+    stack(who, (m) => (m.on ? '' : 'cooling'), 4),
     h('span', { class: 'dots' }, h('i'), h('i'), h('i')),
-    st.summing ? T`${nameOf(st.speaking.find((x) => x.agent === st.summing)?.label || st.summing)} 正在总结` : names.length ? T`${names.join(T`、`)} 正在输入` : T`排队中`
+    // 对比时十来位一起说：名字也收起来，只写第一位和一共几位（全部的在悬停里）
+    st.summing ? T`${nameOf(st.speaking.find((x) => x.agent === st.summing)?.label || st.summing)} 正在总结` : names.length > 2 ? T`${names[0]} 等 ${names.length} 位正在输入` : names.length ? T`${names.join(T`、`)} 正在输入` : T`排队中`
   );
 }
 
@@ -6428,8 +6434,64 @@ function membersPane(redraw) {
     ),
     h('p', { class: 'set-desc' }, T`弱模型做的每一棒都要强模型复核。派活按这个顺序，额度用完的跳过。`),
     list,
+    trashBox(redraw),
     consent,
   ];
+}
+
+/** 删掉的几位：名单下面一行「已删除 · 3」，点开一行行浮上来，每位后面「加回来」（照删之前的样子，排在最后）。 */
+let trashRedraw = null;
+function trashBox(redraw) {
+  trashRedraw = redraw;
+  const items = (S.st && S.st.trash) || [];
+  const box = h('div', { class: 'trash-box' });
+  if (!items.length) return box;
+  const rows = () =>
+    items.map((t) =>
+      h(
+        'div',
+        { class: 'member gone', 'data-name': t.name },
+        h('span', { class: 'mt' }, tile(t, 's28', 'cooling')),
+        h('div', { class: 'mn' }, h('b', null, t.llm), h('small', null, T`${when(t.at)} 删除`)),
+        h('button', { class: 'btn small line', onclick: (e) => restoreMember(e.currentTarget, t) }, T`加回来`)
+      )
+    );
+  const head = h(
+    'button',
+    {
+      class: 'trash-head',
+      'aria-expanded': String(!!store.get('trashOpen')),
+      onclick: () => {
+        const open = !store.get('trashOpen');
+        store.set('trashOpen', open ? 1 : null);
+        head.setAttribute('aria-expanded', String(open));
+        if (open) {
+          const els = rows();
+          box.append(...els);
+          els.forEach((el, i) => enterAnim(el, i));
+        } else for (const el of box.querySelectorAll('.member.gone')) leave(el);
+      },
+    },
+    icon('chev', 'caret'),
+    T`已删除 · ${items.length}`
+  );
+  box.append(head, ...(store.get('trashOpen') ? rows() : []));
+  return box;
+}
+
+/** 名单下面那一块按现在的「已删除」重画（删了一位、加回来一位之后）。 */
+function refreshTrash() {
+  const box = document.querySelector('.settings .trash-box');
+  if (box && trashRedraw) box.replaceWith(trashBox(trashRedraw));
+}
+
+async function restoreMember(btn, t) {
+  const r = await act(btn, () => api('/api/workers/restore', { name: t.name }), T`已加回来 ${t.llm}`);
+  if (!r) return;
+  S.st.members = r.members;
+  S.st.trash = r.trash;
+  updateComposer();
+  if (trashRedraw) redrawMembers(trashRedraw, r.name);
 }
 
 /** 接力台对这个工具实测到什么程度：都实测过的不写。 */
@@ -6466,14 +6528,15 @@ function memberNote(m) {
 
 const LIMIT_WORD = { '5h': T`5 小时`, '7d': T`一周`, '7d-opus': 'Opus' };
 
-/** 工具自己报的额度：「5 小时 5% · 一周 72%」；没报过就是空的。 */
+/** 工具自己报的额度，写剩多少（和 ChatGPT、Codex 里「剩余用量」一个说法）：「5 小时 剩 87% · 一周 剩 82%」；没报过就是空的。 */
 function limitsText(m) {
-  return (m.limits || []).map((w) => `${LIMIT_WORD[w.kind] || w.kind} ${Math.round(w.used)}%`).join(' · ');
+  return (m.limits || []).map((w) => T`${LIMIT_WORD[w.kind] || w.kind} 剩 ${Math.max(0, Math.min(100, 100 - Math.round(w.used)))}%`).join(' · ');
 }
 
 /** 悬停看几点恢复：「5 小时 21:40 恢复 · 一周 周五 09:00 恢复」。 */
 function limitsTip(m) {
-  return (m.limits || []).filter((w) => w.resetsAt).map((w) => T`${LIMIT_WORD[w.kind] || w.kind} ${aheadClock(w.resetsAt)} 恢复`).join(' · ') || null;
+  const back = (m.limits || []).filter((w) => w.resetsAt).map((w) => T`${LIMIT_WORD[w.kind] || w.kind} ${aheadClock(w.resetsAt)} 恢复`).join(' · ');
+  return [back, m.limitsAt ? T`${when(m.limitsAt)} 读到的` : ''].filter(Boolean).join('\n') || null;
 }
 
 /** 将来的时间：今天写几点，明天写「明天 00:30」，一周内写星期，再远写日期。 */
@@ -6515,9 +6578,14 @@ async function unblockMember(m) {
 /** 删掉一位：它那一行淡出，下面的行滑上来补位。 */
 async function removeMember(m, row) {
   const name = memberName(m);
-  if (!(await confirmSheet(T`删除 ${name}？`, T`它自己的程序不受影响；重新识别也不会再加回来。`, T`删除`))) return;
+  if (!(await confirmSheet(T`删除 ${name}？`, T`它自己的程序不受影响。删掉的在名单下面「已删除」里，随时能加回来。`, T`删除`))) return;
   const r = await act(null, () => api('/api/workers/delete', { name: m.name }), T`已删除 ${name}`);
-  if (!r || !row.isConnected) return;
+  if (!r) return;
+  if (r.trash) {
+    S.st.trash = r.trash;
+    refreshTrash();
+  }
+  if (!row.isConnected) return;
   row.classList.add('going');
   setTimeout(() => {
     const list = row.parentNode;

@@ -3,7 +3,7 @@ import { RelayError } from '../core/errors';
 import { checkCommand } from '../core/launch';
 import { apiUsable, keyWhere } from '../core/llm';
 import { findPreset, PRESETS } from '../core/presets';
-import { addAgent, agentKind, agentLabel, canTalk, findAgent, loadRegistry, registryPath, removeAgent, upsertAgent } from '../core/registry';
+import { addAgent, agentKind, agentLabel, canTalk, findAgent, loadRegistry, registryPath, removeAgent, restoreAgent, trashedAgents, upsertAgent } from '../core/registry';
 import type { AgentConfig } from '../core/types';
 import { info, ok, warn } from './print';
 
@@ -132,7 +132,22 @@ export function workersCommand(): Command {
     .argument('<名字>')
     .action((name: string) => {
       removeAgent(name);
-      ok(`已删除成员「${name}」`);
+      ok(`已删除成员「${name}」（relay workers restore ${name} 能加回来）`);
+    });
+
+  workers
+    .command('restore')
+    .description('把删掉的成员加回来（不带名字就列出删掉的）')
+    .argument('[名字]')
+    .action((name?: string) => {
+      if (!name) {
+        const list = trashedAgents();
+        if (!list.length) return info('没有删掉的成员。');
+        for (const x of list) console.log(`${x.agent.name}  ${agentLabel(x.agent)}  删于 ${new Date(x.at).toLocaleString()}`);
+        return;
+      }
+      const a = restoreAgent(name);
+      ok(`已加回来：${describe(a)}`);
     });
 
   workers

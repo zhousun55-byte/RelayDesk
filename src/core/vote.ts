@@ -8,7 +8,7 @@ import { redactSecrets } from './redact';
 import { plain } from './cause';
 import { findAgent } from './registry';
 import { memberTier } from './tier';
-import { appendTalkRaw, askAgent, checkSpeakers, inParallel, releaseThread, speakerName, talkPath, threadOf, type TalkContext, type Thread } from './talk';
+import { appendTalkRaw, askAgent, checkSpeakers, inParallel, releaseThread, speakerName, talkPath, taskBackground, threadOf, type TalkContext, type Thread } from './talk';
 import { stampLocal } from './time';
 
 /**
@@ -127,8 +127,7 @@ function speaker(name: string): string {
 }
 
 function contextText(ctx: TalkContext): string {
-  const t = ctx.task;
-  return t ? `当前任务：${t.title}\n任务状态：${t.phaseText}` : '现在没有写下任务。';
+  return taskBackground(ctx);
 }
 
 export function proposePrompt(input: { speaker: string; root: string; question: string; context: TalkContext }): string {

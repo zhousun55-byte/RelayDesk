@@ -18,7 +18,7 @@ export function talkContext(root: string): () => TalkContext {
     const p = taskProgress(t);
     const v = loadLedger(root);
     const last = [...v.stints].reverse().find((s) => s.status !== 'working');
-    const phase = `进度 ${p.done}/${p.total}${last ? `；最近一棒：第 ${last.id} 棒 ${last.who.label}${last.summary ? `（${last.summary}）` : ''}` : ''}`;
+    const phase = `${p.total && p.done >= p.total ? '已全部做完，' : ''}进度 ${p.done}/${p.total}${last ? `；最近一棒：第 ${last.id} 棒 ${last.who.label}${last.summary ? `（${last.summary}）` : ''}` : ''}`;
     return { task: { title: t.title, phaseText: phase, changes: [] } };
   };
 }

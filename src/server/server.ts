@@ -6,10 +6,10 @@ import path from 'node:path';
 import { talkContext } from '../commands/talk';
 import { autoSettingsSafe, saveAutoSettings } from '../core/auto-settings';
 import { ensureGateOk, saveRelayConfig } from '../core/config';
-import { addModelMembers, canCheckApps, desktopApps, enableProvider, findAppBundle, loadDetected, modelOptions, newerHints, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
+import { addModelMembers, canCheckApps, desktopApps, enableProvider, findAppBundle, loadDetected, memberModel, modelOptions, newerHints, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
-import { findHarness } from '../core/harness';
+import { findHarness, locateCached } from '../core/harness';
 import { copyToClipboard, fillTemplate, openUrl, reveal, runOpener, chooseFolder } from '../core/launch';
 import { projectSessions, readSession, resumeHow, sessionToolOf } from '../core/sessions';
 import { listSkills } from '../core/skills';
@@ -19,8 +19,8 @@ import { forgetProject, knownDir, lastProject, loadMemory, rememberOpened, remem
 import { appNameOf, llmName, toolName } from '../core/names';
 import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
 import { isInside } from '../core/paths';
-import { clearBlocked, untilText } from '../core/quota';
-import { agentKind, findAgent, isOpenCommand, loadRegistry, removeAgent, saveRegistry, upsertAgent } from '../core/registry';
+import { clearBlocked, noteLimits, untilText } from '../core/quota';
+import { agentKind, agentLabel, findAgent, isOpenCommand, loadRegistry, removeAgent, restoreAgent, saveRegistry, trashedAgents, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
 import { adoptSummary, archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, summarize, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
 import { adoptOption, appendRule, castHumanVote, readVotes, startVote } from '../core/vote';
@@ -131,6 +131,46 @@ function memberViewsUnsafe() {
     newer: newer[m.name] ?? null,
     agent: m.agent,
   }));
+}
+
+/**
+ * 网页在看的时候顺手问一次额度（不花额度：Codex 用它自己的 app-server 答，接力台不读登录凭据）。
+ * 以前只有派活前才问，人在 ChatGPT 里用过、或者只在群聊里用，名单上一直是好几天前的数
+ * （2026-10-04：网页写「一周 12%」，是 9 月 28 日读的；ChatGPT 里一周剩 82%）。5 分钟最多问一次，在后台问，下一次刷新就是新的。
+ */
+let liveLimitsAt = 0;
+function refreshLimitsSoon(): void {
+  if (process.env.RELAY_LIVE_LIMITS === 'off' || Date.now() - liveLimitsAt < 5 * 60_000) return;
+  liveLimitsAt = Date.now();
+  const groups = new Map<string, string[]>();
+  try {
+    for (const m of allMembers(autoSettingsSafe().settings.level, loadDetected())) {
+      if (m.kind === 'harness' && m.harness && findHarness(m.harness)?.liveLimits) groups.set(m.harness, [...(groups.get(m.harness) ?? []), m.name]);
+    }
+  } catch {
+    return;
+  }
+  for (const [h, names] of groups) {
+    const spec = findHarness(h);
+    const loc = spec ? locateCached(spec) : null;
+    if (!spec?.liveLimits || !loc) continue;
+    spec
+      .liveLimits(loc)
+      .then((w) => {
+        if (w?.length) for (const n of names) noteLimits(n, w);
+      })
+      .catch(() => {});
+  }
+}
+
+/** 删掉、还能加回来的几位（最近删的在前）：名字、图标要的几样、什么时候删的。名单读不出来时是空的。 */
+function trashView() {
+  try {
+    const report = loadDetected();
+    return trashedAgents().map(({ agent, at }) => ({ name: agent.name, label: agentLabel(agent), llm: llmName(memberModel(agent, report)) || agentLabel(agent), model: memberModel(agent, report) ?? null, tier: agent.tier ?? 'weak', kind: agentKind(agent), at }));
+  } catch {
+    return [];
+  }
 }
 
 /** 成员名单坏了（agents.json 不是合法 JSON、格式不对）不能让整个网页打不开：列成空的，同时带上原因（网页顶上提示）。 */
@@ -324,6 +364,7 @@ export function createServer(opts: ServerOptions): http.Server {
     // 弹不出选文件夹的对话框时，网页给出一行在终端里运行的命令（relay ui 那个文件夹）：要接力台自己的位置
     '/api/open-hint': () => ({ cli: path.join(__dirname, '..', 'cli.js'), win: process.platform === 'win32' }),
     '/api/state': (q) => {
+      refreshLimitsSoon();
       const root = dirOf(q, {});
       const pv = projectView(root);
       if (pv.init) {
@@ -341,6 +382,7 @@ export function createServer(opts: ServerOptions): http.Server {
         home: os.homedir(),
         project: pick ? { ...pv, pick: true } : pv,
         members: mem.members,
+        trash: trashView(),
         ...(mem.error ? { membersError: mem.error } : {}),
         settings: auto.settings,
         ...(auto.error ? { settingsError: auto.error } : {}),
@@ -654,7 +696,12 @@ export function createServer(opts: ServerOptions): http.Server {
     },
     '/api/workers/delete': (_q, b) => {
       removeAgent(str(b.name) ?? '');
-      return {};
+      return { trash: trashView() };
+    },
+    // 删掉的加回来：照删之前的样子，排在最后
+    '/api/workers/restore': (_q, b) => {
+      const a = restoreAgent(str(b.name) ?? '');
+      return { name: a.name, members: memberViews(), trash: trashView() };
     },
     '/api/config/save': (q, b) => {
       const root = dirOf(q, b);

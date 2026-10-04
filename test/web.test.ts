@@ -354,8 +354,8 @@ result = out;`,
   });
 });
 
-test('成员名单的额度：第二行写「5 小时 5% · 一周 72%」，悬停写几点恢复；没报过额度就什么都不写', () => {
-  const code = ['pad', 'clock', 'aheadClock', 'LIMIT_WORD', 'limitsText', 'limitsTip'].map(pick).join('\n\n');
+test('成员名单的额度：第二行写剩多少「5 小时 剩 95% · 一周 剩 28%」（和 ChatGPT 里一个说法），悬停写几点恢复、什么时候读到的；没报过额度就什么都不写', () => {
+  const code = ['pad', 'clock', 'sameDay', 'when', 'aheadClock', 'LIMIT_WORD', 'limitsText', 'limitsTip'].map(pick).join('\n\n');
   const ctx: Record<string, unknown> = {};
   runWeb(`${code}\nresult = { limitsText, limitsTip };`, ctx);
   const { limitsText, limitsTip } = ctx.result as { limitsText: (m: object) => string; limitsTip: (m: object) => string | null };
@@ -363,7 +363,7 @@ test('成员名单的额度：第二行写「5 小时 5% · 一周 72%」，悬�
   soon.setMinutes(soon.getMinutes() + 30, 0, 0);
   const at = `${String(soon.getHours()).padStart(2, '0')}:${String(soon.getMinutes()).padStart(2, '0')}`;
   const m = { limits: [{ kind: '5h', used: 5.4, resetsAt: soon.toISOString() }, { kind: '7d', used: 72 }] };
-  assert.equal(limitsText(m), '5 小时 5% · 一周 72%');
+  assert.equal(limitsText(m), '5 小时 剩 95% · 一周 剩 28%');
   assert.ok(limitsTip(m)!.startsWith('5 小时 '), limitsTip(m)!);
   assert.ok(limitsTip(m)!.includes(`${at} 恢复`), limitsTip(m)!);
   assert.ok(!limitsTip(m)!.includes('一周'), '没给恢复时间的窗口不写');
@@ -371,7 +371,9 @@ test('成员名单的额度：第二行写「5 小时 5% · 一周 72%」，悬�
   tmr.setDate(tmr.getDate() + 1);
   tmr.setHours(0, 30, 0, 0);
   assert.equal(limitsTip({ limits: [{ kind: '5h', used: 1, resetsAt: tmr.toISOString() }] }), '5 小时 明天 00:30 恢复');
-  assert.equal(limitsText({ limits: [{ kind: '7d-opus', used: 40 }] }), 'Opus 40%');
+  assert.equal(limitsText({ limits: [{ kind: '7d-opus', used: 40 }] }), 'Opus 剩 60%');
+  assert.equal(limitsText({ limits: [{ kind: '7d', used: 103 }] }), '一周 剩 0%', '超过额度的不写负数');
+  assert.ok(limitsTip({ limits: [{ kind: '7d', used: 1 }], limitsAt: new Date().toISOString() })!.endsWith(' 读到的'), '悬停写什么时候读到的');
   assert.equal(limitsText({}), '');
   assert.equal(limitsTip({}), null);
 });

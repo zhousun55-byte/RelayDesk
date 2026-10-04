@@ -68,6 +68,8 @@ export interface AgentsRegistry {
   agents: AgentConfig[];
   /** 你删掉的（识别时认的记号：h:工具、api:接口地址、app:桌面程序）：再识别也不加回来。 */
   removed?: string[];
+  /** 删掉的成员原样留着（最近的在后面），设置里能一键加回来。 */
+  trash?: { agent: AgentConfig; at: string }[];
 }
 
 /**

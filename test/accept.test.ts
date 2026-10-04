@@ -586,3 +586,41 @@ ${code}
   });
   assert.deepEqual(out, ['err:moved', '/api/init→A', '/api/task→A /api/auto→A draft=false', '/api/task→A draft=true {"draft:A":"做登录页"}']);
 });
+
+test('内置代理搜得到人传上来的附件（.relay/uploads/ 有自己的 .gitignore），文件名照原样显示；平时不搜 .relay', async () => {
+  // 2026-10-04 群聊里 GLM 搜一份 1 万多行的附件总是「没找到」，只好一段段读
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'relay-agent-upload-')));
+  fs.mkdirSync(path.join(root, '.relay', 'uploads'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.relay', 'uploads', '.gitignore'), '*\n');
+  fs.writeFileSync(path.join(root, '.relay', 'uploads', '课程总结.md'), '# 第 21 章\nMARK_U\n');
+  fs.writeFileSync(path.join(root, '.relay', '接力本.md'), 'MARK_U\n');
+  const results: string[] = [];
+  class FakeChat {
+    used = { input: 0, output: 0 };
+    n = 0;
+    user(): void {}
+    size(): number {
+      return 0;
+    }
+    prune(): number {
+      return 0;
+    }
+    results(r: { content: string }[]): void {
+      results.push(...r.map((x) => x.content));
+    }
+    async next(): Promise<{ text: string; calls: { id: string; name: string; args: Record<string, unknown> }[] }> {
+      this.n++;
+      if (this.n === 1) return { text: '', calls: [{ id: 'a', name: 'search', args: { pattern: '^# ', path: '.relay/uploads/课程总结.md' } }, { id: 'b', name: 'search', args: { pattern: 'MARK_U' } }] };
+      return { text: '答', calls: [] };
+    }
+  }
+  const real = llm.ToolChat;
+  llm.ToolChat = FakeChat;
+  try {
+    await agent.runLlmAgent({ spec: { baseUrl: 'http://x', model: 'm', apiKeyEnv: 'X' } as never, cwd: root, brief: '试', level: 'safe', readOnly: true, gateCommand: '', protectedPaths: [], log: () => undefined, shouldStop: () => false, deadline: Date.now() + 60_000 });
+  } finally {
+    llm.ToolChat = real;
+  }
+  assert.match(results[0], /^\.relay\/uploads\/课程总结\.md:1:# 第 21 章$/);
+  assert.equal(results[1], '（没找到）', '不指定路径时 .relay 里的不搜');
+});

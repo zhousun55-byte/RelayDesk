@@ -71,16 +71,18 @@ export function loadRegistry(): AgentsRegistry {
   const list = (parsed as Partial<AgentsRegistry> | null)?.agents;
   if (!Array.isArray(list)) throw new RelayError(`成员名单 ${p} 格式不对，应为 { "agents": [...] }`, 'bad-registry');
   const removed = (parsed as Partial<AgentsRegistry>).removed;
+  const trash = (parsed as Partial<AgentsRegistry>).trash;
   const reg: AgentsRegistry = {
     agents: list.filter((a): a is AgentConfig => !!a && typeof a === 'object' && typeof a.name === 'string'),
     ...(Array.isArray(removed) ? { removed: removed.filter((x): x is string => typeof x === 'string') } : {}),
+    ...(Array.isArray(trash) ? { trash: trash.filter((x) => !!x && typeof x === 'object' && !!x.agent && typeof x.agent === 'object' && typeof x.agent.name === 'string' && typeof x.at === 'string') } : {}),
   };
   cache = { path: p, mtimeMs: st.mtimeMs, size: st.size, reg };
   return copyOf(reg);
 }
 
 function copyOf(reg: AgentsRegistry): AgentsRegistry {
-  return { agents: reg.agents.map((a) => ({ ...a })), ...(reg.removed ? { removed: [...reg.removed] } : {}) };
+  return { agents: reg.agents.map((a) => ({ ...a })), ...(reg.removed ? { removed: [...reg.removed] } : {}), ...(reg.trash ? { trash: reg.trash.map((x) => ({ agent: { ...x.agent }, at: x.at })) } : {}) };
 }
 
 /**
@@ -105,7 +107,7 @@ export function loadRegistryForDetect(): { reg: AgentsRegistry; recovered?: stri
 export function saveRegistry(reg: AgentsRegistry): void {
   const p = registryPath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  const out: AgentsRegistry = { agents: reg.agents, ...(reg.removed?.length ? { removed: [...new Set(reg.removed)] } : {}) };
+  const out: AgentsRegistry = { agents: reg.agents, ...(reg.removed?.length ? { removed: [...new Set(reg.removed)] } : {}), ...(reg.trash?.length ? { trash: reg.trash.slice(-TRASH_MAX) } : {}) };
   fs.writeFileSync(p, JSON.stringify(out, null, 2) + '\n');
   cache = null;
 }
@@ -271,7 +273,10 @@ export function removalKeys(a: AgentConfig): string[] {
   return keys;
 }
 
-export function removeAgent(name: string): void {
+/** 删掉的成员最多留这么多位（更早的就真删了）。 */
+const TRASH_MAX = 30;
+
+export function removeAgent(name: string, now = new Date()): void {
   const reg = loadRegistry();
   const gone = reg.agents.find((a) => a.name === name);
   if (!gone) throw new RelayError(`名单里没有「${name}」`, 'no-agent');
@@ -280,5 +285,32 @@ export function removeAgent(name: string): void {
   for (const a of rest) if (a.crew === name) delete a.crew;
   // 同一个工具换了模型的还有别的几位在：这个工具不算删掉（重新识别照常更新它的位置）
   const held = new Set(rest.flatMap(removalKeys));
-  saveRegistry({ agents: rest, removed: [...(reg.removed ?? []), ...removalKeys(gone).filter((k) => !held.has(k))] });
+  // 原样留一份，设置里能加回来（同名的旧一份换成这份）
+  const trash = [...(reg.trash ?? []).filter((x) => x.agent.name !== name), { agent: gone, at: now.toISOString() }];
+  saveRegistry({ agents: rest, removed: [...(reg.removed ?? []), ...removalKeys(gone).filter((k) => !held.has(k))], trash });
+}
+
+/**
+ * 把删掉的一位加回来：照删之前的样子（模型、强弱、命令都在），排在名单最后；名字被别人占了就在后面加数字。
+ * 识别时认的记号也去掉（不然重新识别还当它是删掉的）。返回加回来的那一位。
+ */
+export function restoreAgent(name: string): AgentConfig {
+  const reg = loadRegistry();
+  const i = (reg.trash ?? []).map((x) => x.agent.name).lastIndexOf(name);
+  if (i < 0) throw new RelayError(`删掉的成员里没有「${name}」`, 'no-agent');
+  const agent = { ...reg.trash![i].agent };
+  const taken = new Set(reg.agents.map((a) => a.name));
+  for (let k = 2; taken.has(agent.name); k++) agent.name = `${name}${k}`;
+  if (agent.crew && !taken.has(agent.crew)) delete agent.crew;
+  reg.agents.push(agent);
+  const back = new Set(removalKeys(agent));
+  reg.removed = (reg.removed ?? []).filter((k) => !back.has(k));
+  reg.trash = reg.trash!.filter((_, j) => j !== i);
+  saveRegistry(reg);
+  return agent;
+}
+
+/** 删掉、还能加回来的几位（最近删的在前）。 */
+export function trashedAgents(): { agent: AgentConfig; at: string }[] {
+  return [...(loadRegistry().trash ?? [])].reverse();
 }

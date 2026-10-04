@@ -295,6 +295,26 @@ export interface TalkContext {
   task?: { title: string; phaseText: string; changes: string[] } | null;
 }
 
+/**
+ * 群聊、投票、总结里给的项目背景。写明不是这次的题目：2026-10-04 群聊里问的是一份课程总结，
+ * DeepSeek Flash 把提示末尾的「当前任务：给 notes.py 加 clear 命令」当成了题目，去核那个早就做完的任务。
+ */
+export function taskBackground(ctx?: TalkContext): string {
+  const t = ctx?.task;
+  if (!t) return '项目背景：现在没有进行中的接力任务。';
+  const changes = t.changes.length ? `已改动的文件：${t.changes.slice(0, 30).join('、')}。` : '';
+  return `项目背景（只供参考，不是这次要讨论的题目）：这个项目里的接力任务是「${t.title}」，${t.phaseText}。${changes}`;
+}
+
+/** 这是讨论，不是接力的一棒（有的工具开工会自己读 AGENTS.md 里的接力规矩，读了就以为自己是来干活的）。 */
+const NOT_A_LEG = '- 这是讨论，不是接力的一棒：项目里 AGENTS.md、CLAUDE.md 的「接力规矩」（读接力本、建交接、复核、跑测试）这次都不用做。要回答的是讨论记录里人最后问的那个问题。';
+
+/** 轮到谁，再把人最后问的那句重复一遍（放在最后，模型最看得到）。 */
+function yourTurn(speaker: string, ask?: TalkRow): string {
+  const q = ask?.text.trim();
+  return `现在轮到你（${speaker}）发言。${q ? `\n要回答的是 [${hhmm(ask!.ts)}] 人问的：「${q.length > 300 ? `${q.slice(0, 300)}…` : q}」` : ''}`;
+}
+
 function hhmm(ts: string): string {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return '--:--';
@@ -311,7 +331,7 @@ const TALK_STEP = 12;
  * 顺序按「不变的在前、变的在后」：规则 → 讨论记录（只往后接）→ 任务状态、轮到谁。
  * 各家接口按开头相同的部分算缓存：开头一变，后面整段都要按全价重读。
  */
-export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean; file?: string; since?: boolean }): string {
+export function buildTalkPrompt(input: { speaker: string; root: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean; file?: string; since?: boolean; ask?: TalkRow }): string {
   if (input.since) return followUpPrompt(input);
   const max = input.maxChars ?? TALK_HISTORY_CHARS;
   const lines = input.rows
@@ -324,7 +344,7 @@ export function buildTalkPrompt(input: { speaker: string; root: string; rows: Ta
   let from = Math.ceil(need / TALK_STEP) * TALK_STEP;
   if (from >= lines.length) from = need;
   const kept = lines.slice(from);
-  const t = input.context?.task;
+  const ask = input.ask ?? [...input.rows].reverse().find((r) => r.kind === 'human');
   const where = input.file ? `完整记录在 \`${input.file}\`` : '';
   const head = from > 0 ? `较早的 ${from} 句没放进来${where ? `，${where}，需要时自己打开看` : ''}` : where;
   const parts = [
@@ -336,16 +356,16 @@ export function buildTalkPrompt(input: { speaker: string; root: string; rows: Ta
       '- 可以点名回应别人的观点：同意还是不同意，为什么。你有不同的想法就直说，不要因为对方是更强的模型就附和。',
       '- 说清楚为止：简单的问题几句话，复杂的问题写完整（结论在前，依据、做法在后），不为凑短删掉该说的。',
       '- 消息里用反引号括起来的路径是提到的文件；.relay/uploads/ 下的是人传上来的附件（图片、文档……），需要就自己打开看，图片用你能看图的工具打开。',
+      NOT_A_LEG,
+      '- 记录里署名和你不一样的话都不是你说的，同一家的另一个型号也不是你（比如你是 GLM-5.3 Flash，GLM-5.3 说的话就不是你说的，不要「撤回我上一轮」）。',
       '- 用中文。只输出你要说的话本身。',
     ].join('\n'),
     `讨论记录（${head ? `${head}；` : ''}最新的在最后）：\n${kept.join('\n\n') || '（还没有人说话）'}`,
-    t
-      ? `当前任务：${t.title}\n任务状态：${t.phaseText}${t.changes.length ? `\n已改动的文件：${t.changes.slice(0, 30).join('、')}` : ''}`
-      : '现在没有进行中的任务。',
+    taskBackground(input.context),
     `你是「${input.speaker}」。` +
       (input.solo
-        ? `这一轮是「对比」：几个 AI 同时回答最后那个问题，互相看不到，回答会并排放在一起给人对比。请给出你自己独立的判断，不用顾及别人会怎么说。现在请你（${input.speaker}）回答。`
-        : `现在轮到你（${input.speaker}）发言。`),
+        ? `这一轮是「对比」：几个 AI 同时回答最后那个问题，互相看不到，回答会并排放在一起给人对比。请给出你自己独立的判断，不用顾及别人会怎么说。${yourTurn(input.speaker, ask)}`
+        : yourTurn(input.speaker, ask)),
   ];
   return redactSecrets(parts.join('\n\n'));
 }
@@ -354,21 +374,21 @@ export function buildTalkPrompt(input: { speaker: string; root: string; rows: Ta
  * 接着它工具里那段对话说：前面的讨论、规矩它都看过了，只给它上次说完之后的新消息、现在的任务状态、轮到它。
  * 新消息太多放不下时，和第一次一样只留最后那些，告诉它完整记录在哪。
  */
-function followUpPrompt(input: { speaker: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean; file?: string }): string {
+function followUpPrompt(input: { speaker: string; rows: TalkRow[]; context?: TalkContext; maxChars?: number; solo?: boolean; file?: string; ask?: TalkRow }): string {
   const max = input.maxChars ?? TALK_HISTORY_CHARS;
   const lines = input.rows.filter((r) => !r.error).map((r) => `[${hhmm(r.ts)}] ${r.kind === 'system' ? '（接力台）' : r.who}：${r.text.trim()}`);
   let from = lines.length;
   for (let size = 0; from > 0 && size + lines[from - 1].length + 2 <= max; from--) size += lines[from - 1].length + 2;
   if (from === lines.length && from > 0) from--;
   const kept = lines.slice(from);
-  const t = input.context?.task;
+  const ask = input.ask ?? [...input.rows].reverse().find((r) => r.kind === 'human');
   const parts = [
-    `还是「接力台」里的这场多 AI 讨论，规矩和上面一样（只说话，不改文件）。`,
+    `还是「接力台」里的这场多 AI 讨论，规矩和上面一样（只说话，不改文件；这是讨论，不是接力的一棒）。`,
     `你上次说完之后的新消息（${from > 0 ? `较早的 ${from} 句没放进来${input.file ? `，完整记录在 \`${input.file}\`` : ''}；` : ''}最新的在最后）：\n${kept.join('\n\n') || '（没有新消息）'}`,
-    t ? `当前任务：${t.title}\n任务状态：${t.phaseText}` : '现在没有进行中的任务。',
+    taskBackground(input.context),
     input.solo
-      ? `这一轮是「对比」：几个 AI 同时回答最后那个问题，互相看不到。请给出你自己独立的判断。现在请你（${input.speaker}）回答。`
-      : `现在轮到你（${input.speaker}）发言。`,
+      ? `这一轮是「对比」：几个 AI 同时回答最后那个问题，互相看不到。请给出你自己独立的判断。${yourTurn(input.speaker, ask)}`
+      : yourTurn(input.speaker, ask),
   ];
   return redactSecrets(parts.join('\n\n'));
 }
@@ -412,6 +432,23 @@ function replyOf(raw: string): string {
   return text;
 }
 
+/**
+ * 没答出来时把过程留在项目的 .relay/runs/讨论-<名字>.log（同一位只留最近一次；答出来了就不留），下次查得到卡在哪。
+ * 2026-10-04 群聊里 GLM-5.3 Flash 跑满 15 分钟一个字没交，接口型的过程当时没记，查不到原因。返回相对项目的路径。
+ */
+function keepFailLog(cwd: string, name: string, text: string): string {
+  try {
+    if (!text.trim() || !fs.existsSync(path.join(cwd, '.relay'))) return '';
+    const rel = `.relay/runs/讨论-${name.replace(/[\\/:*?"<>|\s]+/g, '-')}.log`;
+    fs.mkdirSync(path.join(cwd, '.relay', 'runs'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, rel), redactSecrets(text));
+    return rel;
+  } catch {
+    return '';
+  }
+}
+const logNote = (rel: string) => (rel ? `（过程记在 \`${rel}\`）` : '');
+
 /** 让一个 AI 回答。接口型用内置小代理，只给读文件的工具；编程工具、自定义命令见下面。 */
 export async function askAgent(agent: AgentConfig, prompt: string, cwd: string, timeoutMs = TALK_MAX_MS, idleMs = TALK_IDLE_MS): Promise<string> {
   return (await askAgentRun(agent, prompt, cwd, { timeoutMs, idleMs })).text;
@@ -427,6 +464,8 @@ export async function askAgentRun(agent: AgentConfig, prompt: string, cwd: strin
   prompt += langNote();
   if (agentKind(agent) === 'api') {
     if (!agent.api) throw new RelayError('没有配置接口', 'no-api');
+    const t0 = Date.now();
+    const lines: string[] = [];
     // 和编程工具一样能看项目里的文件：不给工具的话，它会把「调用工具」的原文当成回答说出来。
     const r = await runLlmAgent({
       spec: agent.api,
@@ -436,7 +475,7 @@ export async function askAgentRun(agent: AgentConfig, prompt: string, cwd: strin
       readOnly: true,
       gateCommand: '',
       protectedPaths: [],
-      log: () => {},
+      log: (s) => lines.push(`[${Math.round((Date.now() - t0) / 1000)} 秒] ${s}`),
       shouldStop: () => false,
       deadline: Date.now() + timeoutMs,
       maxSteps: 30,
@@ -445,7 +484,8 @@ export async function askAgentRun(agent: AgentConfig, prompt: string, cwd: strin
     if (!text) {
       const kind = r.error ? failureKind(r.error) : null;
       if (kind) blockMember(agent.name, kind, r.error ?? '', agent.api.model);
-      throw new RelayError(r.error ? (quotaWhy(r.error) ?? plain(r.error)) : r.timedOut ? cause.overtime(timeoutMs) : cause.silent(), 'ask-empty');
+      const rel = keepFailLog(cwd, agent.name, [`${agent.api.model} · ${new Date(t0).toISOString()}`, ...lines, r.error ? `出错：${r.error}` : r.timedOut ? '到了时限' : '没有回答'].join('\n'));
+      throw new RelayError((r.error ? (quotaWhy(r.error) ?? plain(r.error)) : r.timedOut ? cause.overtime(timeoutMs) : cause.silent()) + logNote(rel), 'ask-empty');
     }
     return { text };
   }
@@ -494,7 +534,8 @@ export async function askAgentRun(agent: AgentConfig, prompt: string, cwd: strin
     const toolSaid = `${r.error ?? ''}\n${r.stderrTail}\n${toolLines(log)}`;
     const kind = harness ? failureKind(toolSaid) : null;
     if (kind) blockMember(agent.name, kind, toolSaid, memberModel(agent, loadDetected()));
-    throw new RelayError(r.error ? plain(r.error) : r.timedOut ? (r.late ?? cause.overtime(timeoutMs)) : silentWhy(harness, log, r), 'ask-empty');
+    const rel = keepFailLog(cwd, agent.name, `${log}\n${r.stderrTail}`);
+    throw new RelayError((r.error ? plain(r.error) : r.timedOut ? (r.late ?? cause.overtime(timeoutMs)) : silentWhy(harness, log, r)) + logNote(rel), 'ask-empty');
   }
   return { text, ...(harness && r.session ? { session: { tool: harness, id: r.session } } : {}) };
 }
@@ -576,13 +617,13 @@ async function speakOne(root: string, th: Thread, name: string, rows: TalkRow[],
     const asked = [...rows].reverse().find((r) => r.kind === 'human');
     const file = path.relative(root, th.file).split(path.sep).join('/');
     const note = skillNote(root, asked?.text ?? '');
-    const full = () => buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), file, ...(solo ? { solo: true } : {}) }) + note;
+    const full = () => buildTalkPrompt({ speaker: who, root, rows, context: safeContext(context), file, ask: asked, ...(solo ? { solo: true } : {}) }) + note;
     // 它在这段群聊里说过话、工具里那段对话还在：接着那段说，只带它上次说完之后的新消息
     const own = ownThread(root, agent, rows);
     let r: { text: string; session?: { tool: string; id: string } };
     if (own) {
       try {
-        r = await askAgentRun(agent, buildTalkPrompt({ speaker: who, root, rows: rows.slice(own.after), context: safeContext(context), file, since: true, ...(solo ? { solo: true } : {}) }) + note, root, { resume: own.id });
+        r = await askAgentRun(agent, buildTalkPrompt({ speaker: who, root, rows: rows.slice(own.after), context: safeContext(context), file, since: true, ask: asked, ...(solo ? { solo: true } : {}) }) + note, root, { resume: own.id });
       } catch (e) {
         // 工具里那段对话接不上了（被删、过期）：另开一段，带上整段记录
         if (!LOST_THREAD.test(errorMessage(e))) throw e;
@@ -702,7 +743,6 @@ const SUMMARY_ANSWER_CHARS = 12_000;
  * 顺序也按「不变的在前」：规矩 → 问题 → 回答 → 任务状态、你是谁。
  */
 export function buildSummaryPrompt(input: { speaker: string; root: string; ask: string; answers: string[]; context?: TalkContext }): string {
-  const t = input.context?.task;
   const mark = (i: number) => String.fromCharCode(65 + (i % 26)) + (i >= 26 ? String(Math.floor(i / 26)) : '');
   const clipA = (a: string) => (a.length > SUMMARY_ANSWER_CHARS ? `${a.slice(0, SUMMARY_ANSWER_CHARS)}\n…（后面还有，全文在这段群聊的记录里）` : a);
   const parts = [
@@ -721,7 +761,7 @@ export function buildSummaryPrompt(input: { speaker: string; root: string; ask: 
     ].join('\n'),
     `人问的是：\n${input.ask.trim()}`,
     input.answers.map((a, i) => `【${mark(i)}】\n${clipA(a.trim())}`).join('\n\n'),
-    t ? `当前任务：${t.title}\n任务状态：${t.phaseText}` : '现在没有进行中的任务。',
+    taskBackground(input.context),
     `你是「${input.speaker}」，现在写总结。`,
   ];
   return redactSecrets(parts.join('\n\n'));

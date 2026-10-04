@@ -687,20 +687,23 @@ test('群聊提示：带规则、任务背景和记录；太长时丢掉最早�
   const rows: TalkRow[] = Array.from({ length: 50 }, (_, i) => ({ ts: T, kind: i % 2 ? 'ai' : 'human', who: i % 2 ? 'Claude' : '我', text: `第${i}句 ` + 'x'.repeat(200) }));
   const p = buildTalkPrompt({ speaker: 'DeepSeek', root: '/p', rows, context: { task: { title: '做滤镜', phaseText: '在干活', changes: ['a.xmp'] } }, maxChars: 3000 });
   assert.ok(p.includes('你是「DeepSeek」'));
-  assert.ok(p.includes('当前任务：做滤镜'));
+  assert.ok(p.includes('接力任务是「做滤镜」') && p.includes('不是这次要讨论的题目'), '任务只当背景');
+  assert.ok(p.includes('这是讨论，不是接力的一棒'), '接力规矩这次不用做');
+  assert.ok(p.includes('同一家的另一个型号也不是你'), '2026-10-04 GLM-5.3 Flash 把 GLM-5.3 的话当成自己上一轮说的');
   assert.ok(p.includes('第49句'));
   assert.ok(!p.includes('第0句'));
   assert.ok(p.includes('不要因为对方是更强的模型就附和'));
   assert.ok(p.includes('.relay/uploads/ 下的是人传上来的附件'), '告诉 AI 附件在哪、自己打开看');
-  assert.ok(p.endsWith('现在轮到你（DeepSeek）发言。'));
+  // 最后再说一遍人问的是哪句（2026-10-04 DeepSeek Flash 把末尾的任务状态当成了题目）
+  assert.match(p, /现在轮到你（DeepSeek）发言。\n要回答的是 \[\d\d:\d\d\] 人问的：「第48句 x+」$/);
   const solo = buildTalkPrompt({ speaker: 'DeepSeek', root: '/p', rows: rows.slice(0, 2), solo: true });
   assert.match(solo, /这一轮是「对比」/);
   // 不变的在前、变的在后：规矩 → 记录 → 任务状态、轮到谁（开头不变，接口的缓存才接得上）
-  assert.ok(p.indexOf('怎么发言') < p.indexOf('讨论记录') && p.indexOf('讨论记录') < p.indexOf('当前任务') && p.indexOf('当前任务') < p.indexOf('你是「DeepSeek」'));
+  assert.ok(p.indexOf('怎么发言') < p.indexOf('讨论记录') && p.indexOf('讨论记录') < p.indexOf('项目背景') && p.indexOf('项目背景') < p.indexOf('你是「DeepSeek」'));
   assert.ok(p.startsWith('你在参加「接力台」里的一场多 AI 讨论。\n'), '开头不带谁在说');
   // 记录太长：按 12 句一档往后挪，多了一两句开头还是那几句；更早的写明在哪个文件
   const at = (n: number) => buildTalkPrompt({ speaker: 'X', root: '/p', rows: rows.slice(0, n), maxChars: 3000, file: '.relay/talk.jsonl' });
-  const head = (t: string) => t.slice(0, t.indexOf('当前') > 0 ? t.indexOf('当前') : t.indexOf('现在没有'));
+  const head = (t: string) => t.slice(0, t.indexOf('项目背景'));
   const firstLine = (t: string) => t.match(/\[\d\d:\d\d\] \S+：(第\d+句)/)?.[1];
   assert.equal(firstLine(at(40)), firstLine(at(41)), '多一句，开头不动');
   assert.match(head(at(41)), /较早的 \d+ 句没放进来，完整记录在 `\.relay\/talk\.jsonl`，需要时自己打开看/);
