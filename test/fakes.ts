@@ -12,8 +12,8 @@ import type { Sandbox } from './helpers';
  * - 终审：写终审结论，交接状态写「全部完成」；
  * - 拆解（派活）：把任务清单换成 4 步；
  * - 只读（群聊 / 投票）：按提示词回答（投票时不投自己）。
- * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail / model-refused（账号用不了这个模型）/ logged-out（没登录）/ slow（先把进程号写进 FAKE_DIR/<名字>.pid，
- * 睡 30 秒再干活）/ offline（像断网时的 Codex：一直报「Reconnecting... waiting for network」，永远不结束），FAKE_<名字>_WHO = 交接里写的身份；FAKE_REVIEW_SAY = 复核完说的那句话。
+ * 行为用环境变量控制：FAKE_<名字>_MODE = work / quota / nohandoff / blip-once / fail / model-refused（账号用不了这个模型）/ logged-out（没登录）/ slow（起好睡 30 秒的子进程，再把进程号写进 FAKE_DIR/<名字>.pid，
+ * 等它睡完再干活）/ offline（像断网时的 Codex：一直报「Reconnecting... waiting for network」，永远不结束），FAKE_<名字>_WHO = 交接里写的身份；FAKE_REVIEW_SAY = 复核完说的那句话。
  * claude 带着把地址写回 api.anthropic.com 的 --settings（盖掉接别家模型的设置）时扮演「官方账号」：FAKE_CLAUDE_OFFICIAL=pro 算登录了，
  * 身份和行为看 FAKE_CLAUDE_OFFICIAL_WHO / FAKE_CLAUDE_OFFICIAL_MODE；这时环境里还带着 ANTHROPIC_* 就报错（说明接力台没去掉）。
  * 额度窗口：官方账号的 claude 发 rate_limit_event，codex 干活时在 CODEX_HOME（没设就是 ~/.codex）的 sessions 里写带 rate_limits 的 rollout；
@@ -186,8 +186,9 @@ function fakeScript(name: 'claude' | 'codex'): string {
     `    printf '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"%s"}]}}\\n' "$T"`,
     `    printf '{"type":"result","subtype":"success","is_error":true,"result":"%s"}\\n' "$T"`,
     '    exit 1 ;;',
-    // 像 Codex：外层启动器起一个带着自己路径的子进程干活（外层没了子进程还在）
-    '  slow) echo $$ > "$FAKE_DIR/$NAME.pid"; sh -c "sleep 30; :" "$0" ;;',
+    // 像 Codex：外层启动器起一个带着自己路径的子进程干活（外层没了子进程还在）。
+    // 先起好子进程再写进程号：测试一看到进程号就会结束外层，慢的机器上以前子进程还没起来（2026-10-05 GitHub 上 macOS 偶尔超时）
+    '  slow) sh -c "sleep 30; :" "$0" & echo $$ > "$FAKE_DIR/$NAME.pid"; wait ;;',
     '  offline) while :; do echo "Reconnecting... waiting for network (Connection failed: error sending request)" >&2; sleep 0.3; done ;;',
     // 连着两次连不上（接力台原地再试的那一次也没好），第三次才好
     '  blip-twice)',
