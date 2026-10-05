@@ -382,6 +382,7 @@ const EN = {
   '· 已撤销': '· undone',
   '{} 正在输入': '{} typing',
   '排队：{}': 'Queued: {}',
+  '找不到文件夹 {}，已移出列表': "Folder {} isn't there any more, removed from the list",
   '正在输入：{}': 'Typing: {}',
   '{} 等 {} 位正在输入': '{1} typing, including {0}',
   排队中: 'Queued',

@@ -52,10 +52,10 @@ export function forgetProject(root: string): void {
   saveMemory({ root: cur.root === root ? recents[0] : cur.root, recents, opened: (cur.opened ?? []).filter((r) => r !== root) });
 }
 
-/** 上次打开的项目（还在的话）。 */
+/** 上次打开的项目（还在的话）；它没了（删了、挪走了），就是最近打开过、还在的那一个。 */
 export function lastProject(): string | null {
-  const root = loadMemory().root;
-  return root && fs.existsSync(root) ? root : null;
+  const m = loadMemory();
+  return [m.root, ...(m.recents ?? [])].find((r): r is string => !!r && fs.existsSync(r)) ?? null;
 }
 
 const realOf = (p: string): string => {

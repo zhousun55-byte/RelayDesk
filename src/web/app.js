@@ -724,6 +724,7 @@ function q(path, dir = S.dir) {
 /** 失败的提示：「没能 X：原因」（原因去掉句末的句号）。说法见 docs/设计说明.md「结果怎么说」。 */
 function fail(what, e) {
   if (e && e.code === 'moved') return;
+  if (e && e.code === 'no-dir' && S.dir && String(e.message).includes(S.dir)) return void folderGone(S.dir);
   const why = tr(String((e && e.message) || e || '').trim().replace(/[。.]+$/, ''));
   toast(what ? T`没能${what}：${why || T`出错`}` : why || T`出错`, { bad: true });
 }
@@ -1963,6 +1964,24 @@ async function forget(pr) {
     await refresh();
   } catch (e) {
     fail(T`移出`, e);
+  }
+}
+
+/**
+ * 正在看的项目文件夹没了（删了、挪走了）：从列表里移出，换到上次打开、还在的项目，说一声；
+ * 不然每次刷新都报「找不到文件夹」（2026-10-05 删掉试跑记录时，开着的网页停在「界面实测」上一直报错）。
+ */
+let goneDir = '';
+async function folderGone(dir) {
+  if (goneDir === dir) return;
+  goneDir = dir;
+  try {
+    await api('/api/forget', { dir });
+    const st = await api('/api/state');
+    toast(T`找不到文件夹 ${basename(dir)}，已移出列表`);
+    switchProject(st.project.root);
+  } catch (e) {
+    toast(tr(String((e && e.message) || e)), { bad: true });
   }
 }
 

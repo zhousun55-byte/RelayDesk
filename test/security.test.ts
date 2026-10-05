@@ -224,3 +224,18 @@ test('网页接口认的文件夹：接入过的、最近的、打开过的（�
   memory.forgetProject(other);
   assert.equal(memory.knownDir(other), false);
 });
+
+test('上次打开的项目没了（删了、挪走了）：换成最近打开过、还在的那一个；都没了是 null', () => {
+  // 2026-10-05 删掉试跑记录后，网页和后台都还停在已经不在的「界面实测」上
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const memory = require('../src/core/memory') as typeof import('../src/core/memory');
+  const a = tmpDir('last-a'), b = tmpDir('last-b');
+  memory.rememberProject(b);
+  memory.rememberProject(a);
+  assert.equal(memory.lastProject(), a);
+  fs.rmSync(a, { recursive: true, force: true });
+  assert.equal(memory.lastProject(), b, '上次那个没了，换成还在的');
+  fs.rmSync(b, { recursive: true, force: true });
+  const left = (memory.loadMemory().recents ?? []).filter((r) => fs.existsSync(r));
+  assert.equal(memory.lastProject(), left[0] ?? null);
+});
