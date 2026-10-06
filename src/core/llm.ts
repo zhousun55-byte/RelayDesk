@@ -133,6 +133,35 @@ function retryable(e: unknown): boolean {
   return e.code === 'llm-busy';
 }
 
+/** 余额不足、要充值：智谱用 429 回「余额不足或无可用资源包，请充值」（借 magpie e63fbb0），隔几秒再试也一样，不当成忙。 */
+const NO_CREDIT = /余额不足|请充值|欠费|insufficient[ _](?:balance|credits?|funds)|credit balance is too low/i;
+
+/** 接口报错归哪一类：密钥不对、忙（隔几秒再试）、别的。 */
+function httpCode(status: number, text: string): string {
+  if (status === 401 || status === 403) return 'llm-auth';
+  if (NO_CREDIT.test(text)) return 'llm-http';
+  return status === 429 || status >= 500 ? 'llm-busy' : 'llm-http';
+}
+
+/**
+ * 回的 200 里其实是报错：Claude 协议流里的 {type:"error"}（比如 overloaded_error），OpenAI 协议的 {error:{…}}。
+ * 以前当成一段正常的话收下，没写完也算写完了（借 magpie b56bfb5、c5b57b9）。
+ */
+function bodyError(spec: ApiSpec, e: J, where: string): RelayError | null {
+  if (e.type !== 'error' && !(e.error && typeof e.error === 'object')) return null;
+  const er = o(e.error);
+  const text = String(er.message ?? er.type ?? JSON.stringify(e)).slice(0, 300);
+  const busy = !NO_CREDIT.test(text) && /overload|rate[ _-]?limit|busy|繁忙|稍后|too many|server_error|api_error|timeout|\b(?:429|5\d\d)\b/i.test(`${er.type ?? ''} ${er.code ?? ''} ${text}`);
+  return new RelayError(`${spec.baseUrl} ${where}报错：${text}`, busy ? 'llm-busy' : 'llm-http');
+}
+
+/** 流里这一条说明回完了：OpenAI 协议的 finish_reason，Claude 协议的 stop_reason、message_stop。 */
+function endsReply(e: J): boolean {
+  if (e.type === 'message_stop') return true;
+  if (e.type === 'message_delta' && o(e.delta).stop_reason) return true;
+  return typeof o(arr(e.choices)[0]).finish_reason === 'string';
+}
+
 async function request(spec: ApiSpec, what: 'chat' | 'models', body: unknown, timeoutMs: number): Promise<unknown> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -164,10 +193,12 @@ async function requestOnce(spec: ApiSpec, what: 'chat' | 'models', body: unknown
     }
     if (!res.ok) {
       const text = (await res.text()).slice(0, 300);
-      const code = res.status === 401 || res.status === 403 ? 'llm-auth' : res.status === 429 || res.status >= 500 ? 'llm-busy' : 'llm-http';
-      throw new RelayError(`${spec.baseUrl} 返回 HTTP ${res.status}：${text}`, code);
+      throw new RelayError(`${spec.baseUrl} 返回 HTTP ${res.status}：${text}`, httpCode(res.status, text));
     }
-    return (await res.json()) as unknown;
+    const whole = (await res.json()) as unknown;
+    const bad = bodyError(spec, o(whole), '');
+    if (bad) throw bad;
+    return whole;
   } finally {
     clearTimeout(timer);
   }
@@ -214,20 +245,24 @@ async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: nu
     }
     if (!res.ok) {
       const text = (await res.text()).slice(0, 300);
-      const code = res.status === 401 || res.status === 403 ? 'llm-auth' : res.status === 429 || res.status >= 500 ? 'llm-busy' : 'llm-http';
-      throw new RelayError(`${spec.baseUrl} 返回 HTTP ${res.status}：${text}`, code);
+      throw new RelayError(`${spec.baseUrl} 返回 HTTP ${res.status}：${text}`, httpCode(res.status, text));
     }
     // 不支持流式：整段 JSON
     if (!/event-stream/i.test(res.headers.get('content-type') ?? '')) {
+      let whole: J;
       try {
-        return o(await res.json());
+        whole = o(await res.json());
       } catch (e) {
         throw failed(e);
       }
+      const bad = bodyError(spec, whole, '');
+      if (bad) throw bad;
+      return whole;
     }
     const reader = res.body!.getReader();
     const dec = new TextDecoder();
     let buf = '';
+    let ended = false;
     try {
       for (;;) {
         const { value, done } = await reader.read();
@@ -240,17 +275,25 @@ async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: nu
           buf = buf.slice(i + 1);
           if (!line.startsWith('data:')) continue;
           const data = line.slice(5).trim();
+          if (data === '[DONE]') ended = true;
           if (!data || data === '[DONE]') continue;
+          let e: J;
           try {
-            onEvent(o(JSON.parse(data)));
+            e = o(JSON.parse(data));
           } catch {
-            /* 一行坏的跳过 */
+            continue; // 一行坏的跳过
           }
+          const bad = bodyError(spec, e, '写到一半');
+          if (bad) throw bad;
+          if (endsReply(e)) ended = true;
+          onEvent(e);
         }
       }
     } catch (e) {
-      throw failed(e);
+      throw e instanceof RelayError ? e : failed(e);
     }
+    // 连接断了、流就这么停了：没收到「回完了」，这一段是半截的，不当成写完（借 magpie c5b57b9；隔几秒整段再要一次）
+    if (!ended) throw new RelayError(`连不上 ${spec.baseUrl}（回到一半断了，没收到结束标记）。`, 'llm-net');
     return null;
   } finally {
     clearTimeout(idle);
@@ -417,19 +460,26 @@ export class ToolChat {
           else if (d.type === 'signature_delta') b.signature = String(b.signature ?? '') + String(d.signature ?? '');
         }
       };
+      // 每次重新要都从空的拼起：上一次断在半截收到的不留（不然重试一次，前一次的半截块、半截参数还在里面）
+      const fresh = () => {
+        blocks.length = 0;
+        json.length = 0;
+        stop = '';
+        for (const k of Object.keys(usage)) delete usage[k];
+      };
       let whole: J | null = null;
       for (let tries = 0; ; tries++) {
         try {
-          whole = await run(() => streamOnce(this.spec, body(), idleMs, deadlineMs, onEvent, this.shouldStop));
+          whole = await run(() => {
+            fresh();
+            return streamOnce(this.spec, body(), idleMs, deadlineMs, onEvent, this.shouldStop);
+          });
           break;
         } catch (e) {
           if (tries >= 2 || !(e instanceof RelayError && e.code === 'llm-http')) throw e;
           if (this.cacheMarks && /cache_control|ephemeral/i.test(e.message)) this.cacheMarks = false;
           else if (this.maxTokens > 8192 && /max_tokens|max tokens|too large|exceed/i.test(e.message)) this.maxTokens = 8192;
           else throw e;
-          blocks.length = 0;
-          json.length = 0;
-          stop = '';
         }
       }
       let content: unknown[];
@@ -505,7 +555,10 @@ export class ToolChat {
     let whole: J | null;
     for (let tries = 0; ; tries++) {
       try {
-        whole = await run(() => streamOnce(this.spec, body(this.sendReasoning), idleMs, deadlineMs, onEvent, this.shouldStop));
+        whole = await run(() => {
+          reset();
+          return streamOnce(this.spec, body(this.sendReasoning), idleMs, deadlineMs, onEvent, this.shouldStop);
+        });
         break;
       } catch (e) {
         if (tries >= 2 || !(e instanceof RelayError && e.code === 'llm-http')) throw e;
@@ -513,7 +566,6 @@ export class ToolChat {
         if (this.streamOptions && /stream_options|include_usage/i.test(e.message)) this.streamOptions = false;
         else if (this.sendReasoning && carried && /reasoning/i.test(e.message)) this.sendReasoning = false;
         else throw e;
-        reset();
       }
     }
     let msg: J;

@@ -185,6 +185,75 @@ test('一直在出字就不算卡住（总时长比「多久没回音」长也�
   }
 });
 
+test('回到一半断了、流里报错：不当成写完，整段重新要，上一次的半截不留；余额不足不白等着重试；200 里的报错认得出（借 magpie）', async () => {
+  // OpenAI 协议：第一次写了半句和半截参数就断了（没有 finish_reason、没有 [DONE]），第二次完整
+  let n1 = 0;
+  const cut = await server((_b, res) => {
+    if (n1++ === 0) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '半句' } }] })}\n\n`);
+      res.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'a', function: { name: 'write_file', arguments: '{"path":"x' } }] } }] })}\n\n`);
+      return;
+    }
+    sse(res, [
+      { choices: [{ delta: { content: '完整的。' } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'b', function: { name: 'write_file', arguments: '{"path":"a.md"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+    ]);
+  });
+  // Claude 协议：第一次写到一半报 overloaded_error，第二次完整（真接口没有 [DONE]，靠 message_stop）
+  let n2 = 0;
+  const overloaded = await server((_b, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const ev = (e: unknown) => res.write(`data: ${JSON.stringify(e)}\n\n`);
+    ev({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+    ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: n2 === 0 ? '前一次的' : '好了。' } });
+    if (n2++ === 0) ev({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 't0', name: 'write_file', input: {} } }), ev({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } });
+    else ev({ type: 'message_delta', delta: { stop_reason: 'end_turn' } }), ev({ type: 'message_stop' });
+    res.end();
+  });
+  let n3 = 0;
+  const broke = await server((_b, res) => {
+    n3++;
+    res.writeHead(429, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { code: '1113', message: '余额不足或无可用资源包，请充值。' } }));
+  });
+  const errorIn200 = await server((_b, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { code: '1214', message: 'messages 参数非法' } }));
+  });
+  // 流里报的不是忙：照原话报出来，不重试
+  let n4 = 0;
+  const refused = await server((_b, res) => {
+    n4++;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '我来' } }] })}\n\n`);
+    res.end(`data: ${JSON.stringify({ error: { code: '1301', message: '系统检测到输入或生成内容可能包含不安全或敏感内容' } })}\n\n`);
+  });
+  process.env.RELAY_RETRY_MS = '10';
+  try {
+    const mk = (url: string, format?: 'anthropic') => {
+      const c = new ToolChat({ baseUrl: url, model: 'm', apiKeyEnv: '', ...(format ? { format } : {}) }, 'sys', tools);
+      c.user('做');
+      return c;
+    };
+    const a = await mk(cut.url).next(10_000);
+    assert.equal(n1, 2, '断了就整段重新要');
+    assert.equal(a.text, '完整的。', '上一次的半句不留');
+    assert.deepEqual(a.calls.map((c) => [c.id, c.args.path, c.badArgs]), [['b', 'a.md', undefined]], '半截参数不拼进来');
+    const b = await mk(overloaded.url, 'anthropic').next(10_000);
+    assert.equal(n2, 2);
+    assert.deepEqual([b.text, b.calls.length], ['好了。', 0], '前一次的半截块不留');
+    await assert.rejects(mk(broke.url).next(10_000), (e: { code?: string; message: string }) => e.code === 'llm-http' && /余额不足/.test(e.message));
+    assert.equal(n3, 1, '余额不足：隔几秒再试也一样，不重试');
+    await assert.rejects(mk(errorIn200.url).next(10_000), /参数非法/);
+    await assert.rejects(mk(refused.url).next(10_000), /写到一半报错：系统检测到/);
+    assert.equal(n4, 1);
+  } finally {
+    for (const s of [cut, overloaded, broke, errorIn200, refused]) s.close();
+  }
+});
+
 test('小助手干活：没调用 finish 就停下，提醒一次再收；写到上限被截断，告诉它分几次写（append 接在后面）', async () => {
   const replies = [
     // 1. 写到一半被截断：参数是半截的
