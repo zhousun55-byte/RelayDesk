@@ -541,6 +541,7 @@ const EN = {
   卡住的那一步交给指挥: 'Hand a stuck step to the lead',
   识别到的: 'Found',
   '这台电脑上有：{}': 'On this computer: {}',
+  '已经在「{}」里：它的「打开」就是这个程序，用的同一个模型，不用再加': 'Already part of “{}”: its Open button launches this app with the same model, so there is no need to add it again',
   '这台电脑上没有叫「{}」的程序': 'No app named "{}" on this computer',
   '派活时，弱模型在同一步上没做下去（换过人还不行，或者没人可换），这一步由指挥的那位做，做完接着交给弱模型。关掉就停在这一步。':
     'While dispatching, if weak models fail the same step (even after switching, or with nobody to switch to), the lead does that step, then hands the rest back to the weak models. Off: stop at that step.',

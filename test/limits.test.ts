@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { codexSessionLimits } from '../src/core/harness';
 import { spareFirst, type MemberInfo } from '../src/core/members';
-import { claudeLimits, codexLimits, errorBackoffMs, fullUntil, limitsOf, loadQuotaFile, markOk, markQuota, noteError, noteLimits, quotaPath, recentErrors, type Limit } from '../src/core/quota';
+import { claudeLimits, codexLimits, errorBackoffMs, fullUntil, limitsOf, loadQuotaFile, markOk, markQuota, noteError, noteLimits, noteLiveLimits, quotaPath, recentErrors, type Limit } from '../src/core/quota';
 import { makeParser } from '../src/core/runner';
 import type { AgentConfig } from '../src/core/types';
 import { setOrder, withFakes } from './fakes';
@@ -70,6 +70,23 @@ test('Codex 的额度从它自己的会话记录读：只认这个项目、这�
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(quiet, { recursive: true, force: true });
+  }
+});
+
+test('现问到的额度（Codex 的 app-server）一个窗口都没用满：之前记着的「额度用完」清掉（你在 Codex 里用了重置卡），还满着就不动', () => {
+  const prev = process.env.RELAY_HOME;
+  process.env.RELAY_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-live-home-'));
+  try {
+    const now = new Date('2026-10-06T08:00:00Z');
+    markQuota('codex', { hit: true, until: '2026-10-06T09:03:40.000Z', line: 'Codex 报的额度窗口用满了' }, now);
+    noteLiveLimits('codex', [{ kind: '5h', used: 100, resetsAt: '2026-10-06T09:03:40.000Z' }, { kind: '7d', used: 97 }], now);
+    assert.ok(loadQuotaFile().members.codex, '还满着：照样记着');
+    noteLiveLimits('codex', [{ kind: '5h', used: 0, resetsAt: '2026-10-06T13:04:28.000Z' }, { kind: '7d', used: 0 }], new Date('2026-10-06T08:02:00Z'));
+    assert.equal(loadQuotaFile().members.codex, undefined, '用了重置卡：记号清掉');
+    assert.deepEqual(limitsOf('codex', new Date('2026-10-06T08:02:00Z'))!.windows.map((w) => w.used), [0, 0]);
+  } finally {
+    if (prev === undefined) delete process.env.RELAY_HOME;
+    else process.env.RELAY_HOME = prev;
   }
 });
 

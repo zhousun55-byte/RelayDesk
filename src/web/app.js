@@ -6309,6 +6309,17 @@ function swapText(el, text) {
 
 function membersPane(redraw) {
   const st = S.st;
+  // 打开成员页时现问一次额度（Codex 用了重置卡这类，不等后台那一分钟），问到了原地更新
+  if (Date.now() - (S.limitsAsked || 0) > 10_000) {
+    S.limitsAsked = Date.now();
+    const before = JSON.stringify(members().map((m) => [m.name, m.limits, m.cooling]));
+    api('/api/limits')
+      .then(() => refresh(true))
+      .then(() => {
+        if (JSON.stringify(members().map((m) => [m.name, m.limits, m.cooling])) !== before && document.querySelector('.settings .members')) redrawMembers(redraw);
+      })
+      .catch(() => {});
+  }
   const all = members();
   const drivable = all.filter((m) => m.canWork).map((m) => m.name);
   const list = h('div', { class: 'members' });
@@ -6708,13 +6719,15 @@ function addAppSheet(redraw) {
     if (!named) name.value = known ? known.id : slug(v);
     for (const b of picks.querySelectorAll('.pick')) b.setAttribute('aria-pressed', String(!!known && b.dataset.app === known.name));
     const checkable = !!data && data.all.length > 0;
-    swapText(check, !v || !checkable ? '' : hit ? T`这台电脑上有：${hit.path}` : T`这台电脑上没有叫「${v}」的程序`);
-    check.classList.toggle('bad', !!v && checkable && !hit);
-    swapText(hint, known ? tr(known.hint) : '');
+    // 已经接在名单里的一位上了（它的「打开」就是这个程序，同一个登录、同一个模型）：不用再加一位
+    const owner = known && known.added ? members().find((m) => m.name === known.added) : null;
+    swapText(check, !v || !checkable ? '' : owner ? T`已经在「${memberName(owner)}」里：它的「打开」就是这个程序，用的同一个模型，不用再加` : hit ? T`这台电脑上有：${hit.path}` : T`这台电脑上没有叫「${v}」的程序`);
+    check.classList.toggle('bad', !!v && checkable && (!hit || !!owner));
+    swapText(hint, known && !owner ? tr(known.hint) : '');
     // 写出一个认得的程序：强弱跟着它（只在刚对上的那一下，之后手动改的不再盖掉）
     if (known && known !== lastKnown) ctl.setTier(known.tier);
     lastKnown = known;
-    ctl.save.disabled = !v || (checkable && !hit);
+    ctl.save.disabled = !v || (checkable && !hit) || !!owner;
   };
   ctl.save.disabled = true;
   app.addEventListener('input', verify);

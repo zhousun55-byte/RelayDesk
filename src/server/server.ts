@@ -19,7 +19,7 @@ import { forgetProject, knownDir, lastProject, loadMemory, rememberOpened, remem
 import { appNameOf, llmName, toolName } from '../core/names';
 import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
 import { isInside } from '../core/paths';
-import { clearBlocked, noteLimits, untilText } from '../core/quota';
+import { clearBlocked, noteLiveLimits, untilText } from '../core/quota';
 import { agentKind, agentLabel, findAgent, isOpenCommand, loadRegistry, removeAgent, restoreAgent, saveRegistry, trashedAgents, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
 import { adoptSummary, archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, summarize, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
@@ -139,8 +139,12 @@ function memberViewsUnsafe() {
  * （2026-10-04：网页写「一周 12%」，是 9 月 28 日读的；ChatGPT 里一周剩 82%）。5 分钟最多问一次，在后台问，下一次刷新就是新的。
  */
 let liveLimitsAt = 0;
-function refreshLimitsSoon(): void {
-  if (process.env.RELAY_LIVE_LIMITS === 'off' || Date.now() - liveLimitsAt < 5 * 60_000) return;
+/**
+ * 不花额度地现问一次额度（Codex 用它自己的 app-server）。网页每次读状态时顺手问，最多一分钟一次；
+ * 打开「设置 → 成员」时不等这一分钟（gapMs 小），问完再回。你在 Codex 里用了重置卡，这里很快就跟上。
+ */
+function refreshLimitsSoon(gapMs = 60_000): Promise<unknown> {
+  if (process.env.RELAY_LIVE_LIMITS === 'off' || Date.now() - liveLimitsAt < gapMs) return Promise.resolve();
   liveLimitsAt = Date.now();
   const groups = new Map<string, string[]>();
   try {
@@ -148,19 +152,23 @@ function refreshLimitsSoon(): void {
       if (m.kind === 'harness' && m.harness && findHarness(m.harness)?.liveLimits) groups.set(m.harness, [...(groups.get(m.harness) ?? []), m.name]);
     }
   } catch {
-    return;
+    return Promise.resolve();
   }
+  const reads: Promise<unknown>[] = [];
   for (const [h, names] of groups) {
     const spec = findHarness(h);
     const loc = spec ? locateCached(spec) : null;
     if (!spec?.liveLimits || !loc) continue;
-    spec
-      .liveLimits(loc)
-      .then((w) => {
-        if (w?.length) for (const n of names) noteLimits(n, w);
-      })
-      .catch(() => {});
+    reads.push(
+      spec
+        .liveLimits(loc)
+        .then((w) => {
+          if (w?.length) for (const n of names) noteLiveLimits(n, w);
+        })
+        .catch(() => {})
+    );
   }
+  return Promise.all(reads);
 }
 
 /** 删掉、还能加回来的几位（最近删的在前）：名字、图标要的几样、什么时候删的。名单读不出来时是空的。 */
@@ -459,6 +467,11 @@ export function createServer(opts: ServerOptions): http.Server {
     // 技能：接入过的项目连同项目里的；别的文件夹（还没打开项目时）只列这台电脑上的，不读那个文件夹
     // 添加桌面程序时挑：认得的（核实过）和这台电脑上所有的程序
     '/api/apps': () => desktopApps(),
+    // 打开「设置 → 成员」时：现问一次额度（不等那一分钟），问完再回，网页接着读状态就是新的
+    '/api/limits': async () => {
+      await refreshLimitsSoon(5_000);
+      return {};
+    },
     '/api/skills': (q) => {
       const root = dirOf(q, {});
       const modes = autoSettingsSafe().settings.skills;

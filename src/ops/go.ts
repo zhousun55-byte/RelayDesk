@@ -17,7 +17,7 @@ import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, editTask, fileStamp, HANDOFF_DIR, handoffFileFor, listHandoffFiles, parseReview, readHandoff, readReview, readTask, REVIEW_DIR, reviewFileFor, saveTaskCopy, TASK_REL, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
 import { finalPrompt, planPrompt, reviewPrompt, sideReviewPrompt, splitSideReview, stepPrompt, workPrompt } from '../core/prompts';
 import { sessionFile, sessionToolOf } from '../core/sessions';
-import { blockMember, detectQuota, failureKind, fullUntil, markOk, markQuota, noteError, noteLimits, recentErrors, untilText, type Limit } from '../core/quota';
+import { blockMember, detectQuota, failureKind, fullUntil, markOk, markQuota, noteError, noteLimits, noteLiveLimits, recentErrors, untilText, type Limit } from '../core/quota';
 import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, usageTotal, type RunHandle, type RunResult } from '../core/runner';
 import { cause, plain } from '../core/cause';
 import { copyChanges, snapChanges, takeSnapshot } from '../core/snap';
@@ -826,18 +826,19 @@ class GoRunner {
 
   /**
    * 派活前不花额度地问一次额度（借 CodexBar：Codex 用它自己的 app-server 问，接力台不读登录凭据）。
-   * 同一个工具的几位共用一个账号，问一次记到每一位身上；5 分钟内读到过（刚跑完一棒的会话记录里也有）就不问。
+   * 同一个工具的几位共用一个账号，问一次记到每一位身上；一分钟内读到过（刚跑完一棒的会话记录里也有）就不问。
    * 有窗口用满了：先记成额度用完、什么时候恢复，挑人时跳过它，不用等它跑一棒失败才知道。
+   * 记着额度用完的也照样问（问不花额度）：没用满了就是额度又有了（比如你在 Codex 里用了重置卡），马上能派。
    */
   private async refreshLiveLimits(): Promise<void> {
     if (process.env.RELAY_LIVE_LIMITS === 'off') return;
     const groups = new Map<string, MemberInfo[]>();
     for (const m of this.members()) {
-      if (m.kind !== 'harness' || !m.harness || !m.canWork || m.cooling || !findHarness(m.harness)?.liveLimits) continue;
+      if (m.kind !== 'harness' || !m.harness || !m.canWork || !findHarness(m.harness)?.liveLimits) continue;
       groups.set(m.harness, [...(groups.get(m.harness) ?? []), m]);
     }
     for (const [h, ms] of groups) {
-      if (ms.some((m) => m.limitsAt && Date.now() - Date.parse(m.limitsAt) < 5 * 60_000)) continue;
+      if (ms.some((m) => m.limitsAt && Date.now() - Date.parse(m.limitsAt) < 60_000)) continue;
       const spec = findHarness(h);
       const loc = spec ? locateCached(spec) : null;
       if (!spec?.liveLimits || !loc) continue;
@@ -845,7 +846,7 @@ class GoRunner {
       if (!w?.length) continue;
       const full = fullUntil(w);
       for (const m of ms) {
-        noteLimits(m.name, w);
+        noteLiveLimits(m.name, w);
         if (full) markQuota(m.name, { hit: true, line: `${nameOf(m)} 报的额度窗口用满了`, until: full });
       }
     }

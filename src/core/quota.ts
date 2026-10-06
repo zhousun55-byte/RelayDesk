@@ -391,6 +391,20 @@ export function noteLimits(member: string, windows: Limit[] | null | undefined, 
   saveQuota(f);
 }
 
+/**
+ * 不花额度现问到的窗口（Codex 的 app-server）：记下来；一个都没用满、之前又记着「额度用完」的，
+ * 就是额度又有了（等到了恢复时间，或者你在 Codex 里用了重置卡），把那个记号清掉，派活不再跳过它。
+ */
+export function noteLiveLimits(member: string, windows: Limit[] | null | undefined, now = new Date()): void {
+  if (!windows?.length) return;
+  noteLimits(member, windows, now);
+  if (fullUntil(windows)) return;
+  const f = loadQuotaFile();
+  if (!(member in f.members)) return;
+  delete f.members[member];
+  saveQuota(f);
+}
+
 /** 这一位现在的额度窗口：过了恢复时间的窗口重新算起（0%，下一次什么时候恢复不知道）。没记过返回 null。 */
 export function limitsOf(member: string, now = new Date(), all = loadQuotaFile().limits): { at: string; windows: Limit[] } | null {
   const l = all[member];
