@@ -12,7 +12,7 @@ import { llmName, toolName } from './names';
 import { shellArgv } from './proc';
 import { redactSecrets } from './redact';
 import { sessionFile, sessionToolOf } from './sessions';
-import { blockMember, detectQuota, failureKind, noteLimits } from './quota';
+import { blockMember, detectQuota, failureKind, markQuota, noteLimits } from './quota';
 import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, type RunResult } from './runner';
 import { cause, plain } from './cause';
 import { agentKind, agentLabel, canTalk, findAgent, loadRegistry, OUT_PLACEHOLDER } from './registry';
@@ -397,6 +397,13 @@ function cleanReply(text: string): string {
 /** 群聊里一个 AI 最多说多久；中途这么久一点动静都没有就当它卡住了（Codex 干活时最长 49 秒不出声）。 */
 export const TALK_MAX_MS = 15 * 60_000;
 export const TALK_IDLE_MS = 3 * 60_000;
+/**
+ * 能接着同一段对话说的编程工具：最后留这么久（最多占总时限的四分之一）请它照已经看到的直接回答。
+ * 2026-10-06 群聊里 Grok 4.7（Cursor）一直在读 1232 页的 PDF，15 分钟到了只说了一句「接下来抽原书目录……」，
+ * 那句被当成了回答，后面的人也跟着白等 15 分钟。
+ */
+const talkWrapMs = () => Number(process.env.RELAY_ANSWER_RESERVE_MS ?? 3 * 60_000);
+const WRAP_UP = '时间到了：不要再看文件、不要再调用任何工具，根据你已经看到的内容，现在直接回答上面的问题。没看完的地方说明没看完。';
 
 /** 回的是「调用工具」的原文（没给它工具、或者接口没接住）：不是回答。 */
 const RAW_TOOL_CALL = /^<(?:tool_call|function_calls?)>/;
@@ -502,7 +509,18 @@ export async function askAgentRun(agent: AgentConfig, prompt: string, cwd: strin
     make = () => spec.invoke(loc, { cwd, prompt, level: 'safe', readOnly: true, model: agent.model?.trim() || undefined, effort: agent.effort, outFile, ...(opts.resume ? { resume: opts.resume } : {}) });
   }
   const inv = make();
-  let r = await startRun({ invocation: inv, cwd, timeoutMs, idleMs, logPath, title: '讨论' }).done;
+  // 能接着对话说的工具：留出最后一段请它直接回答（不然时限到了它多半还在看文件，一句结论都没有）
+  const wrapMs = harness && RESUMABLE.has(harness) ? Math.min(talkWrapMs(), timeoutMs / 4) : 0;
+  let r = await startRun({ invocation: inv, cwd, timeoutMs: timeoutMs - wrapMs, idleMs, logPath, title: '讨论' }).done;
+  if (r.timedOut && wrapMs && r.session && harness) {
+    const spec = findHarness(harness);
+    const loc = spec ? locateCached(spec) : null;
+    if (spec && loc) {
+      fs.appendFileSync(logPath, `\n接力台：${Math.round((timeoutMs - wrapMs) / 60_000)} 分钟到了还没回答，请它照已经看到的直接回答。\n`);
+      const again = await startRun({ invocation: spec.invoke(loc, { cwd, prompt: WRAP_UP, level: 'safe', readOnly: true, model: agent.model?.trim() || undefined, effort: agent.effort, outFile, resume: r.session }), cwd, timeoutMs: wrapMs, idleMs, logPath, title: '讨论' }).done;
+      if (!again.timedOut && again.finalText.trim()) r = { ...again, session: again.session ?? r.session };
+    }
+  }
   // 命令行太旧、用不了这个模型：记下来，换成它用得了的再问一次。
   const needs = harness && r.code !== 0 ? cliTooOld(`${r.finalText}\n${r.error ?? ''}\n${r.stderrTail}`) : null;
   const used = modelArg(inv.argv);
@@ -521,6 +539,20 @@ export async function askAgentRun(agent: AgentConfig, prompt: string, cwd: strin
   noteLimits(agent.name, r.limits);
   const log = logTail(logPath, 6000);
   fs.rmSync(logPath, { force: true });
+  // 工具报错退出、说的是额度用完（Claude Code：「You've hit your session limit · resets …」）：不是回答
+  // 工具自己标了出错（退出码不是 0，或者 Claude Code 结果里 is_error，日志里是「结束（…，出错）」）才去认，正常的回答讲额度不算
+  const failed = r.code !== 0 || !!r.error || /结束（[^）]*出错）/.test(log);
+  const quota = failed ? detectQuota(`${r.error ?? ''}\n${r.stderrTail}\n${toolLines(log)}\n${r.finalText.slice(-2000)}`) : { hit: false as const };
+  if (quota.hit) {
+    markQuota(agent.name, quota);
+    throw new RelayError(`${cause.quota(quota.until)}${quota.line ? `，原话：${clip(plain(quota.line), 160)}` : ''}`, 'ask-empty');
+  }
+  // 到了时限还在做（中途说的一句「接下来去看……」不是回答）：报没答完，带上它最后说到哪
+  const last = r.timedOut || r.stopped ? cleanReply(r.finalText) : '';
+  if (last) {
+    const rel = keepFailLog(cwd, agent.name, `${log}\n${r.stderrTail}`);
+    throw new RelayError(`${r.stopped ? '叫停了' : r.late ?? cause.overtime(timeoutMs)}，没答完；最后说到：${clip(plain(last), 120)}${logNote(rel)}`, 'ask-empty');
+  }
   const text = replyOf(r.finalText);
   if (!text) {
     // 模型用不了、没登录：和派活一样先停用这一位（换了模型、重新登录、过一阵再算）

@@ -870,6 +870,55 @@ test('Claude 桌面版自带的 Claude Code 新的目录（<版本>/<编号>/cla
   }
 });
 
+test('群聊：时限快到了还在看文件，接着同一段对话请它直接回答；还是没答出来就报「没答完」，不把中途那句「接下来去看……」当回答；额度用完的原话也不当回答', async () => {
+  const dir = tmpDir('talk-wrap');
+  const bin = tmpDir('talk-wrap-bin');
+  const mode = path.join(bin, 'mode');
+  const script = [
+    '#!/bin/sh',
+    '[ "$1" = --version ] && { echo "9.9.9 (Claude Code)"; exit 0; }',
+    'cat > /dev/null',
+    'prev=""; RES=""; for a in "$@"; do [ "$prev" = --resume ] && RES="$a"; prev="$a"; done',
+    `M=$(cat '${mode}')`,
+    'if [ "$M" = limit ]; then',
+    `  echo '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 6:20pm (Asia/Taipei)"}]}}'`,
+    `  echo '{"type":"result","subtype":"success","is_error":true,"result":"You'"'"'ve hit your session limit · resets 6:20pm (Asia/Taipei)"}'`,
+    // 退出码是 0 也一样：只看结果里的 is_error
+    '  exit 0',
+    'fi',
+    'if [ -n "$RES" ] && [ "$M" = wrap ]; then',
+    `  echo '{"type":"system","subtype":"init","model":"claude-opus-5","session_id":"sess-wrap-1"}'`,
+    `  echo '{"type":"result","subtype":"success","is_error":false,"result":"结论：只是复习提纲，不是完整总结。"}'`,
+    '  exit 0',
+    'fi',
+    `echo '{"type":"system","subtype":"init","model":"claude-opus-5","session_id":"sess-wrap-1"}'`,
+    `echo '{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"text","text":"接下来抽原书目录看看。"}]}}'`,
+    'sleep 30',
+  ];
+  fs.writeFileSync(path.join(bin, 'claude'), `${script.join('\n')}\n`, { mode: 0o755 });
+  const keep = { path: process.env.PATH, wrap: process.env.RELAY_ANSWER_RESERVE_MS };
+  process.env.PATH = `${bin}:${keep.path}`;
+  process.env.RELAY_ANSWER_RESERVE_MS = '1500';
+  harness.clearLocateCache();
+  const agent = { name: 'slowpoke', kind: 'cli' as const, cmd: 'claude', tier: 'strong' as const, harness: 'claude' };
+  try {
+    fs.writeFileSync(mode, 'wrap');
+    const t0 = Date.now();
+    const r = await talk.askAgentRun(agent, '这份总结完整吗？', dir, { timeoutMs: 6000, idleMs: 20_000 });
+    assert.equal(r.text, '结论：只是复习提纲，不是完整总结。');
+    assert.ok(Date.now() - t0 < 9000, '没等满时限');
+    fs.writeFileSync(mode, 'stuck');
+    await assert.rejects(talk.askAgentRun(agent, '这份总结完整吗？', dir, { timeoutMs: 6000, idleMs: 20_000 }), /没答完；最后说到：接下来抽原书目录看看/);
+    fs.writeFileSync(mode, 'limit');
+    await assert.rejects(talk.askAgentRun(agent, '这份总结完整吗？', dir, { timeoutMs: 6000, idleMs: 20_000 }), /额度/);
+  } finally {
+    process.env.PATH = keep.path;
+    if (keep.wrap === undefined) delete process.env.RELAY_ANSWER_RESERVE_MS;
+    else process.env.RELAY_ANSWER_RESERVE_MS = keep.wrap;
+    harness.clearLocateCache();
+  }
+});
+
 test('没写任务时文件夹里的改动不算一棒、不要复核（你在工具里做别的事）；有 AI 建了交接才算。旧版记下的那种对话能删，撤销就回来', () => {
   registry([CODEX, DSH]);
   const { root, write } = project('no-task-edits', '第一个任务');
