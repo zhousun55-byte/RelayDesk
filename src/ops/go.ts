@@ -198,6 +198,15 @@ export async function stopGoAndWait(root: string, timeoutMs = 20_000): Promise<v
   if (mine) await Promise.race([mine.catch(() => undefined), new Promise((res) => setTimeout(res, timeoutMs))]);
   // 别的进程里的调度（命令行起的）：看它的状态，停下来为止
   while (goActive(root) && Date.now() < end) await new Promise((res) => setTimeout(res, 300));
+  // 状态写成停了之后，它还要过一会儿才放掉调度锁（GitHub 上 Linux 偶尔就差这一下，删的时候报「全自动还在跑」）
+  while (Date.now() < end) {
+    try {
+      acquireLock(root)();
+      return;
+    } catch {
+      await new Promise((res) => setTimeout(res, 200));
+    }
+  }
 }
 
 /**
