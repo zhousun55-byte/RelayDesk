@@ -24,7 +24,7 @@ import { agentKind, agentLabel, findAgent, isOpenCommand, loadRegistry, removeAg
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
 import { adoptSummary, archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, summarize, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
 import { adoptOption, appendRule, castHumanVote, readVotes, startVote } from '../core/vote';
-import { goActive, startGo, stopGo } from '../ops/go';
+import { goActive, startGo, stopGo, stopGoAndWait } from '../ops/go';
 import { setThreadHidden } from '../ops/hidden';
 import { checkRoot, deleteTask, initProject, liveProjects, newTask, restoreTask } from '../ops/init';
 import { buildStamp, keeperMode } from '../ops/keeper';
@@ -726,9 +726,11 @@ export function createServer(opts: ServerOptions): http.Server {
       return {};
     },
     // 左边删掉一段对话（任务）/ 撤销：只是不再列出。
-    '/api/task/delete': (q, b) => {
+    '/api/task/delete': async (q, b) => {
       const root = dirOf(q, b);
       requireProject(root);
+      // 全自动还在跑：先叫停，等它把这一棒记好账再删
+      await stopGoAndWait(root);
       return { id: deleteTask(root) };
     },
     '/api/task/restore': (q, b) => {

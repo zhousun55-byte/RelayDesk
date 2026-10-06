@@ -517,7 +517,7 @@ export function modelArg(argv: string[]): string | undefined {
 }
 
 /**
- * Claude 桌面版自己带着一份 Claude Code（~/Library/Application Support/Claude/claude-code/<版本>/，跟着桌面版更新），
+ * Claude 桌面版自己带着一份 Claude Code（~/Library/Application Support/Claude/claude-code/<版本>/ 或 <版本>/<编号>/，跟着桌面版更新），
  * 通常比终端里的新：用它就能用上最新的 Opus，走的还是同一个 claude.ai 账号的额度，终端里的 claude 一点不动。
  * RELAY_CLAUDE_DESKTOP_DIR 可以指定别的位置（测试用）。
  */
@@ -532,8 +532,20 @@ export function desktopClaude(): { bin: string; version: string } | null {
     return null;
   }
   const versions = names.filter((n) => /^\d+(\.\d+)+$/.test(n)).sort((a, b) => (olderThan(a, b) ? 1 : olderThan(b, a) ? -1 : 0));
+  // 2026-10 起桌面版多套了一层：<版本>/<一串编号>/claude.app（编号目录里有 .verified 的是装完整的）
+  const homes = (v: string): string[] => {
+    const at = path.join(dir, v);
+    let subs: string[] = [];
+    try {
+      subs = fs.readdirSync(at).filter((n) => !n.startsWith('.') && n !== 'claude.app' && n !== 'claude');
+    } catch {
+      /* 读不了就只看这一层 */
+    }
+    const ok = (n: string) => fs.existsSync(path.join(at, n, '.verified'));
+    return [at, ...subs.sort((a, b) => Number(ok(b)) - Number(ok(a))).map((n) => path.join(at, n))];
+  };
   for (const v of versions) {
-    for (const bin of [path.join(dir, v, 'claude.app', 'Contents', 'MacOS', 'claude'), path.join(dir, v, 'claude')]) {
+    for (const bin of homes(v).flatMap((d) => [path.join(d, 'claude.app', 'Contents', 'MacOS', 'claude'), path.join(d, 'claude')])) {
       try {
         fs.accessSync(bin, fs.constants.X_OK);
         if (fs.statSync(bin).isFile()) return { bin, version: v };

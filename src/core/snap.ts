@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { RelayError } from './errors';
 import { parseNameStatusZ, parseNumstatZ, sumChanges, type FileChange } from './status';
@@ -296,6 +298,36 @@ export function takeSnapshot(root: string, message: string): SnapResult {
   if (head && sg(root, ['diff', '--cached', '--quiet', 'HEAD']).code === 0) return { sha: head, changed: false };
   sgOk(root, ['commit', '-q', '--no-verify', '--allow-empty', '-m', message], '存快照');
   return { sha: sgOk(root, ['rev-parse', 'HEAD'], '读快照'), changed: true };
+}
+
+/**
+ * 另一个文件夹（同时做几步时给每一位的副本）比起某张快照改了哪些文件。
+ * 按快照的规则看（.gitignore 和默认排除的不算），用一份临时索引，项目自己的快照索引不动。
+ */
+export function copyChanges(root: string, from: string, dir: string): { path: string; deleted: boolean }[] {
+  ensureSnapRepo(root);
+  const idx = path.join(os.tmpdir(), `relay-idx-${process.pid}-${crypto.randomBytes(4).toString('hex')}`);
+  const git = (args: string[]) => {
+    const r = spawnSync('git', [...BASE, `--git-dir=${snapDir(root)}`, `--work-tree=${dir}`, ...args], {
+      cwd: dir,
+      encoding: 'utf8',
+      maxBuffer: 256 * 1024 * 1024,
+      env: { ...cleanEnv(root), GIT_INDEX_FILE: idx },
+    });
+    if (r.error) throw new RelayError(`没能执行 git：${r.error.message}`, 'no-git');
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: (r.stderr ?? '').trim() };
+  };
+  try {
+    const read = git(['read-tree', from]);
+    if (read.code !== 0) throw new RelayError(`读快照失败：${read.stderr}`, 'snap');
+    const add = git(['add', '-A', '--ignore-errors', '--', '.']);
+    if (add.code !== 0 && !/warning|error: open\(/i.test(add.stderr)) throw new RelayError(`看副本的改动失败：${add.stderr}`, 'snap');
+    const diff = git(['diff', '--cached', ...DIFF_SAFE, '-z', '--name-status', '--no-renames', from]);
+    if (diff.code !== 0) throw new RelayError(`看副本的改动失败：${diff.stderr}`, 'snap');
+    return parseNameStatusZ(diff.stdout).map((f) => ({ path: f.path, deleted: f.status === 'D' }));
+  } finally {
+    fs.rmSync(idx, { force: true });
+  }
 }
 
 /** 看改动时一律不跑快照仓库配置里的外部 diff 和转换程序（那些配置可能被改过）。 */

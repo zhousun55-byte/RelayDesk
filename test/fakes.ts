@@ -205,7 +205,8 @@ function fakeScript(name: 'claude' | 'codex'): string {
     // 拆解：把「进度」换成 4 步（第一步下面带一行做法），交接写「拆成 4 步」。
     "if grep -q '派来拆解' \"$P\"; then",
     '  T=.relay/任务.md',
-    "  awk '/^## 进度/{print; print \"\"; print \"- [ ] 第一步：建 a.txt\"; print \"  - 改 a.txt：写一行 a\"; print \"- [ ] 第二步：建 b.txt\"; print \"- [ ] 第三步：建 c.txt\"; print \"- [ ] 第四步：建 d.txt\"; print \"\"; skip=1; next} skip && /^## /{skip=0} !skip{print}' \"$T\" > \"$T.tmp\" && mv \"$T.tmp\" \"$T\"",
+    // FAKE_PLAN_PARALLEL=1：每一步下面写「可以同时做」
+    "  awk -v par=\"$FAKE_PLAN_PARALLEL\" 'function st(t){print t; if (par) print \"  - 可以同时做\"} /^## 进度/{print; print \"\"; st(\"- [ ] 第一步：建 a.txt\"); print \"  - 改 a.txt：写一行 a\"; st(\"- [ ] 第二步：建 b.txt\"); st(\"- [ ] 第三步：建 c.txt\"); st(\"- [ ] 第四步：建 d.txt\"); print \"\"; skip=1; next} skip && /^## /{skip=0} !skip{print}' \"$T\" > \"$T.tmp\" && mv \"$T.tmp\" \"$T\"",
     `  [ -n "$H" ] && printf '# 交接：%s\\n\\n- 状态：已交接\\n\\n## 做了什么\\n\\n- 把任务拆成 4 步\\n' "$WHO" > "$H"`,
     '  say "拆好了"',
     '  exit 0',
@@ -235,9 +236,15 @@ function fakeScript(name: 'claude' | 'codex'): string {
     '  say "这一步做不下去"',
     '  exit 0',
     'fi',
-    'echo "$NAME 干了一步" >> work.txt',
+    // 派活一棒一步：给这一步打勾（同时做几步时，各自的副本里前面几步还没打勾）；同时做的写自己那一步的文件，不碰 work.txt
+    "N=$(sed -n 's/.*这一棒只做任务清单里的第 \\([0-9]*\\) 步.*/\\1/p' \"$P\" | head -1)",
+    // FAKE_CLAUDE_SLOW=秒：claude 做派活的每一步都先慢慢来（同时做几步时，看快的人会不会来帮）
+    '[ -n "$FAKE_CLAUDE_SLOW" ] && [ "$NAME" = claude ] && [ -n "$N" ] && sleep "$FAKE_CLAUDE_SLOW"',
+    'if grep -q "同时在做" "$P"; then echo "$NAME 做了第 $N 步" > "step-$N.txt"; [ -n "$FAKE_SHARED_FILE" ] && echo "$NAME 第 $N 步" >> shared.txt; else echo "$NAME 干了一步" >> work.txt; fi',
     'T=.relay/任务.md',
-    'if [ -f "$T" ]; then',
+    'if [ -f "$T" ] && [ -n "$N" ]; then',
+    `  awk -v n="$N" '/^- \\[[ x]\\] / {i++; if (i == n) sub(/- \\[ \\] /, "- [x] ")} {print}' "$T" > "$T.tmp" && mv "$T.tmp" "$T"`,
+    'elif [ -f "$T" ]; then',
     `  awk '!d && /^- \\[ \\] / {sub(/- \\[ \\] /, "- [x] "); d=1} {print}' "$T" > "$T.tmp" && mv "$T.tmp" "$T"`,
     'fi',
     'state=已交接',

@@ -32,6 +32,8 @@ export interface AutoSettings {
   sideReview: boolean;
   /** 派活时同一步弱模型没做下去（换过人还不行、或者没人可换），请指挥的那位做这一步，做完接着交给弱模型。 */
   escalate: boolean;
+  /** 派活时清单里标了「可以同时做」的几步，最多几步同时做（每一位在自己的项目副本里做，做完一份份并回来）。1 = 一步一步做。 */
+  parallel: number;
   /** 技能怎么用（技能名 → off 不用 / always 每次都带上）；没写的 = 写了 /技能名 才带上。 */
   skills: Record<string, SkillMode>;
 }
@@ -39,7 +41,7 @@ export interface AutoSettings {
 export type SkillMode = 'off' | 'always';
 
 export function defaultAutoSettings(): AutoSettings {
-  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, lang: 'zh', lead: '', sameThread: false, showSessions: true, sideReview: true, escalate: true, skills: {} };
+  return { order: [], level: 'safe', stintTimeoutMin: 60, reviewTimeoutMin: 30, maxStints: 12, waitForQuota: true, finalReview: true, lang: 'zh', lead: '', sameThread: false, showSessions: true, sideReview: true, escalate: true, parallel: 3, skills: {} };
 }
 
 export function autoSettingsPath(): string {
@@ -85,6 +87,7 @@ export function normalizeAutoSettings(raw: unknown): AutoSettings {
     showSessions: bool(o.showSessions, d.showSessions),
     sideReview: bool(o.sideReview, d.sideReview),
     escalate: bool(o.escalate, d.escalate),
+    parallel: int(o.parallel, '同时做几步', 1, 8, d.parallel),
     skills: skillModes(o.skills),
   };
 }

@@ -176,19 +176,30 @@ function withIdleLock<T>(root: string, fn: () => T): T {
 
 /**
  * 删除正在做的任务：任务清单清空（回到还没写任务的样子），账本记一笔换任务（deleted 记下删掉的那份清单），
- * 左边不再列出这一段。每一棒的记录、交接、快照都不动。全自动在跑、有一棒还没交接时删不了。
+ * 左边不再列出这一段。每一棒的记录、交接、快照都不动。全自动在跑时删不了（网页上删会先叫停它）；
+ * 有一棒还没交接（你在工具里开着）也能删，那一棒算在删掉的这一段里。
  * 返回这一笔的时间，撤销时用。
  */
 export function deleteTask(root: string): string {
   if (!loadLedger(root).init) throw new RelayError('这个文件夹还没接入接力台。', 'not-init');
   return withIdleLock(root, () => {
     const v = loadLedger(root);
-    if (v.open) throw new RelayError(`第 ${v.open.id} 棒还在做，等它交接了再删`, 'task-busy');
     const before = readTask(root);
-    if (before.empty) throw new RelayError('还没有任务。', 'no-task');
+    const changes = taskChanges(v.events);
+    const key = changes.at(-1)?.ts ?? v.init!.ts;
+    if (before.empty) {
+      // 没写任务，这一段却有棒（旧版把没有任务时文件夹里的改动也记成一棒）：另起一段，把这一段藏起来。
+      const lo = changes.length ? Date.parse(key) : -Infinity;
+      if (!v.stints.some((s) => Date.parse(s.startedAt) >= lo)) throw new RelayError('还没有任务。', 'no-task');
+      const ts = new Date().toISOString();
+      const taskCopy = saveTaskCopy(root);
+      appendLedger(root, { type: 'task', ts, title: '', snap: takeSnapshot(root, '删除对话').sha, prev: '', blank: true, ...(taskCopy ? { taskCopy } : {}) });
+      setThreadHidden(root, key, true);
+      refreshBrief(root);
+      return ts;
+    }
     const deleted = saveTaskCopy(root);
     if (!deleted) throw new RelayError('任务清单存不下来，没有删。', 'no-copy');
-    const key = taskChanges(v.events).at(-1)?.ts ?? v.init!.ts;
     fs.writeFileSync(path.join(root, TASK_REL), taskTemplate());
     const ts = new Date().toISOString();
     const taskCopy = saveTaskCopy(root);
@@ -204,10 +215,10 @@ export function restoreTask(root: string, id: string): void {
   withIdleLock(root, () => {
     const v = loadLedger(root);
     const del = taskChanges(v.events).at(-1);
-    if (!del?.deleted || del.ts !== id || !readTask(root).empty) throw new RelayError('删了之后已经写了新任务，撤销不了。', 'task-moved');
-    const raw = readTaskCopy(root, del.deleted);
+    if (!(del?.deleted || del?.blank) || del.ts !== id || !readTask(root).empty) throw new RelayError('删了之后已经写了新任务，撤销不了。', 'task-moved');
+    const raw = del.deleted ? readTaskCopy(root, del.deleted) : readTask(root).raw;
     if (raw === null) throw new RelayError('删掉的任务清单找不到了。', 'no-copy');
-    fs.writeFileSync(path.join(root, TASK_REL), raw);
+    if (del.deleted) fs.writeFileSync(path.join(root, TASK_REL), raw);
     const taskCopy = saveTaskCopy(root);
     appendLedger(root, { type: 'task', ts: new Date().toISOString(), title: parseTask(raw).title, snap: takeSnapshot(root, '撤销删除任务').sha, undo: id, ...(taskCopy ? { taskCopy } : {}) });
     setThreadHidden(root, taskChanges(loadLedger(root).events).at(-1)?.ts ?? v.init!.ts, false);

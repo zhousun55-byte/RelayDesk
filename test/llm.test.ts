@@ -144,6 +144,20 @@ test('写到一次能写的上限被截断：报 cut；接口不收「可以缓�
   }
 });
 
+test('叫停了：正在写的这一段也马上断开（同时做几步时同一步别人先做完了，不再等它写完）', async () => {
+  const long = await server((_b, res) => sse(res, Array.from({ length: 100 }, (_, i) => ({ choices: [{ delta: { content: String(i % 10) } }] })), 100));
+  try {
+    const c = new ToolChat({ baseUrl: long.url, model: 'm', apiKeyEnv: '' }, 'sys', tools);
+    c.user('写长一点');
+    const t0 = Date.now();
+    c.shouldStop = () => Date.now() - t0 > 400;
+    await assert.rejects(c.next(30_000), (e: { code?: string }) => e.code === 'llm-stopped');
+    assert.ok(Date.now() - t0 < 2000, `没等它写完 10 秒：${Date.now() - t0} 毫秒`);
+  } finally {
+    long.close();
+  }
+});
+
 test('一直在出字就不算卡住（总时长比「多久没回音」长也照样收完）；停着不动才停；整段 JSON 的接口照旧能读', async () => {
   const slow = await server((_b, res) => sse(res, Array.from({ length: 8 }, (_, i) => ({ choices: [{ delta: { content: String(i) } }] })), 60));
   const stuck = await server((_b, res) => {

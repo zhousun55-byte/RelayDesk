@@ -278,6 +278,25 @@ test('接力台被强行结束（kill -9）、工具的外层启动器也没了�
   assert.deepEqual(s.stints().map((x) => x.status), ['stopped', 'handed']);
 });
 
+test('全自动在跑时删除正在做的任务：先叫停它、等这一棒记好账，再删（不用自己先点停止）', async () => {
+  const s = prepared('delete-running', { FAKE_CODEX_MODE: 'slow' });
+  s.relay(['init']);
+  s.relay(['task', '做一件事', '--step', '第一件']);
+  const child = spawn(process.execPath, [CLI, 'go', 'codex'], { cwd: s.repo, env: s.env });
+  const exited = new Promise((r) => child.on('exit', r));
+  const pidFile = path.join(s.base, 'codex.pid');
+  await until(15_000, () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() !== '', '工具开始干活');
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const go = require('../src/ops/go') as typeof import('../src/ops/go');
+  const init = require('../src/ops/init') as typeof import('../src/ops/init');
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  await go.stopGoAndWait(s.repo);
+  init.deleteTask(s.repo);
+  await exited;
+  assert.match(fs.readFileSync(path.join(s.repo, '.relay', '任务.md'), 'utf8'), /还没有任务/);
+  assert.deepEqual(s.stints().map((x) => x.status), ['stopped']);
+});
+
 test('关掉终端窗口（SIGHUP）：接力台先结束正在干活的工具、把这一棒记成「叫停了」再退，不会把工具留在后台接着改文件', async () => {
   const s = prepared('hangup', { FAKE_CODEX_MODE: 'slow' });
   s.relay(['init']);

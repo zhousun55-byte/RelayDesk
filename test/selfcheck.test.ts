@@ -784,7 +784,7 @@ test('删掉的对话里待复核的棒不再算待复核：项目红点、「�
   assert.deepEqual(pending().ledger, [1]);
 });
 
-test('右键删除：群聊挪进 .relay/已删除的群聊/、左边不再列出，撤销能找回；还有 AI 在说的不删。对话（任务）只是不列出，正在做的那段删不掉', () => {
+test('右键删除：群聊挪进 .relay/已删除的群聊/、左边不再列出，撤销能找回；还有 AI 在说也删。对话（任务）只是不列出，正在做的那段删了清单清空', () => {
   const { root } = project('ctx-delete', '第一个任务');
   // 群聊：正在用的一段、存档的一段
   talk.appendTalk(root, { kind: 'human', who: '我', text: '旧的问题' });
@@ -800,10 +800,14 @@ test('右键删除：群聊挪进 .relay/已删除的群聊/、左边不再列�
   assert.ok(cur && cur !== old);
   assert.equal(talk.readTalk(root).length, 0);
   assert.equal(talk.deleteTalk(root, null), null, '空的就什么都不做');
-  // 有 AI 在说：不删
+  // 有 AI 在说：也删，在说的跟着记录挪过去（没说完的回答写进删掉的那份），撤销时一起回来
   const th = talk.threadOf(talk.talkFile(root, old));
   th.votes++;
-  assert.throws(() => talk.deleteTalk(root, old), /还有 AI 在说/);
+  assert.equal(talk.deleteTalk(root, old), old);
+  assert.equal(th.file, path.resolve(root, '.relay', '已删除的群聊', `${old}.jsonl`));
+  assert.deepEqual(talk.talkSessions(root).map((x) => x.id), []);
+  talk.restoreTalk(root, old);
+  assert.equal(th.file, path.resolve(talk.talkFile(root, old)));
   th.votes--;
   talk.releaseThread(th);
 
@@ -841,6 +845,81 @@ test('右键删除：群聊挪进 .relay/已删除的群聊/、左边不再列�
   init.newTask(root, '第三个任务');
   assert.throws(() => init.restoreTask(root, id2), /撤销不了/);
   assert.deepEqual(shape(), [['第一个任务', false, false], ['第二个任务', false, true], ['第三个任务', true, false]]);
+});
+
+test('Claude 桌面版自带的 Claude Code 新的目录（<版本>/<编号>/claude.app）也认得，挑最新、装完整的那份', () => {
+  const dir = tmpDir('desk-claude');
+  const put = (rel: string) => {
+    const exe = path.join(dir, rel, 'claude.app', 'Contents', 'MacOS', 'claude');
+    fs.mkdirSync(path.dirname(exe), { recursive: true });
+    fs.writeFileSync(exe, '#!/bin/sh\n');
+    fs.chmodSync(exe, 0o755);
+    return exe;
+  };
+  put('2.1.284');
+  put('2.1.288/aaa-half');
+  const good = put('2.1.288/48d54124d3c3');
+  fs.writeFileSync(path.join(dir, '2.1.288', '48d54124d3c3', '.verified'), '');
+  const was = process.env.RELAY_CLAUDE_DESKTOP_DIR;
+  process.env.RELAY_CLAUDE_DESKTOP_DIR = dir;
+  try {
+    assert.deepEqual(harness.desktopClaude(), { bin: good, version: '2.1.288' });
+  } finally {
+    if (was === undefined) delete process.env.RELAY_CLAUDE_DESKTOP_DIR;
+    else process.env.RELAY_CLAUDE_DESKTOP_DIR = was;
+  }
+});
+
+test('没写任务时文件夹里的改动不算一棒、不要复核（你在工具里做别的事）；有 AI 建了交接才算。旧版记下的那种对话能删，撤销就回来', () => {
+  registry([CODEX, DSH]);
+  const { root, write } = project('no-task-edits', '第一个任务');
+  init.deleteTask(root);
+  const shape = () => view.projectView(root).threads.map((t) => [t.title, t.current, !!t.hidden, t.stints.length]);
+  const before = shape();
+  write('笔记/总结.md', '自己在工具里写的\n');
+  track.track(root);
+  assert.equal(ledger.loadLedger(root).stints.length, 0, '不开一棒');
+  assert.deepEqual(view.projectView(root).pending, []);
+  assert.deepEqual(shape(), before, '左边不多出一段对话');
+  // 再改也一样；接着有 AI 按规矩建了交接：从这里起算一棒，前面的改动不算到它头上
+  write('笔记/总结.md', '又改了\n');
+  track.track(root);
+  write('.relay/交接/第1棒-1006-0200-dsh.md', handoff('DeepSeek Harness · deepseek-flash', 'DeepSeek Harness', 'deepseek-flash'));
+  write('b.txt', '1\n');
+  track.track(root);
+  const v = ledger.loadLedger(root);
+  assert.equal(v.stints.length, 1);
+  assert.deepEqual(v.stints[0].facts?.paths, ['b.txt']);
+
+  // 旧版：没写任务的那一段里记了一棒（截图里删除对话是灰的）。删掉：另起一段、这段藏起来、不再算待复核；撤销就回来
+  const { root: r2, write: w2 } = project('no-task-legacy', '第一个任务');
+  init.deleteTask(r2);
+  w2('.relay/交接/第1棒-1006-0200-dsh.md', handoff('DeepSeek Harness · deepseek-flash', 'DeepSeek Harness', 'deepseek-flash'));
+  w2('a.txt', '1\n');
+  track.track(r2);
+  const legacy = () => view.projectView(r2).threads.map((t) => [t.current, !!t.hidden, t.stints.length]);
+  assert.deepEqual(legacy(), [[false, true, 0], [true, false, 1]]);
+  assert.ok(notes.readTask(r2).empty);
+  const id = init.deleteTask(r2);
+  assert.ok(notes.readTask(r2).empty);
+  assert.deepEqual(legacy(), [[false, true, 0], [false, true, 1], [true, false, 0]]);
+  assert.deepEqual(view.projectView(r2).pending, [], '删掉的那段不算待复核');
+  assert.throws(() => init.deleteTask(r2), /还没有任务/, '空的那段没什么可删');
+  init.restoreTask(r2, id);
+  assert.deepEqual(legacy(), [[false, true, 0], [true, false, 1]]);
+
+  // 有一棒还没交接（你在工具里开着）：也能删，那一棒算在删掉的那一段里，交接了也不算待复核
+  const { root: r3, write: w3 } = project('delete-open', '做一件事');
+  w3('.relay/交接/第1棒-1006-0300-dsh.md', handoff('DeepSeek Harness · deepseek-flash', 'DeepSeek Harness', 'deepseek-flash', '进行中'));
+  w3('c.txt', '1\n');
+  track.track(r3);
+  assert.ok(ledger.loadLedger(r3).open);
+  init.deleteTask(r3);
+  w3('.relay/交接/第1棒-1006-0300-dsh.md', handoff('DeepSeek Harness · deepseek-flash', 'DeepSeek Harness', 'deepseek-flash'));
+  track.track(r3);
+  assert.equal(ledger.loadLedger(r3).open, null);
+  assert.deepEqual(view.projectView(r3).pending, []);
+  assert.deepEqual(view.projectView(r3).threads.map((t) => [t.current, !!t.hidden, t.stints.length]), [[false, true, 1], [true, false, 0]]);
 });
 
 test('换了新任务：旧任务那一段还带着换掉那一刻的清单（打没打勾）和验收；旧版账本没记的，从「做完的任务」存档里对回清单', () => {

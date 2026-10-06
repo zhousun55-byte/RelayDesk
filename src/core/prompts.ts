@@ -14,6 +14,9 @@ export interface StintPromptInput {
   gateCommand: string;
 }
 
+/** 强模型拆解时在这一步下面写的标记：和相邻几步互不依赖、改的文件不重叠（接力台会请几位同时做）。 */
+export const PARALLEL_MARK = '可以同时做';
+
 const ALONE = '没有人会回答你的问题，也不用等人确认：自己判断，直接做。';
 
 export function workPrompt(i: StintPromptInput): string {
@@ -37,13 +40,15 @@ export function planPrompt(i: StintPromptInput): string {
     `1. 先读 \`${BRIEF_REL}\` 和 \`${TASK_REL}\`，再读和任务有关的代码，想清楚整件事怎么做。`,
     `2. 把 \`${TASK_REL}\`「进度」里的清单改写成一步步的小步：每步一个弱模型一棒做得完、做完能验证（大约改一两个文件）。已经打勾的保留原样。`,
     '3. 每步一行 `- [ ] …`；下面缩进几行写清楚：改哪些文件、要有哪些函数（写签名）和行为、要注意的边界、怎么验证。只写要求，不写逐字的期望输出、整段模板和一条条测试用例（测试由弱模型按要求自己写）；几行要点就够，不用数字数、反复压缩。',
+    `   相邻的几步互不依赖（不用等对方的结果、改的文件也不重叠）时，在这几步下面各加一行「${PARALLEL_MARK}」：接力台会请几位同时做，快很多。要用到前面某步结果的，不要加。`,
+    '   「约定」里只写用户要的和项目本身的限制。不要把你自己这个工具做不到的事（比如你不能联网、不能跑命令）写成约定或步骤要求：接手的成员可能做得到。要查资料、要最新数据的，就写成步骤让做的人去查（能联网就联网核实，写明出处）。',
     '4. 不要自己把活干一遍：项目里外都不写实现代码、不试跑（也不去试库函数怎么用）。代码留给弱模型写，最后由强模型终审把关。',
     `5. 清单想好了一次写进 \`${TASK_REL}\`，不要一步一步地追加；你只改这个文件，不改代码、不建别的文件。交接写在 \`${i.handoff}\`：「做了什么」写拆成了几步，状态写「已交接」。`,
   ].join('\n');
 }
 
 /** 派活：弱模型只做清单里的一步（强模型拆好的，做法写在这一步下面）。 */
-export function stepPrompt(i: StintPromptInput & { step: { index: number; text: string } }): string {
+export function stepPrompt(i: StintPromptInput & { step: { index: number; text: string }; together?: number[] }): string {
   return [
     `你是「接力台」派来接着做这个项目的第 ${i.id} 棒：${i.label}。${ALONE}`,
     '',
@@ -53,6 +58,7 @@ export function stepPrompt(i: StintPromptInput & { step: { index: number; text: 
     '',
     `1. 先读 \`${BRIEF_REL}\`（任务、上一棒留的话都在里面），再看 \`${TASK_REL}\` 里这一步。别的只看做这一步要用的；要对齐已有的写法，看一份就够。`,
     `2. 只做这一步，不做后面的步骤。文件一次写完整，写完不用再读回来核对；做完在 \`${TASK_REL}\` 里把它打勾。`,
+    ...(i.together?.length ? [`   第 ${i.together.join('、')} 步正由别人同时在做：只改这一步要改的文件，别的步骤的文件一个都不要动（动了会合不回去）；清单里只给这一步打勾。`] : []),
     '3. 照写的做不通、或者缺信息，就停下：交接状态写「卡住了」，写清楚卡在哪。不要自己换做法。',
     `4. 交接写在 \`${i.handoff}\`，状态写「已交接」，三五行写清做了什么、留了什么就够。`,
     ...(i.gateCommand ? [`5. 收工前跑一遍检查：\`${i.gateCommand}\`。`] : []),

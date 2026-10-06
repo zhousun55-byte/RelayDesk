@@ -19,9 +19,11 @@ export function settingsCommand(): Command {
     .option('--no-wait', '都没额度时停下')
     .option('--final', '清单全部打勾后请强模型终审')
     .option('--no-final', '不终审')
+    .option('--lead <名字>', '派活谁来指挥（拆步骤、终审）：成员名；写 - 是不指定（强模型按顺序）')
+    .option('--parallel <步数>', '派活时标了「可以同时做」的几步最多几步同时做（1 = 一步一步做）')
     .option('--lang <语言>', 'zh | en：en 时请 AI 用英文写交接、复核和回答（网页上换语言会自动改）')
     .option('--reset', '恢复默认设置（原来的文件读不出来时，先留一份 auto.json.broken）')
-    .action((o: { level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean; lang?: string; reset?: boolean }) => {
+    .action((o: { level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean; lang?: string; lead?: string; parallel?: string; reset?: boolean }) => {
       const patch: Partial<Record<keyof AutoSettings, unknown>> = {};
       if (o.level !== undefined) patch.level = o.level;
       if (o.order !== undefined) patch.order = o.order;
@@ -31,6 +33,8 @@ export function settingsCommand(): Command {
       if (o.wait !== undefined) patch.waitForQuota = o.wait;
       if (o.final !== undefined) patch.finalReview = o.final;
       if (o.lang !== undefined) patch.lang = o.lang;
+      if (o.lead !== undefined) patch.lead = o.lead === '-' ? '' : o.lead;
+      if (o.parallel !== undefined) patch.parallel = o.parallel;
       const changed = !!o.reset || Object.keys(patch).length > 0;
       const s = changed ? saveAutoSettings({ ...(o.reset ? defaultAutoSettings() : loadAutoSettings()), ...patch }) : loadAutoSettings();
       if (changed) ok('已保存');
@@ -38,6 +42,7 @@ export function settingsCommand(): Command {
       info(`派活顺序：${s.order.length ? s.order.join('、') : '强的在前、编程工具在前'}`);
       info(`每一棒最长：${s.stintTimeoutMin} 分钟；复核、终审最长：${s.reviewTimeoutMin} 分钟；全自动最多接力：${s.maxStints} 棒`);
       info(`额度用完时等恢复：${s.waitForQuota ? '等' : '不等'}；做完后终审：${s.finalReview ? '终审' : '不终审'}`);
+      info(`派活谁来指挥：${s.lead || '强模型按顺序'}；同时做几步：${s.parallel}`);
       info(`AI 写字用的语言：${s.lang === 'en' ? '英文' : '中文'}`);
     });
 }

@@ -10,6 +10,7 @@ import { killTree, shellArgv, spawnTool } from './proc';
 import { matchProtected } from './protected';
 import { clip } from './runner';
 import type { ApiSpec } from './types';
+import { fetchPage, webSearch } from './web';
 
 /**
  * 内置小代理：让只有接口的模型（DeepSeek、MiMo……）也能自己读写文件干活。
@@ -49,8 +50,8 @@ const SECRET_GLOBS = ['.env', '.env.*', '.npmrc', '.pypirc', '.netrc', '.git-cre
 const NO_SECRET_FILE = '这个文件多半放着密钥（.env、私钥这一类），内置代理不读。要用里面的配置，请人把需要的部分写进任务的约定。';
 
 const SYSTEM = [
-  '你是一个在本地代码仓库里干活的编程助手，由「接力台」全自动调度：没有人会回答你的问题，也不用等人确认。',
-  '你只能通过提供的工具读写当前项目文件夹里的文件。',
+  '你是一个在本地项目文件夹里干活的助手（写代码、写文档、做分析都有），由「接力台」全自动调度：没有人会回答你的问题，也不用等人确认。',
+  '你通过提供的工具读写当前项目文件夹里的文件；要查资料、最新数据时用 web_search / fetch_url 上网查，引用时写明出处网址，别凭记忆编数字。',
   '做法：',
   '- 先用 list_files / read_file / search 弄清楚现状，再动手；改动要小而准，不要重写无关的内容。',
   '- 改已有文件优先用 edit_file（精确替换一段）；新文件或整体重写用 write_file。',
@@ -61,8 +62,8 @@ const SYSTEM = [
 ].join('\n');
 
 /** 只看不改（群聊、投票、边做边复核）：只给看文件的工具，看够了直接回答。 */
-const READ_SYSTEM = '你是「接力台」里的一位成员，这一回只看不改：可以用 list_files / read_file / search 看当前项目文件夹里的文件，不能改任何东西。看够了就直接回答。';
-const READ_TOOLS = new Set(['list_files', 'read_file', 'search']);
+const READ_SYSTEM = '你是「接力台」里的一位成员，这一回只看不改：可以用 list_files / read_file / search 看当前项目文件夹里的文件，用 web_search / fetch_url 上网查资料，不能改任何东西。看够了就直接回答。';
+const READ_TOOLS = new Set(['list_files', 'read_file', 'search', 'web_search', 'fetch_url']);
 /** 只看不改时最后留给回答的时间（最多占总时限的四分之一）。 */
 const answerReserveMs = () => Number(process.env.RELAY_ANSWER_RESERVE_MS ?? 3 * 60_000);
 
@@ -102,6 +103,18 @@ function tools(level: Level, hasGate: boolean): ToolDef[] {
       parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string', description: '只搜这个目录 / 文件' } }, required: ['pattern'] },
     },
   ];
+  t.push(
+    {
+      name: 'web_search',
+      description: '上网搜（要查资料、最新数据、文档时用）。返回标题、网址和摘要；要看全文再用 fetch_url。',
+      parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+    },
+    {
+      name: 'fetch_url',
+      description: '读一个网页的正文文字（http / https）。引用网上的数据时写明出处网址。',
+      parameters: { type: 'object', properties: { url: { type: 'string' }, max_chars: { type: 'integer', description: '最多要多少字，默认 12000' } }, required: ['url'] },
+    }
+  );
   if (hasGate) t.push({ name: 'run_check', description: '跑项目配置的检查命令（测试 / 构建），返回结果。', parameters: { type: 'object', properties: {} } });
   if (level === 'full') {
     t.push({
@@ -318,6 +331,7 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
   const hasGate = !!input.gateCommand.trim();
   const ro = !!input.readOnly;
   const chat = new ToolChat(input.spec, ro ? READ_SYSTEM : SYSTEM, tools(input.level, hasGate).filter((t) => !ro || READ_TOOLS.has(t.name)));
+  chat.shouldStop = input.shouldStop;
   chat.user(redactSecrets(ro ? input.brief : `${input.brief}\n\n---\n现在开始工作。记住：做完调用 finish。`));
   const maxSteps = input.maxSteps ?? 60;
   // 只看不改（群聊、投票）：最后留一段时间让它照已经看到的直接回答，看文件不许吃掉这一段。
@@ -347,6 +361,10 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
         return editFile(root, c.args, input.protectedPaths);
       case 'search':
         return search(root, c.args);
+      case 'web_search':
+        return webSearch(String(c.args.query ?? ''));
+      case 'fetch_url':
+        return fetchPage(String(c.args.url ?? ''), Math.min(12_000, Math.max(1000, Number(c.args.max_chars) || 12_000)));
       case 'run_check':
         if (!hasGate) throw new ToolError('这个项目没有配置检查命令。');
         return shell(root, input.gateCommand, 10 * 60_000, input.shouldStop, checkEnv());
@@ -411,7 +429,7 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
           input.log('结束：它说做完了。');
           continue;
         }
-        input.log(`工具 ${c.name}：${clip(String(c.args.path ?? c.args.command ?? c.args.pattern ?? ''), 160)}`);
+        input.log(`工具 ${c.name}：${clip(String(c.args.path ?? c.args.command ?? c.args.pattern ?? c.args.query ?? c.args.url ?? ''), 160)}`);
         let content: string;
         try {
           content = await exec(c);
@@ -443,6 +461,7 @@ export async function runLlmAgent(input: LlmAgentInput): Promise<LlmAgentResult>
     }
   } catch (e) {
     if (e instanceof RelayError && e.code === 'llm-deadline') return { finalText, steps, stopped: false, timedOut: true };
+    if (e instanceof RelayError && e.code === 'llm-stopped') return { finalText, steps, stopped: true, timedOut: false };
     return { finalText, steps, stopped: false, timedOut: false, error: errorMessage(e) };
   } finally {
     // 和编程工具日志里的用量同一个说法（runner.ts 的 usageLine）

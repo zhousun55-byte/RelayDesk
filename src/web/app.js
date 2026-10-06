@@ -1887,10 +1887,9 @@ function threadEl(t) {
   );
 }
 
-/** 左边一段对话（一个任务）的右键菜单。正在做的那一段也能删（清单清空），全自动在跑、有一棒还没交接时删不了。 */
+/** 左边一段对话（一个任务）的右键菜单。什么时候都能删：正在做的那一段清单清空，全自动在跑就先叫停。 */
 function threadMenuItems(t) {
   const run = runState();
-  const busy = t.current && (run.running || run.waiting || run.native);
   const word = pageOf(t) === 'dispatch' ? T`派活` : T`全自动`;
   return [
     { label: T`打开`, icon: 'route', run: () => selectThread(t) },
@@ -1899,7 +1898,7 @@ function threadMenuItems(t) {
     t.current && S.st.project.pending.length ? { label: T`复核`, icon: 'review', disabled: !reviewer() || run.running, run: reviewNow } : null,
     { label: T`复制标题`, icon: 'copy', run: () => copyToast(t.title) },
     '-',
-    { label: T`删除对话`, sub: busy ? T`AI 还在做` : '', icon: 'trash', disabled: busy || (t.current && S.st.project.task.empty), run: () => (t.current ? deleteTask(t) : hideThread(t)) },
+    { label: T`删除对话`, icon: 'trash', run: () => (t.current ? deleteTask(t) : hideThread(t)) },
   ];
 }
 
@@ -3958,16 +3957,15 @@ function sessionEl(x) {
   return h('button', { class: 'thread', 'data-id': `chat:${x.id}`, onclick: () => selectChat(x.id || null), oncontextmenu: (e) => ctx(e, sessionMenuItems(x)) }, h('span', { class: 't' }, x.title), h('span', { class: 'when' }, live ? h('span', { class: 'dot live' }) : x.at ? when(x.at) : T`现在`));
 }
 
-/** 一段群聊的右键菜单（inside：在这段群聊里面点的，不用「打开」）。还有 AI 在说、在投票的删不了。 */
+/** 一段群聊的右键菜单（inside：在这段群聊里面点的，不用「打开」）。 */
 function sessionMenuItems(x, inside = false) {
-  const live = x.id ? !!x.busy : talkLive();
   const empty = !x.id && !talkHas(S.talk);
   return [
     inside ? null : { label: T`打开`, icon: 'chat', run: () => selectChat(x.id || null) },
     { label: T`新群聊`, icon: 'plus', run: newChat },
     x.title && !empty ? { label: T`复制标题`, icon: 'copy', run: () => copyToast(x.title) } : null,
     '-',
-    { label: T`删除群聊`, sub: live ? T`AI 还在说` : '', icon: 'trash', disabled: live || empty, run: () => deleteChat(x) },
+    { label: T`删除群聊`, icon: 'trash', disabled: empty, run: () => deleteChat(x) },
   ];
 }
 
@@ -6211,6 +6209,7 @@ function settingsBody(tab, redraw) {
       setRow(T`额度用完时等恢复`, T`所有 AI 的额度都用完时，等最早恢复的那一位接着做；关掉就直接停下。`, sw('waitForQuota', T`额度用完时等恢复`)),
       setRow(T`做完后终审`, T`清单全部打勾后，由强模型把整件事从头再走一遍，过了才算完成。`, sw('finalReview', T`做完后终审`)),
       setRow(T`边做边复核`, T`派活时，干活的做下一步，指挥的同时只看不改地复核上一步；有问题就在清单里插一步去改。会多用一些强模型的额度。`, sw('sideReview', T`边做边复核`)),
+      setRow(T`同时做几步`, T`派活时，清单里拆成「可以同时做」的几步，请几位弱模型同时做，各在一份项目副本里做，做完一份份并回来。1 就是一步一步做。`, stepper('parallel', 1, 8, T`步`)),
       setRow(T`卡住的那一步交给指挥`, T`派活时，弱模型在同一步上没做下去（换过人还不行，或者没人可换），这一步由指挥的那位做，做完接着交给弱模型。关掉就停在这一步。`, sw('escalate', T`卡住的那一步交给指挥`)),
       setSec(T`对话`),
       setRow(T`接着同一段对话`, T`同一个任务里，一位成员的下一棒顺着它上一棒在工具里的那段话说下去，一个任务在工具里就是一整段对话。关掉则每棒另起一段，token 用得少。`, sw('sameThread', T`接着同一段对话`)),

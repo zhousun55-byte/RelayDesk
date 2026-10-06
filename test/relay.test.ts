@@ -724,6 +724,109 @@ test('派活指定谁指挥、活派给谁：同一个工具的大模型拆和�
   assert.deepEqual([...g.stints].sort((a, b) => a - b), st.map((x) => x.id), '边做边复核的棒也算进这次跑过的棒');
 });
 
+test('派活：拆解时标了「可以同时做」的几步，几位弱模型各在一份项目副本里同时做，谁先做完谁先并回来、记成一棒，空出来的接着领下一步；并完副本删掉', () => {
+  const s = prepared('dispatch-parallel', { FAKE_PLAN_PARALLEL: '1' });
+  const file = path.join(s.home, '.relay', 'agents.json');
+  const reg = JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: Record<string, unknown>[] };
+  const codex = reg.agents.find((a) => a.name === 'codex')!;
+  reg.agents.push({ ...codex, name: 'codex-mini', model: 'gpt-6-mini', tier: 'weak', tierSet: true });
+  fs.writeFileSync(file, JSON.stringify(reg));
+  setOrder(s, ['codex', 'claude', 'codex-mini'], { lead: 'codex', sideReview: false, parallel: 3 });
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  const out = s.relay(['auto']);
+  assert.match(out, /✓ 验收通过：清单 4\/4 全部打勾/);
+  const st = s.stints();
+  const works = st.filter((x) => x.kind === 'work');
+  assert.deepEqual(works.map((x) => x.step.index).sort(), [1, 2, 3, 4], '每一步做了一次');
+  assert.deepEqual([...new Set(works.map((x) => x.who.member))].sort(), ['claude', 'codex-mini'], '两位弱模型都在做');
+  assert.deepEqual(works.map((x) => x.id), works.map((x) => x.id).sort((a, b) => a - b), '编号按并回来的先后');
+  // 两棒是同时做的：后一棒开工早于前一棒做完；结束时间是真做完的时间，不晚于并回来的时候
+  assert.ok(Date.parse(works[1].startedAt) < Date.parse(works[0].endedAt!), JSON.stringify(works.map((w) => [w.startedAt, w.endedAt])));
+  for (const w of works) {
+    assert.deepEqual(w.facts?.paths, [`step-${w.step.index}.txt`], `第 ${w.id} 棒只算它自己那一步的文件`);
+    assert.equal(w.status, 'handed');
+    assert.ok(w.ticked?.length === 1 && w.ticked[0].endsWith(w.step.text), `第 ${w.id} 棒只算它自己打的勾：${JSON.stringify(w.ticked)}`);
+    assert.match(w.handoff!, new RegExp(`第${w.id}棒-`), '交接换成这一棒的文件名带回了项目');
+    assert.ok(fs.existsSync(path.join(s.repo, w.handoff!)));
+  }
+  for (const n of [1, 2, 3, 4]) assert.match(s.read(`step-${n}.txt`), new RegExp(`做了第 ${n} 步`));
+  assert.equal(st.at(-1)!.kind, 'final');
+  assert.deepEqual(st.at(-1)!.targets, works.map((w) => w.id), '并进终审一起复核');
+  const wt = path.join(s.home, '.relay', 'worktrees');
+  assert.deepEqual(fs.existsSync(wt) ? fs.readdirSync(wt) : [], [], '副本并回去之后删掉了');
+  const prompts = fs
+    .readdirSync(s.base)
+    .filter((f) => f.startsWith('prompt-claude-') || f.startsWith('prompt-codex-'))
+    .map((f) => fs.readFileSync(path.join(s.base, f), 'utf8'));
+  assert.ok(prompts.some((p) => /步正由别人同时在做：只改这一步要改的文件/.test(p)));
+});
+
+test('派活：同时做几步时边做边复核也开着：并进来一棒就复核它，账本里不会同时开着两棒，每一棒都复核过', () => {
+  const s = prepared('dispatch-parallel-side', { FAKE_PLAN_PARALLEL: '1' });
+  const file = path.join(s.home, '.relay', 'agents.json');
+  const reg = JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: Record<string, unknown>[] };
+  const codex = reg.agents.find((a) => a.name === 'codex')!;
+  reg.agents.push({ ...codex, name: 'codex-mini', model: 'gpt-6-mini', tier: 'weak', tierSet: true });
+  fs.writeFileSync(file, JSON.stringify(reg));
+  setOrder(s, ['codex', 'claude', 'codex-mini'], { lead: 'codex', parallel: 3 });
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  assert.match(s.relay(['auto']), /✓ 验收通过：清单 4\/4 全部打勾/);
+  const st = s.stints();
+  const works = st.filter((x) => x.kind === 'work');
+  assert.deepEqual(works.map((x) => x.step.index).sort(), [1, 2, 3, 4]);
+  assert.ok(works.every((w) => w.review === 'done'), JSON.stringify(works.map((w) => [w.id, w.review])));
+  assert.ok(st.some((x) => x.kind === 'review'), '边做边复核跑过');
+  assert.deepEqual(st.map((x) => x.id), st.map((_, i) => i + 1), '编号连续、不重复');
+});
+
+test('派活：同时做几步时有人特别慢：快的人做完了别的、闲着，就也做这一步，谁先做完用谁的，慢的那份停掉、记一笔没用上', () => {
+  const s = prepared('dispatch-help', { FAKE_PLAN_PARALLEL: '1', FAKE_CLAUDE_SLOW: '30', RELAY_HELP_AFTER_MS: '300', RELAY_HELP_CHECK_MS: '200' });
+  const file = path.join(s.home, '.relay', 'agents.json');
+  const reg = JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: Record<string, unknown>[] };
+  const codex = reg.agents.find((a) => a.name === 'codex')!;
+  reg.agents.push({ ...codex, name: 'codex-mini', model: 'gpt-6-mini', tier: 'weak', tierSet: true });
+  fs.writeFileSync(file, JSON.stringify(reg));
+  setOrder(s, ['codex', 'claude', 'codex-mini'], { lead: 'codex', sideReview: false, parallel: 2 });
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  const t0 = Date.now();
+  assert.match(s.relay(['auto']), /✓ 验收通过：清单 4\/4 全部打勾/);
+  assert.ok(Date.now() - t0 < 25_000, '没等慢的那位做完');
+  const works = s.stints().filter((x) => x.kind === 'work');
+  const slow = works.find((w) => w.who.member === 'claude')!;
+  assert.equal(slow.status, 'stopped');
+  assert.match(slow.note ?? '', /同一步 .* 先做完了（第 \d+ 棒），这一份停掉、没有并回项目/);
+  assert.equal(slow.facts?.files ?? 0, 0);
+  const done = works.filter((w) => w.status === 'handed');
+  assert.deepEqual(done.map((w) => w.step.index).sort(), [1, 2, 3, 4], '每一步都有一份做成了');
+  assert.ok(done.every((w) => w.who.member === 'codex-mini'));
+  const wt = path.join(s.home, '.relay', 'worktrees');
+  assert.deepEqual(fs.existsSync(wt) ? fs.readdirSync(wt) : [], [], '没用上的副本也删了');
+});
+
+test('派活：同时做的两步改了同一个文件，后并的那份不并回去，这一步之后照常再做', () => {
+  const s = prepared('dispatch-clash', { FAKE_PLAN_PARALLEL: '1' });
+  const file = path.join(s.home, '.relay', 'agents.json');
+  const reg = JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: Record<string, unknown>[] };
+  const codex = reg.agents.find((a) => a.name === 'codex')!;
+  reg.agents.push({ ...codex, name: 'codex-mini', model: 'gpt-6-mini', tier: 'weak', tierSet: true });
+  fs.writeFileSync(file, JSON.stringify(reg));
+  setOrder(s, ['codex', 'claude', 'codex-mini'], { lead: 'codex', sideReview: false, parallel: 2 });
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  // 两位都往同一个文件里写
+  s.env.FAKE_SHARED_FILE = '1';
+  const out = s.relay(['auto']);
+  assert.match(out, /✓ 验收通过：清单 4\/4 全部打勾/);
+  const works = s.stints().filter((x) => x.kind === 'work');
+  const clash = works.find((w) => /都改了 shared\.txt/.test(w.note ?? ''));
+  assert.ok(clash, JSON.stringify(works.map((w) => [w.id, w.status, w.note])));
+  assert.equal(clash!.facts?.files ?? 0, 0, '没并回项目');
+  assert.ok(works.some((w) => w.id > clash!.id && w.step.index === clash!.step.index && w.status === 'handed'), '这一步之后又做了一次');
+});
+
 test('派活时干活的那位临时出错（连不上）：先原地再派它一次，不马上换人；下一棒日志开头写着原因', () => {
   const s = prepared('dispatch-retry', { FAKE_CLAUDE_MODE: 'blip-twice' });
   // 还有一位弱模型排在后面：刚出过错的会被排到它后面，按顺序挑就换人了——要点名再派原来那位

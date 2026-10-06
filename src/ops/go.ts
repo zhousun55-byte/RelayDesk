@@ -9,20 +9,22 @@ import { loadAutoSettings, normalizeAutoSettings, type AutoSettings, langNote } 
 import { errorMessage, RelayError } from '../core/errors';
 import { refreshHarnessModel } from '../core/detect';
 import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteModelNeeds, type Invocation } from '../core/harness';
-import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, taskChanges, taskMode, tierWord, verdictWord, type LedgerView, type Stint } from '../core/ledger';
+import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, taskChanges, taskMode, tierWord, verdictWord, type LedgerView, type Stint, type Who } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { killTree, pidAlive } from '../core/proc';
 import { allMembers, orderMembers, readyMembers, spareFirst, type MemberInfo } from '../core/members';
 import { llmName, whoName } from '../core/names';
-import { BRIEF_REL, editTask, fileStamp, handoffFileFor, listHandoffFiles, parseReview, readHandoff, readReview, readTask, REVIEW_DIR, reviewFileFor, saveTaskCopy, TASK_REL, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
+import { BRIEF_REL, editTask, fileStamp, HANDOFF_DIR, handoffFileFor, listHandoffFiles, parseReview, readHandoff, readReview, readTask, REVIEW_DIR, reviewFileFor, saveTaskCopy, TASK_REL, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
 import { finalPrompt, planPrompt, reviewPrompt, sideReviewPrompt, splitSideReview, stepPrompt, workPrompt } from '../core/prompts';
 import { sessionFile, sessionToolOf } from '../core/sessions';
 import { blockMember, detectQuota, failureKind, fullUntil, markOk, markQuota, noteError, noteLimits, recentErrors, untilText, type Limit } from '../core/quota';
 import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, usageTotal, type RunHandle, type RunResult } from '../core/runner';
 import { cause, plain } from '../core/cause';
-import { takeSnapshot } from '../core/snap';
+import { copyChanges, snapChanges, takeSnapshot } from '../core/snap';
+import type { RelayConfig } from '../core/types';
 import { memberTier, sameModel, whoOfMember } from '../core/tier';
 import { acquireLock, runsDir } from './lock';
+import { applyFiles, cloneProject, dropClone, isParallel, stepOf, type Step } from './parallel';
 import { applyReviews, closeStint, gateStint, projectConfig, projectConfigSafe, refreshBrief, track } from './track';
 
 /**
@@ -188,6 +190,16 @@ export function stopGo(root: string): boolean {
   return false;
 }
 
+/** 叫停这个项目的调度，等它把正在跑的工具结束、这一棒记好账（最多等 timeoutMs）。删除正在做的任务时用。 */
+export async function stopGoAndWait(root: string, timeoutMs = 20_000): Promise<void> {
+  if (!stopGo(root)) return;
+  const end = Date.now() + timeoutMs;
+  const mine = finishing.get(canonRoot(root));
+  if (mine) await Promise.race([mine.catch(() => undefined), new Promise((res) => setTimeout(res, timeoutMs))]);
+  // 别的进程里的调度（命令行起的）：看它的状态，停下来为止
+  while (goActive(root) && Date.now() < end) await new Promise((res) => setTimeout(res, 300));
+}
+
 /**
  * 叫停所有调度，等它们把正在跑的工具结束、把这一棒记好账（最多等 timeoutMs）。
  * 接力台要退出时用：不等的话，工具会在接力台退出之后接着改文件，没人记账。
@@ -264,16 +276,10 @@ function tmpOut(): string {
   return path.join(os.tmpdir(), `relay-out-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.txt`);
 }
 
-/** 清单里的一步（第几步从 1 数）。 */
-interface Step {
-  index: number;
-  text: string;
-}
-
-/** 清单里下一步还没做的。步骤自己写了「第 3 步：」的去掉（不然提示和卡片上都是「第 3 步：第 3 步：……」）。 */
+/** 清单里下一步还没做的。 */
 function nextStep(task: TaskDoc): Step | undefined {
   const i = task.items.findIndex((x) => !x.done);
-  return i < 0 ? undefined : { index: i + 1, text: task.items[i].text.replace(/^第\s*[\d一二三四五六七八九十百]+\s*步\s*[：:.、，,]?\s*/, '') || task.items[i].text };
+  return i < 0 ? undefined : stepOf(task, i);
 }
 
 /** 这个任务是什么时候写下的（没有就是接入的时候）。 */
@@ -289,6 +295,8 @@ function planned(v: LedgerView): boolean {
 
 interface StintOutcome {
   stint: Stint;
+  /** 同时做几步时，这一份和先并回去的改了同一个文件、没有并回项目（不算这位做不下去）。 */
+  clash?: boolean;
   /** 这一棒改了文件没有。 */
   changed: boolean;
   handoff: HandoffDoc | null;
@@ -322,13 +330,69 @@ interface SideJob {
 /** 边做边复核查出问题后插进清单的那一步的开头。 */
 const FIX_STEP = '按复核改好';
 
+/** 同时做几步时：一步做了这么久、又有更快的人闲着，才请他也做一份。 */
+const HELP_AFTER_MS = Number(process.env.RELAY_HELP_AFTER_MS ?? 60_000);
+/** 多久看一眼该不该帮。 */
+const HELP_CHECK_MS = Number(process.env.RELAY_HELP_CHECK_MS ?? 15_000);
+
 /** 看起来是临时的出错：连不上、超时、一直没回音、服务器忙。同一位原地再来一次多半就好了。 */
 const TRANSIENT = /连不上|超时|没有回音|网络|HTTP (?:429|5\d\d)|timed? ?out|ECONNRESET|ETIMEDOUT|socket hang up|overloaded|rate limit/i;
+
+/** 单独叫停一位（同时做几步时，同一步别人先做完了）。 */
+interface Cancel {
+  requested: boolean;
+  stop?: () => void;
+}
+
+/** 跑一次的结果（execute 返回，closeRun 用）。 */
+interface RunMid {
+  finalText: string;
+  error?: string;
+  stopped: boolean;
+  quotaText: string;
+  toolSaid: string;
+  actualModel?: string;
+  limits?: Limit[];
+  session?: Stint['session'];
+}
+
+/** 一棒跑完时手上的东西（closeRun 用）。 */
+interface RunEnd {
+  cfg: RelayConfig;
+  from: string;
+  id: number;
+  handoff: string;
+  handoffsBefore: Set<string>;
+  logAbs: string;
+  stint: Stint;
+  who: Who;
+  m: MemberInfo;
+  kind: Stint['kind'];
+  targets: Stint[];
+  reviewFile?: string;
+  log: (line: string) => void;
+  finalText: string;
+  error?: string;
+  stopped: boolean;
+  quotaText: string;
+  toolSaid: string;
+  actualModel?: string;
+  limits?: Limit[];
+  session?: Stint['session'];
+  /** 工具在哪个文件夹里干的活（从它自己记的会话里读用量用）。 */
+  usageDir: string;
+  /** 真正做完的时间（同时做几步时，并回项目要晚一些）。 */
+  endedAt?: Date;
+  /** 叫停时写在这一棒上的原因（同一步别人先做完了）。 */
+  note?: string;
+}
 
 class GoRunner {
   readonly state: GoState;
   private stopRequested = false;
   private current: RunHandle | null = null;
+  /** 正在跑的工具（同时做几步时有几个）：叫停时都结束。 */
+  private readonly handles = new Set<RunHandle>();
   /** 这次出过错的人（不再派给他）。 */
   private readonly failed = new Set<string>();
   /** 干活连着出错几次（做成一棒就清零）：临时的错先原地再派一次，连着两次才换人。 */
@@ -355,6 +419,8 @@ class GoRunner {
   private readonly dispatch: boolean;
   /** 派活：最后一批待复核的已经并进过一次终审（没复核上的再单独复核）。 */
   private merged = false;
+  /** 项目副本建不起来：这次不再同时做几步。 */
+  private noBatch = false;
 
   constructor(
     private readonly root: string,
@@ -387,6 +453,7 @@ class GoRunner {
     this.state.phase = '正在停止…';
     this.save();
     this.current?.stop();
+    for (const h of this.handles) h.stop();
     this.sideHandle?.stop();
   }
 
@@ -444,19 +511,22 @@ class GoRunner {
    * - 命令行太旧、用不了这个模型：记下来，换成它用得了的马上再试（升级之后自动换回来）；
    * - 像是网络抖了一下：等几秒再试一次。
    */
-  private async runTool(logAbs: string, title: string, invoke: () => Invocation, timeoutMs: number, mayRetry: () => boolean, harness?: string): Promise<RunResult> {
+  private async runTool(logAbs: string, title: string, invoke: () => Invocation, timeoutMs: number, mayRetry: () => boolean, harness?: string, cwd = this.root, onHandle?: (h: RunHandle) => void): Promise<RunResult> {
     let blips = 0;
     for (let attempt = 0; ; attempt++) {
       const inv = invoke();
-      const h = startRun({ invocation: inv, cwd: this.root, timeoutMs, logPath: logAbs, title, onLine: this.hooks.onLine });
+      const h = startRun({ invocation: inv, cwd, timeoutMs, logPath: logAbs, title, onLine: this.hooks.onLine });
       this.current = h;
+      this.handles.add(h);
+      onHandle?.(h);
       if (h.pid && this.state.current) {
         this.state.current.toolPid = h.pid;
         this.state.current.toolExe = inv.argv[0];
         this.save();
       }
       const r = await h.done;
-      this.current = null;
+      this.handles.delete(h);
+      if (this.current === h) this.current = null;
       // 没等到回复（额度用完）时只有开头报的简写（claude-opus-5）：用调用时给的完整名字（claude-opus-5-5）。
       const asked = modelArg(inv.argv);
       if (r.model && asked?.startsWith(`${r.model}-`)) r.model = asked;
@@ -591,6 +661,13 @@ class GoRunner {
     }
     const timeoutMs = (kind === 'work' ? this.settings.stintTimeoutMin : this.settings.reviewTimeoutMin) * 60_000;
 
+    const ex = await this.execute({ m, kind, prompt, cwd: root, logAbs, title: stintTitle(stint), timeoutMs, unchanged: () => takeSnapshot(root, '看看改了没有').sha === from, resume: this.resumeFor(m, id), startedAt: stint.startedAt, log, cfg });
+    return this.closeRun({ cfg, from, id, handoff, handoffsBefore, logAbs, stint, who, m, kind, targets, reviewFile, log, ...ex, usageDir: root });
+  }
+
+  /** 让一位成员在 cwd 里跑一次（编程工具或接口小代理），返回它说的话、出的错、用的模型。 */
+  private async execute(x: { m: MemberInfo; kind: Stint['kind']; prompt: string; cwd: string; logAbs: string; title: string; timeoutMs: number; unchanged: () => boolean; resume?: string; startedAt: string; log: (line: string) => void; cfg: RelayConfig; cancel?: Cancel }): Promise<RunMid> {
+    const { m, log } = x;
     let finalText = '';
     let error: string | undefined;
     let stopped = false;
@@ -609,51 +686,57 @@ class GoRunner {
         const loc = spec ? locateCached(spec) : null;
         if (!spec || !loc) throw new RelayError('找不到这个工具了。', 'no-tool');
         const r = await this.runTool(
-          logAbs,
-          stintTitle(stint),
-          () => spec.invoke(loc, { cwd: root, prompt, level: this.settings.level, readOnly: false, model: m.agent.model?.trim() || undefined, effort: m.agent.effort, outFile: tmpOut(), resume: this.resumeFor(m, id) }),
-          timeoutMs,
-          () => takeSnapshot(root, '看看改了没有').sha === from,
-          spec.id
+          x.logAbs,
+          x.title,
+          () => spec.invoke(loc, { cwd: x.cwd, prompt: x.prompt, level: this.settings.level, readOnly: false, model: m.agent.model?.trim() || undefined, effort: m.agent.effort, outFile: tmpOut(), resume: x.resume }),
+          x.timeoutMs,
+          x.unchanged,
+          spec.id,
+          x.cwd,
+          (h) => {
+            if (!x.cancel) return;
+            x.cancel.stop = () => h.stop();
+            if (x.cancel.requested) h.stop();
+          }
         );
         finalText = r.finalText;
         stopped = r.stopped;
         actualModel = r.model;
         if (r.session) session = { tool: spec.id, id: r.session };
-        limits = r.limits ?? spec.limits?.(root, Date.parse(stint.startedAt)) ?? undefined;
+        limits = r.limits ?? spec.limits?.(x.cwd, Date.parse(x.startedAt)) ?? undefined;
         // 认额度只看工具自己报的话（出错信息、标准错误、日志里的「出错」「提示」）和最后一句话，不看 AI 说的话、搜的词：
         // 任务本身讲限流、额度时，那些话里全是 rate limit、quota。
         const failed = !r.stopped && (!!r.error || r.timedOut || r.code !== 0);
-        const own = toolLines(logTail(logAbs, 6000));
+        const own = toolLines(logTail(x.logAbs, 6000));
         quotaText = `${r.error ?? ''}\n${r.stderrTail}\n${own}\n${r.finalText.slice(-2000)}`;
         if (failed) {
           toolSaid = `${r.error ?? ''}\n${r.stderrTail}\n${own}`;
           const hint = explainFailure(m.harness, `${r.error ?? ''}\n${r.stderrTail}\n${r.finalText}`);
-          error = r.error ?? (r.timedOut ? (r.late ?? cause.overtime(timeoutMs)) : hint ?? cause.exit(r.code, clip(lastError(r.stderrTail, own), 200)));
+          error = r.error ?? (r.timedOut ? (r.late ?? cause.overtime(x.timeoutMs)) : hint ?? cause.exit(r.code, clip(lastError(r.stderrTail, own), 200)));
         }
       } else if (m.kind === 'api' && m.agent.api) {
         log(`（接力台内置小代理：${m.agent.api.baseUrl} · ${m.agent.api.model}）`);
         let brief = '';
         try {
-          brief = fs.readFileSync(path.join(root, BRIEF_REL), 'utf8');
+          brief = fs.readFileSync(path.join(x.cwd, BRIEF_REL), 'utf8');
         } catch {
           /* 没有接力本 */
         }
         const r = await runLlmAgent({
           spec: m.agent.api,
-          cwd: root,
-          brief: `${prompt}\n\n---\n下面是接力本（${BRIEF_REL}）全文：\n\n${brief}`,
+          cwd: x.cwd,
+          brief: `${x.prompt}\n\n---\n下面是接力本（${BRIEF_REL}）全文：\n\n${brief}`,
           level: this.settings.level,
-          gateCommand: gate,
-          protectedPaths: cfg.protectedPaths,
+          gateCommand: x.cfg.gate.command.trim(),
+          protectedPaths: x.cfg.protectedPaths,
           log,
-          shouldStop: () => this.stopRequested,
-          deadline: Date.now() + timeoutMs,
-          maxSteps: kind === 'work' ? 80 : 60,
+          shouldStop: () => this.stopRequested || !!x.cancel?.requested,
+          deadline: Date.now() + x.timeoutMs,
+          maxSteps: x.kind === 'work' ? 80 : 60,
         });
         finalText = r.finalText;
         stopped = r.stopped;
-        error = r.error ? plain(r.error) : r.timedOut ? cause.overtime(timeoutMs) : undefined;
+        error = r.error ? plain(r.error) : r.timedOut ? cause.overtime(x.timeoutMs) : undefined;
         quotaText = `${r.error ?? ''}`;
         toolSaid = r.error ?? '';
         log(`结束（${r.steps} 步${error ? `，${error}` : ''}）`);
@@ -665,6 +748,13 @@ class GoRunner {
       log(`出错：${error}`);
     }
 
+    return { finalText, error, stopped, quotaText, toolSaid, actualModel, limits, session };
+  }
+
+  /** 一棒跑完之后记账：收工的快照、交接、额度、用量、检查、终审结论（一棒一棒地跑和同时做几步共用）。 */
+  private async closeRun(c: RunEnd): Promise<StintOutcome> {
+    const root = this.root;
+    const { cfg, from, id, handoff, handoffsBefore, logAbs, stint, who, m, kind, targets, reviewFile, log, finalText, error, stopped, quotaText, toolSaid, actualModel, limits, session } = c;
     // 结束这一棒。
     const to = takeSnapshot(root, `第 ${id} 棒结束`).sha;
     let h = readHandoff(root, handoff);
@@ -682,6 +772,7 @@ class GoRunner {
     noteLimits(m.name, limits);
     if (stopped || this.stopRequested) {
       status = 'stopped';
+      if (c.note) note = c.note;
     } else if (quota.hit) {
       status = 'quota';
       // 恢复时间先看工具报的用满了的窗口（精确到秒），没有再看提示里的话
@@ -708,8 +799,8 @@ class GoRunner {
     }
     // 工具自己在输出里报的用量；不报的（DeepSeek Harness）从它自己记的会话里读
     // 从这一棒开始算：上一棒的会话在它结束前最后写入，差几百毫秒，不能往前放宽
-    const tokens = usageTotal(logText) ?? findHarness(m.harness)?.usage?.(root, Date.parse(stint.startedAt)) ?? null;
-    const closed = closeStint(root, { ...stint, who: ran, pid: process.pid, ...(tokens ? { tokens } : {}), ...(session ? { session } : {}) }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}) }, cfg);
+    const tokens = usageTotal(logText) ?? findHarness(m.harness)?.usage?.(c.usageDir, Date.parse(stint.startedAt)) ?? null;
+    const closed = closeStint(root, { ...stint, who: ran, pid: process.pid, ...(tokens ? { tokens } : {}), ...(session ? { session } : {}) }, { status, to, handoff: h, lastWords: finalText, ...(note ? { note } : {}), ...(quotaUntil ? { quotaUntil } : {}), ...(c.endedAt ? { now: c.endedAt } : {}) }, cfg);
     // 调度拿着锁，这时只有检查命令在跑：它自己写的缓存、报告算接力台的改动，不算到哪一棒头上（不然下一轮会以为有别的 AI 在改文件）。
     if (kind === 'review' || kind === 'final' || closed.facts?.files || closed.factsError) await gateStint(root, id, cfg, { absorb: 'all' }).catch(() => undefined);
     // 终审的结论：收工时要看它（交接成功不等于终审通过）。
@@ -1049,6 +1140,239 @@ class GoRunner {
     return this.finish(status, text);
   }
 
+  /**
+   * 派活：清单里标了「可以同时做」的几步同时做（最多 parallel 位）。每一位在自己的项目副本里做（互相看不到、不会撞车），
+   * 谁先做完谁先并回项目、记成一棒（和一棒一步时一样记账、复核），空出来的人接着领下一步——不等最慢的那位。
+   * 并的时候它改的文件、在它开工之后项目里已经被别人并进来改过：不并，这一步留着之后再做。
+   * 返回记了几棒；凑不出两位、两步就返回 0（照常一步一步做）；副本建不起来返回 -1。
+   */
+  private async runPool(v: LedgerView): Promise<number> {
+    const root = this.root;
+    const cfg = projectConfig(root);
+    const gate = cfg.gate.command.trim();
+    const max = this.settings.parallel;
+    interface Job {
+      m: MemberInfo;
+      step: Step;
+      from: string;
+      dir: string;
+      handoffTmp: string;
+      logRel: string;
+      logAbs: string;
+      who: Who;
+      startedAt: string;
+      cancel: Cancel;
+      /** 同一步的另一份（快的人闲下来，帮慢的人做同一步）。 */
+      twin?: Job;
+      /** 同一步别人先做完了：这一份不要了。 */
+      dropped?: string;
+      done: Promise<{ job: Job; ex: RunMid; at: Date }>;
+    }
+    /** 按步骤的原话认（边做边复核可能在清单里插一步，第几步会变）；帮做的那份 key 后面加「#帮」。 */
+    const running = new Map<string, Job>();
+    /** 这一轮每位做成一步用了多久（毫秒）：看谁快、该不该帮慢的人。 */
+    const took = new Map<string, number>();
+    /** 这一轮领过的步骤（做没做成都不再领：没做成的回到外面照常处理）。 */
+    const taken = new Set<string>();
+    const crew = this.ready(this.crewName(v));
+    const workers = (): MemberInfo[] => {
+      const weak = readyMembers(this.members()).filter((m) => m.tier === 'weak' && !this.failed.has(m.name) && m.name !== crew?.name);
+      return [...(crew && !this.failed.has(crew.name) ? [crew] : []), ...weak];
+    };
+    /** 一位同时只做一步；走接口的可以同时开几个。 */
+    const freeWorker = (): MemberInfo | null => {
+      const busy = new Set([...running.values()].map((j) => j.m.name));
+      const pool = workers();
+      return pool.find((x) => !busy.has(x.name)) ?? pool.find((x) => x.kind === 'api') ?? null;
+    };
+    /** 能领的步骤：从第一个没做的往下，标了「可以同时做」的；碰到没标的就停（它要等前面的做完）。 */
+    const open = (): Step[] => {
+      const task = readTask(root);
+      const out: Step[] = [];
+      for (let i = 0; i < task.items.length; i++) {
+        const it = task.items[i];
+        if (it.done) continue;
+        if (!isParallel(it)) break;
+        const st = stepOf(task, i);
+        if (![...running.values()].some((j) => j.step.text === st.text) && !taken.has(st.text) && !this.stepFails.has(st.text)) out.push(st);
+      }
+      return out;
+    };
+    // 起码两步、两位才值得同时做
+    const first = open();
+    const pool0 = workers();
+    if (first.length < 2 || !(pool0.length >= 2 || pool0.some((x) => x.kind === 'api'))) return 0;
+    this.settleNative();
+    const timeoutMs = this.settings.stintTimeoutMin * 60_000;
+    const showPhase = () => {
+      const steps = [...running.values()].map((j) => j.step.index).sort((a, b) => a - b);
+      if (steps.length) this.phase(`同时在做清单第 ${steps.join('、')} 步（${[...running.values()].map((j) => whoName(j.who)).join('、')}）`);
+    };
+    const start = (m: MemberInfo, step: Step, helping?: Job): void => {
+      taken.add(step.text);
+      const from = takeSnapshot(root, `同时做第 ${step.index} 步之前`).sha;
+      const dir = cloneProject(root, `第${step.index}步-${fileStamp()}`);
+      const who = whoOfMember(m);
+      const tool = m.harness ?? m.name;
+      const handoffTmp = `${HANDOFF_DIR}/同时做-第${step.index}步-${fileStamp()}-${tool}.md`;
+      const logRel = `.relay/runs/同时做-第${step.index}步-${fileStamp()}-${m.name}.log`;
+      const logAbs = path.join(root, logRel);
+      const startedAt = nowIso();
+      const job = { m, step, from, dir, handoffTmp, logRel, logAbs, who, startedAt, cancel: { requested: false } } as Job;
+      if (helping) {
+        job.twin = helping;
+        helping.twin = job;
+      }
+      const log = this.logger(logAbs);
+      const others = [...running.values()].map((x) => x.step.index).filter((k) => k !== step.index);
+      log(`# ${whoName(who)} 做清单第 ${step.index} 步（在项目副本里做，做完并回项目）${others.length ? `；同时在做第 ${others.join('、')} 步` : ''}`);
+      if (helping) log(`${whoName(helping.who)} 做这一步已经 ${Math.round((Date.now() - Date.parse(helping.startedAt)) / 1000)} 秒了，${whoName(who)} 闲着，也来做这一步：谁先做完用谁的，另一份停掉。`);
+      let prompt = stepPrompt({ id: nextStintId(loadLedger(root)) + running.size, label: who.label, handoff: handoffTmp, gateCommand: gate, step, together: open().map((x) => x.index).concat(others).filter((k) => k !== step.index).sort((a, b) => a - b) }) + langNote(this.settings.lang);
+      try {
+        prompt += skillNote(root, fs.readFileSync(path.join(root, TASK_REL), 'utf8'));
+      } catch {
+        /* 还没有任务文件 */
+      }
+      job.done = this.execute({ m, kind: 'work', prompt, cwd: dir, logAbs, title: `清单第 ${step.index} 步`, timeoutMs, unchanged: () => copyChanges(root, from, dir).length === 0, startedAt, log, cfg, cancel: job.cancel }).then((ex) => ({ job, ex, at: new Date() }));
+      running.set(helping ? `${step.text}#帮` : step.text, job);
+      if (!this.state.current) this.state.current = { stint: nextStintId(loadLedger(root)), member: m.name, label: who.label, kind: 'work', since: startedAt, log: logRel };
+      showPhase();
+    };
+    const fill = (): void => {
+      if (this.stopRequested) return;
+      for (const step of open()) {
+        if (running.size >= max) return;
+        const m = freeWorker();
+        if (!m) return;
+        start(m, step);
+      }
+      // 没有能领的步骤了、有人闲着：做得慢的那一步，请闲着的快的人也做一份（谁先做完用谁的）
+      if (open().length) return;
+      const busy = new Set([...running.values()].map((j) => j.m.name));
+      for (const j of [...running.values()].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))) {
+        if (running.size >= max) return;
+        if (j.twin) continue;
+        const elapsed = Date.now() - Date.parse(j.startedAt);
+        const m = workers().find((x) => !busy.has(x.name) && x.name !== j.m.name && took.has(x.name) && took.get(x.name)! * 2 < elapsed);
+        if (!m || elapsed < HELP_AFTER_MS) continue;
+        busy.add(m.name);
+        start(m, j.step, j);
+      }
+    };
+    try {
+      fill();
+    } catch (e) {
+      for (const j of running.values()) dropClone(j.dir);
+      this.logger(path.join(root, '.relay', 'runs', 'go.log'))(`建不了项目副本（${errorMessage(e)}），这次一步一步做。`);
+      if (running.size) await Promise.all([...running.values()].map((j) => j.done));
+      return -1;
+    }
+    let recorded = 0;
+    while (running.size) {
+      // 每隔一会儿看一眼：有没有该帮慢的人做的
+      let tick: NodeJS.Timeout | undefined;
+      const got = await Promise.race([...[...running.values()].map((x) => x.done), new Promise<null>((res) => (tick = setTimeout(() => res(null), HELP_CHECK_MS)))]);
+      clearTimeout(tick);
+      if (!got) {
+        try {
+          fill();
+        } catch {
+          /* 建不了副本就不帮了 */
+        }
+        showPhase();
+        continue;
+      }
+      const { job: j, ex, at } = got;
+      for (const [k, x] of running) if (x === j) running.delete(k);
+      const o = await this.mergeJob(j, ex, at, cfg, j.dropped);
+      recorded++;
+      const won = !j.dropped && !o.clash && o.stint.status === 'handed';
+      if (won) took.set(j.m.name, at.getTime() - Date.parse(j.startedAt));
+      // 同一步的另一份还在做：这份成了就停掉那份（它的账照记，写明没用上）
+      if (won && j.twin && [...running.values()].includes(j.twin)) {
+        j.twin.dropped = `同一步 ${whoName(j.who)} 先做完了（第 ${o.stint.id} 棒），这一份停掉、没有并回项目`;
+        j.twin.cancel.requested = true;
+        j.twin.cancel.stop?.();
+      }
+      if (j.dropped || (j.twin && [...running.values()].includes(j.twin))) {
+        /* 没用上的那份、或者另一份还在做：这一步不算谁做不下去 */
+      } else if (o.clash || o.stint.status === 'stopped' || o.stint.status === 'quota') {
+        /* 撞车、叫停、额度用完：这一步留着，外面照常处理 */
+      } else if (o.stint.status === 'failed' && !o.changed) {
+        this.stepFails.set(j.step.text, (this.stepFails.get(j.step.text) ?? 0) + 1);
+        this.stuckOn.set(j.m.name, j.step.text);
+        if (!TRANSIENT.test(o.error ?? '')) this.failed.add(j.m.name);
+      } else this.strikes.delete(j.m.name);
+      // 并进来一棒：趁别人还在做，请指挥的只看不改地复核它（上一回复核完了先记账，好接着复核新并进来的）
+      await this.recordSide(false);
+      this.startSide(loadLedger(root));
+      try {
+        fill();
+      } catch (e) {
+        this.noBatch = true;
+        this.logger(j.logAbs)(`建不了项目副本（${errorMessage(e)}），剩下的一步一步做。`);
+      }
+      showPhase();
+    }
+    delete this.state.current;
+    this.save();
+    return recorded;
+  }
+
+  /** 同时做的一步做完了：并回项目，记成一棒。 */
+  private async mergeJob(
+    j: { m: MemberInfo; step: Step; from: string; dir: string; handoffTmp: string; logRel: string; logAbs: string; who: Who; startedAt: string },
+    ex: RunMid,
+    at: Date,
+    cfg: RelayConfig,
+    dropped?: string
+  ): Promise<StintOutcome> {
+    const root = this.root;
+    const log = this.logger(j.logAbs);
+    const id = nextStintId(loadLedger(root));
+    const handoff = handoffFileFor(root, id, j.m.harness ?? j.m.name);
+    let note: string | undefined = dropped;
+    let files: { path: string; deleted: boolean }[] = [];
+    const now = takeSnapshot(root, `第 ${id} 棒并回项目前`).sha;
+    if (!note) try {
+      files = copyChanges(root, j.from, j.dir).filter((f) => !f.path.startsWith('.relay/'));
+      // 它开工之后，项目里已经并进来的别人的改动
+      const theirs = new Map(
+        loadLedger(root)
+          .stints.filter((s) => s.step && s.step.index !== j.step.index && s.endedAt && Date.parse(s.endedAt) >= Date.parse(j.startedAt))
+          .flatMap((s) => (s.facts?.paths ?? []).map((p) => [p, s.step!.index] as const))
+      );
+      const changed = new Set(snapChanges(root, j.from, now).map((f) => f.path));
+      const clash = files.find((f) => changed.has(f.path));
+      if (clash) note = `和同时做的${theirs.has(clash.path) ? `第 ${theirs.get(clash.path)} 步` : '别人'}都改了 ${clash.path}，这一份没有并回项目（这一步之后再做一次），副本留在 ${j.dir}`;
+    } catch (e) {
+      note = `读不到副本里的改动（${errorMessage(e)}），没有并回项目，副本留在 ${j.dir}`;
+    }
+    // 清单以并之前为准：先并的那几步打的勾不算到这一棒头上
+    const before = saveTaskCopy(root);
+    const stint: Stint = { id, kind: 'work', who: j.who, via: 'relay', startedAt: j.startedAt, activeAt: at.toISOString(), from: now, status: 'working', review: 'needed', handoff, log: j.logRel, step: j.step, ...(before ? { taskBefore: before } : {}) };
+    saveStint(root, { ...stint, pid: process.pid });
+    this.state.stints.push(id);
+    const handoffsBefore = new Set(listHandoffFiles(root).map((f) => f.rel));
+    if (!note) {
+      applyFiles(root, j.dir, files);
+      // 交接带回来（换成这一棒的文件名）；清单只把这一步的勾带回来
+      const h = path.join(j.dir, j.handoffTmp);
+      if (fs.existsSync(h)) {
+        fs.mkdirSync(path.dirname(path.join(root, handoff)), { recursive: true });
+        fs.copyFileSync(h, path.join(root, handoff));
+      }
+      // 按原话找这一步（边做边复核可能在清单里插了一步，第几步会变）
+      const mine = readTask(j.dir).items[j.step.index - 1];
+      const row = mine?.done ? readTask(root).items.findIndex((x) => !x.done && x.text === mine.text) : -1;
+      if (row >= 0) editTask(root, { op: 'toggle', index: row, done: true });
+      log(`并回项目，记成第 ${id} 棒：${files.length} 个文件${files.length ? `（${clip(files.map((f) => f.path).join('、'), 300)}）` : ''}`);
+    } else log(note);
+    const o = await this.closeRun({ cfg, from: now, id, handoff, handoffsBefore, logAbs: j.logAbs, stint, who: j.who, m: j.m, kind: 'work', targets: [], log, ...ex, ...(note && !dropped ? { error: ex.error ?? note } : {}), ...(dropped ? { stopped: true, note: dropped } : {}), usageDir: j.dir, endedAt: at });
+    if (!note || dropped) dropClone(j.dir);
+    return { ...o, ...(note ? { clash: true } : {}) };
+  }
+
   // ---- 只跑一棒 ----
 
   async once(): Promise<GoState> {
@@ -1250,6 +1574,16 @@ class GoRunner {
           if (c && (await this.waitFor(c, '能派活的都没额度'))) continue;
           const failed = [...this.failed].join('、');
           return this.end('needs-human', `全自动停止：没有能派活的成员，都没额度或没登录${failed ? `；这次出错的：${failed}` : ''}`);
+        }
+        // 派活：清单里标了「可以同时做」的几步，请几位同时做（各在一份项目副本里），谁先做完谁先并回来、接着领下一步
+        if (dispatch && !escalated && !again && this.settings.parallel > 1 && !this.noBatch) {
+          this.startSide(v);
+          const n = await this.runPool(v);
+          if (n < 0) this.noBatch = true;
+          if (n > 0) {
+            stints += n;
+            continue;
+          }
         }
         const before = taskProgress(task).done;
         // 派活：做完、还没复核的几棒，趁这一棒干活的时候请指挥的只看不改地复核（指挥的自己在做这一步时不同时复核）

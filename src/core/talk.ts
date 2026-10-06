@@ -189,26 +189,18 @@ export function archiveTalk(root: string): string | null {
 /** 删掉的群聊挪到这里（不真删，右键「删除群聊」之后点「撤销」能找回来）。 */
 const DELETED_DIR = '已删除的群聊';
 
-/** 这段群聊还有人在说、在投。 */
-function talkBusy(file: string): boolean {
-  const t = threads.get(path.resolve(file));
-  return !!t && (!!t.round || t.votes > 0);
-}
-
 /**
- * 删除一段群聊（id 为空是正在用的那段）：挪进 .relay/已删除的群聊/，左边不再列出。还有人在说、在投的不删。
+ * 删除一段群聊（id 为空是正在用的那段）：挪进 .relay/已删除的群聊/，左边不再列出。还有人在说、在投也删：没说完的回答跟着记录挪过去，撤销时一起回来。
  * 返回删掉的那段的 id（找回用）；正在用的那段是空的就什么都不做，返回 null。
  */
 export function deleteTalk(root: string, id: string | null): string | null {
-  const file = talkFile(root, id);
-  if (talkBusy(file)) throw new RelayError('这段群聊还有 AI 在说或在投票，等说完再删', 'talk-busy');
   const archived = id || archiveTalk(root);
   if (!archived) return null;
   const from = talkFile(root, archived);
   if (!fs.existsSync(from)) throw new RelayError('没有这个群聊。', 'no-talk');
   const dir = path.join(root, '.relay', DELETED_DIR);
   fs.mkdirSync(dir, { recursive: true });
-  fs.renameSync(from, path.join(dir, `${archived}.jsonl`));
+  moveTalk(from, path.join(dir, `${archived}.jsonl`));
   sessionCache.delete(from);
   return archived;
 }
@@ -218,7 +210,7 @@ export function restoreTalk(root: string, id: string): void {
   const to = talkFile(root, id); // 顺便核对 id 的写法
   const from = path.join(root, '.relay', DELETED_DIR, `${id}.jsonl`);
   if (!fs.existsSync(from) || fs.existsSync(to)) throw new RelayError('没有这个群聊。', 'no-talk');
-  fs.renameSync(from, to);
+  moveTalk(from, to);
 }
 
 /** 接着一个存档的群聊：正在用的先存档，再把它换回来。 */

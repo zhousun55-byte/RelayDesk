@@ -178,13 +178,14 @@ const o = (v: unknown): J => (v && typeof v === 'object' && !Array.isArray(v) ? 
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 const DEADLINE = '到了时限';
+const HALTED = '叫停了';
 
 /**
  * 边生成边收（SSE）：只要还在出字就不算卡住——idleMs 这么久一个字都没来才停，总时长只受 deadlineMs 管。
  * 以前是等整段回完才收，写一篇长文档一次就能等满 3 分钟、超时作废（2026-09-30 GLM-5.3 Flash 派活实测）。
  * 接口不支持流式、直接回了整段 JSON 的，照旧按整段读。每来一段调一次 onChunk（给日志报进度）。
  */
-async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: number, onEvent: (e: J) => void): Promise<J | null> {
+async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: number, onEvent: (e: J) => void, halt?: () => boolean): Promise<J | null> {
   const key = apiKeyOf(spec);
   if (!key && !isLocalUrl(spec.baseUrl)) throw new RelayError(`没有密钥（${keyWhere(spec)}）。`, 'no-key');
   const ctrl = new AbortController();
@@ -196,8 +197,10 @@ async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: nu
   let idle = setTimeout(() => stop(`${Math.round(idleMs / 1000)} 秒没有回音`), idleMs);
   // 到了这一棒的时限：不是连不上，另报一种错（换人重来也是白等一整棒，不原地再试）
   const hard = setTimeout(() => stop(DEADLINE), deadlineMs);
+  // 叫停了（全自动停止、同一步别人先做完了）：正在写的这一段也马上断开，不等它写完
+  const watch = halt ? setInterval(() => halt() && stop(HALTED), 300) : undefined;
   const failed = (e: unknown): RelayError =>
-    why === DEADLINE ? new RelayError('到了这一段的时限，还没写完。', 'llm-deadline') : new RelayError(`连不上 ${spec.baseUrl}（${why || (e instanceof Error ? (e.cause instanceof Error ? e.cause.message : e.message) : String(e))}）。`, 'llm-net');
+    why === HALTED ? new RelayError('叫停了。', 'llm-stopped') : why === DEADLINE ? new RelayError('到了这一段的时限，还没写完。', 'llm-deadline') : new RelayError(`连不上 ${spec.baseUrl}（${why || (e instanceof Error ? (e.cause instanceof Error ? e.cause.message : e.message) : String(e))}）。`, 'llm-net');
   const poke = () => {
     clearTimeout(idle);
     idle = setTimeout(() => stop(`${Math.round(idleMs / 1000)} 秒没有回音`), idleMs);
@@ -252,6 +255,7 @@ async function streamOnce(spec: ApiSpec, body: J, idleMs: number, deadlineMs: nu
   } finally {
     clearTimeout(idle);
     clearTimeout(hard);
+    clearInterval(watch);
   }
 }
 
@@ -302,6 +306,8 @@ export class ToolChat {
   private msgs: J[] = [];
   /** 这次对话一共用了多少 token（接口返回的 usage 加起来；输入含缓存，cached = 其中读缓存的）。 */
   readonly used = { input: 0, output: 0, cached: 0 };
+  /** 叫停了就断开正在写的这一段（不设就一直等它写完）。 */
+  shouldStop?: () => boolean;
 
   private count(data: J): void {
     const u = o(data.usage);
@@ -414,7 +420,7 @@ export class ToolChat {
       let whole: J | null = null;
       for (let tries = 0; ; tries++) {
         try {
-          whole = await run(() => streamOnce(this.spec, body(), idleMs, deadlineMs, onEvent));
+          whole = await run(() => streamOnce(this.spec, body(), idleMs, deadlineMs, onEvent, this.shouldStop));
           break;
         } catch (e) {
           if (tries >= 2 || !(e instanceof RelayError && e.code === 'llm-http')) throw e;
@@ -499,7 +505,7 @@ export class ToolChat {
     let whole: J | null;
     for (let tries = 0; ; tries++) {
       try {
-        whole = await run(() => streamOnce(this.spec, body(this.sendReasoning), idleMs, deadlineMs, onEvent));
+        whole = await run(() => streamOnce(this.spec, body(this.sendReasoning), idleMs, deadlineMs, onEvent, this.shouldStop));
         break;
       } catch (e) {
         if (tries >= 2 || !(e instanceof RelayError && e.code === 'llm-http')) throw e;

@@ -39,7 +39,7 @@ import type { RelayConfig } from '../core/types';
 
 /**
  * 记账：把项目文件夹里发生的事对上账本。
- * - 文件有变化 → 存快照；没有进行中的棒就开一棒（先记成「不知道是谁」）；
+ * - 文件有变化 → 存快照；没有进行中的棒就开一棒（先记成「不知道是谁」）；还没有任务、也没人建交接时不开，只从这里重新算；
  * - 交接文件出现 → 认出是谁；交接写了「已交接 / 全部完成 / 卡住了」→ 这一棒结束；
  * - 一段时间没动静又没交接 → 当它被打断了，替它记一笔（要复核）；
  * - 复核文件写好了 → 被复核的那一棒标成「复核过了」；
@@ -773,6 +773,10 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
         res.closed.push(s.id);
       });
       unlinked.length = 0;
+      res.changed = true;
+    } else if (!unlinked.length && base !== snap && readTask(root).empty) {
+      // 还没有任务、也没有 AI 建交接：是你在工具里做别的事，不算哪一棒、不要复核，从这里重新算。
+      appendLedger(root, { type: 'base', ts: nowIso(now), snap, why: '没有任务时文件夹里的改动' });
       res.changed = true;
     } else if (base !== snap || unlinked.length) {
       const f = unlinked.shift();
