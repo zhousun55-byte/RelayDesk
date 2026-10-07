@@ -7,10 +7,10 @@ import { claudeWorkIn, claudeWriterOf } from '../core/claude-log';
 import { defaultRelayConfig, GATE_UNCONFIRMED, gateConfirmed, loadRelayConfig } from '../core/config';
 import { errorMessage, RelayError } from '../core/errors';
 import { runGate } from '../core/gate';
-import { appendLedger, countedReviews, loadLedger, nextStintId, reviewStateOf, saveStint, taskBaseline, type Facts, type LedgerView, type ReviewMark, type RollbackEvent, type Stint, type Who } from '../core/ledger';
+import { appendLedger, countedReviews, loadLedger, nextStintId, reviewStateOf, saveStint, taskBaseline, taskMode, type Facts, type LedgerView, type ReviewMark, type RollbackEvent, type Stint, type Who } from '../core/ledger';
 import { pidAlive } from '../core/proc';
 import { runsDir } from './lock';
-import { allMembers, type MemberInfo } from '../core/members';
+import { allMembers, withLead, type MemberInfo } from '../core/members';
 import {
   BRIEF_REL,
   HANDOFF_DIR,
@@ -128,6 +128,17 @@ function windowStart(v: LedgerView, s: Stint, until: string): string {
     .sort()
     .at(-1);
   return prev ?? v.init?.ts ?? s.startedAt;
+}
+
+/** 记账、认复核人用的成员名单：派活的任务里你指定的指挥按强算（和全自动挑人时一样，见 members.ts 的 withLead）。 */
+function projectMembers(v: LedgerView): MemberInfo[] {
+  let lead: string | undefined;
+  try {
+    lead = taskMode(v) === 'dispatch' ? loadAutoSettings().lead : undefined;
+  } catch {
+    lead = undefined; // 运行设置写坏了：按成员名单本来的强弱
+  }
+  return withLead(allMembers(), lead);
 }
 
 /**
@@ -260,7 +271,7 @@ export function closeStint(root: string, s: Stint, input: CloseInput, cfg?: Rela
   delete out.pid;
   let forceReview = false;
   if (out.via === 'native' && out.kind === 'work') {
-    const cc = crossCheckClaude(root, out, input.members ?? allMembers(), out.endedAt!);
+    const cc = crossCheckClaude(root, out, input.members ?? projectMembers(loadLedger(root)), out.endedAt!);
     if (cc?.who) out.who = cc.who;
     if (cc?.note) out.note = joinNote(out.note, cc.note);
     forceReview = !!cc?.review;
@@ -430,7 +441,7 @@ function writerOf(v: LedgerView, by: Stint | null, mtimeMs: number, now: number)
  * 算不算「复核过了」看结论：强模型写的没问题 / 已修好 / 已退回才算；有问题、证据不足、没写清楚都还是待复核。
  * 认不出是谁写的、弱模型写的都不算数；弱模型、认不出的人后来改了强模型写的复核，原来强模型的结论还在。
  */
-export function applyReviews(root: string, by: Stint | null, members: MemberInfo[] = allMembers(), now = new Date()): number[] {
+export function applyReviews(root: string, by: Stint | null, members: MemberInfo[] = projectMembers(loadLedger(root)), now = new Date()): number[] {
   const v = loadLedger(root);
   const dropped = new Set(v.stints.filter((x) => x.rolledBack).map((x) => x.id));
   const files = listReviewFiles(root);
@@ -644,7 +655,7 @@ export function track(root: string, opts: TrackOptions = {}): TrackResult {
   const now = opts.now ?? new Date();
   const snap = opts.snapshot === false ? headSnap(root) : takeSnapshot(root, '接力台看到了改动').sha;
   if (!snap) return res;
-  const members = allMembers();
+  const members = projectMembers(v);
 
   // 以前读不到改动的棒（快照仓库一时出错）：再读一次，读到了就补上。
   for (const s of v.stints.filter((x) => x.factsError && x.to && x.status !== 'working')) {

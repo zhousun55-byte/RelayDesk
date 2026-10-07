@@ -642,18 +642,8 @@ export function createServer(opts: ServerOptions): http.Server {
       return { agent, members: memberViews() };
     },
     '/api/settings': (_q, b) => {
-      const before = autoSettingsSafe().settings.lead;
+      // 选了谁指挥派活：派活时它按强算（见 go.ts 的 members()），这里不改它在成员名单里的强弱，换回别人也不留痕
       const settings = saveAutoSettings(b.settings);
-      // 选了谁指挥派活：它要做复核、终审，算强（弱模型的复核不算数，不然还得请别的强模型来）
-      if (settings.lead && settings.lead !== before) {
-        const reg = loadRegistry();
-        const a = reg.agents.find((x) => x.name === settings.lead);
-        if (a && memberViews().find((m) => m.name === a.name)?.tier !== 'strong') {
-          a.tier = 'strong';
-          a.tierSet = true;
-          saveRegistry(reg);
-        }
-      }
       return { settings, members: memberViews() };
     },
     '/api/members/tier': (_q, b) => {

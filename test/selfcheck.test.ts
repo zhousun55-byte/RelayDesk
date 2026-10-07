@@ -183,6 +183,16 @@ test('检查命令往哪写：只认写的位置（> 文件、tee、-o、--junit
   for (const [c, f] of no) assert.equal(track.gateWrites(c, f), false, `${c} 没写 ${f}`);
 });
 
+test('派活叫停的那一棒：摘要写是第几步（同时做几步时一次停下好几棒，靠它对上清单），不写「交接里没写做了什么」', () => {
+  registry([CODEX, DSH]);
+  const { root, write } = project('stopped-step');
+  write('a.txt', 'x\n');
+  track.track(root);
+  const s1 = ledger.loadLedger(root).stints[0];
+  ledger.saveStint(root, { ...s1, status: 'stopped', handoff: undefined, ghost: undefined, summary: undefined, step: { index: 2, text: '建 a.txt' } });
+  assert.equal(view.projectView(root).stints.find((x) => x.id === s1.id)?.summary, '第 2 步：建 a.txt');
+});
+
 test('一句话摘要跟着交接文件：挑法改进之后，旧记录在网页和接力本里也换成新的；接力台代写的不动', () => {
   registry([CODEX, DSH]);
   const { root, write } = project('live-summary');

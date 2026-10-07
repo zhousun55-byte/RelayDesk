@@ -41,6 +41,13 @@ test('命令行的运行设置和项目设置：和网页是同一份；写错�
   assert.deepEqual([auto.maxStints, auto.waitForQuota, auto.order], [5, false, ['claude', 'codex']]);
   out = s.relay(['settings', '--wait']);
   assert.match(out, /额度用完时等恢复：等/);
+  // 网页「设置 → 运行」的四个开关：命令行也能看、能改，没写的不动
+  assert.match(out, /边做边复核：开；卡住的那一步交给指挥：开/);
+  out = s.relay(['settings', '--no-side-review', '--same-thread', '--no-show-sessions']);
+  assert.match(out, /边做边复核：关；卡住的那一步交给指挥：开/);
+  assert.match(out, /接着同一段对话：开；列出工具里的对话：关/);
+  const a2 = JSON.parse(fs.readFileSync(path.join(s.home, '.relay', 'auto.json'), 'utf8'));
+  assert.deepEqual([a2.sideReview, a2.escalate, a2.sameThread, a2.showSessions, a2.maxStints], [false, true, true, false, 5]);
   assert.match(s.relay(['settings', '--max', '0'], true), /最多几棒 要是 1–100 之间的整数/);
 
   s.relay(['config', '--gate', 'true', '--protect', 'a.txt,conf/*.json']);
@@ -60,6 +67,9 @@ test('命令行标记「不用复核」和撤销', () => {
   s.relay(['review', '--skip', '1', '--note', '其实是我自己改的']);
   assert.equal(s.stints()[0].review, 'skip');
   assert.match(s.stints()[0].note, /其实是我自己改的/);
+  const line = s.relay(['status']).split('\n').find((l) => /第 1 棒/.test(l)) ?? '';
+  assert.match(line, /标记为不用复核/, 'status 照实说是标的');
+  assert.doesNotMatch(line, /强模型交接/, '弱模型做的不说成强模型交接');
   s.relay(['review', '--need', '1']);
   assert.equal(s.stints()[0].review, 'needed');
 });

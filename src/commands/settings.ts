@@ -21,9 +21,17 @@ export function settingsCommand(): Command {
     .option('--no-final', '不终审')
     .option('--lead <名字>', '派活谁来指挥（拆步骤、终审）：成员名；写 - 是不指定（强模型按顺序）')
     .option('--parallel <步数>', '派活时标了「可以同时做」的几步最多几步同时做（1 = 一步一步做）')
+    .option('--side-review', '边做边复核：派活时指挥的同时只看不改地复核做完的几步')
+    .option('--no-side-review', '不边做边复核')
+    .option('--escalate', '卡住的那一步交给指挥')
+    .option('--no-escalate', '卡住了就停在这一步')
+    .option('--same-thread', '接着同一段对话：同一位成员下一棒顺着它上一棒在工具里的那段话说')
+    .option('--no-same-thread', '每棒另起一段对话（token 用得少）')
+    .option('--show-sessions', '接力页左边列出这个文件夹里在各家工具里开过的对话')
+    .option('--no-show-sessions', '不列')
     .option('--lang <语言>', 'zh | en：en 时请 AI 用英文写交接、复核和回答（网页上换语言会自动改）')
     .option('--reset', '恢复默认设置（原来的文件读不出来时，先留一份 auto.json.broken）')
-    .action((o: { level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean; lang?: string; lead?: string; parallel?: string; reset?: boolean }) => {
+    .action((o: { level?: string; order?: string; max?: string; stintMin?: string; reviewMin?: string; wait?: boolean; final?: boolean; lang?: string; lead?: string; parallel?: string; sideReview?: boolean; escalate?: boolean; sameThread?: boolean; showSessions?: boolean; reset?: boolean }) => {
       const patch: Partial<Record<keyof AutoSettings, unknown>> = {};
       if (o.level !== undefined) patch.level = o.level;
       if (o.order !== undefined) patch.order = o.order;
@@ -35,6 +43,8 @@ export function settingsCommand(): Command {
       if (o.lang !== undefined) patch.lang = o.lang;
       if (o.lead !== undefined) patch.lead = o.lead === '-' ? '' : o.lead;
       if (o.parallel !== undefined) patch.parallel = o.parallel;
+      // 网页「设置 → 运行」里的四个开关：命令行也能看、能改（以前只有网页能改）
+      for (const k of ['sideReview', 'escalate', 'sameThread', 'showSessions'] as const) if (o[k] !== undefined) patch[k] = o[k];
       const changed = !!o.reset || Object.keys(patch).length > 0;
       const s = changed ? saveAutoSettings({ ...(o.reset ? defaultAutoSettings() : loadAutoSettings()), ...patch }) : loadAutoSettings();
       if (changed) ok('已保存');
@@ -43,6 +53,8 @@ export function settingsCommand(): Command {
       info(`每一棒最长：${s.stintTimeoutMin} 分钟；复核、终审最长：${s.reviewTimeoutMin} 分钟；全自动最多接力：${s.maxStints} 棒`);
       info(`额度用完时等恢复：${s.waitForQuota ? '等' : '不等'}；做完后终审：${s.finalReview ? '终审' : '不终审'}`);
       info(`派活谁来指挥：${s.lead || '强模型按顺序'}；同时做几步：${s.parallel}`);
+      info(`边做边复核：${s.sideReview ? '开' : '关'}；卡住的那一步交给指挥：${s.escalate ? '开' : '关'}`);
+      info(`接着同一段对话：${s.sameThread ? '开' : '关'}；列出工具里的对话：${s.showSessions ? '开' : '关'}`);
       info(`AI 写字用的语言：${s.lang === 'en' ? '英文' : '中文'}`);
     });
 }

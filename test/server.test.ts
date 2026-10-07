@@ -154,9 +154,10 @@ test('同一个工具加几个模型：列出工具能换的模型、勾选加�
       .filter((l) => l.includes('"ANTHROPIC_BASE_URL":"https://api.anthropic.com"') && l.includes(' -p'))
       .map((l) => l.match(/--model (\S+)/)?.[1]);
     assert.deepEqual(runs, ['opus', 'sonnet']);
-    // 派活选了谁指挥：它要复核、终审，原来算弱的改成强
+    // 派活选了谁指挥：派活时按强算（go.ts），成员名单里它的强弱不改（以前改成强，换回别人也不还原）
     const lead = await ui.call('/api/settings', { settings: { lead: 'claude' } });
-    assert.equal(lead.json.members.find((m: { name: string }) => m.name === 'claude').tier, 'strong');
+    assert.equal(lead.json.settings.lead, 'claude');
+    assert.equal(lead.json.members.find((m: { name: string }) => m.name === 'claude').tierSet, false);
     const st = await ui.call(`/api/state${q(s)}`);
     assert.equal(st.json.project.stints.length, 2);
     assert.equal(st.json.project.task.done, 2, '第二棒接着第一棒往下做');

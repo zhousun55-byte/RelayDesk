@@ -108,3 +108,11 @@ export function orderMembers(list: MemberInfo[], order: string[]): MemberInfo[] 
   const rest = byStrength(list.filter((m) => !order.includes(m.name)));
   return [...named, ...rest];
 }
+
+/**
+ * 派活时你指定的指挥：拆解、复核、终审都是它，这一次按强算（它的复核、终审算数）。
+ * 只在这份名单里改，不写进成员名单：换了指挥，它就回到原来的强弱（以前是直接改成员名单，换回去也不还原）。
+ */
+export function withLead(list: MemberInfo[], lead: string | undefined): MemberInfo[] {
+  return lead ? list.map((m) => (m.name === lead && m.tier !== 'strong' ? { ...m, tier: 'strong', tierSet: true } : m)) : list;
+}

@@ -12,7 +12,7 @@ import { cliTooOld, explainFailure, findHarness, locateCached, modelArg, noteMod
 import { countedReviews, KIND_WORD, loadLedger, nextStintId, pendingReviews, requireInit, saveStint, statusWord, stintTitle, taskChanges, taskMode, tierWord, verdictWord, type LedgerView, type Stint, type Who } from '../core/ledger';
 import { runLlmAgent } from '../core/llm-agent';
 import { killTree, pidAlive } from '../core/proc';
-import { allMembers, orderMembers, readyMembers, spareFirst, type MemberInfo } from '../core/members';
+import { allMembers, orderMembers, readyMembers, spareFirst, withLead, type MemberInfo } from '../core/members';
 import { llmName, whoName } from '../core/names';
 import { BRIEF_REL, editTask, fileStamp, HANDOFF_DIR, handoffFileFor, listHandoffFiles, parseReview, readHandoff, readReview, readTask, REVIEW_DIR, reviewFileFor, saveTaskCopy, TASK_REL, taskComplete, taskProgress, type HandoffDoc, type TaskDoc } from '../core/notes';
 import { finalPrompt, planPrompt, reviewPrompt, sideReviewPrompt, splitSideReview, stepPrompt, workPrompt } from '../core/prompts';
@@ -830,7 +830,7 @@ class GoRunner {
   }
 
   private members(): MemberInfo[] {
-    return spareFirst(orderMembers(allMembers(this.settings.level), this.settings.order), recentErrors());
+    return withLead(spareFirst(orderMembers(allMembers(this.settings.level), this.settings.order), recentErrors()), this.dispatch ? this.settings.lead : undefined);
   }
 
   /**
@@ -1421,10 +1421,17 @@ class GoRunner {
   private finishOnce(o: StintOutcome): GoState {
     const s = o.stint;
     const head = `第 ${s.id} 棒（${whoName(s.who)}）`;
-    if (s.status === 'stopped') return this.finish('stopped', `${head}已停止：改到一半的内容还在文件夹里`);
+    if (s.status === 'stopped') return this.finish('stopped', `${head}已停止${s.facts?.files ? '：改到一半的内容还在文件夹里' : ''}`);
     if (s.status === 'quota') return this.finish('needs-human', `${head}${cause.quota(s.quotaUntil)}`);
     if (s.status === 'failed') return this.finish('failed', `${head}出错${s.note ? `：${plain(s.note)}` : ''}`);
     return this.finish('done', `${head}${statusWord(s.status)}：${s.summary || (o.changed ? '改了文件' : '没改文件')}${s.review === 'needed' ? '；待复核' : ''}`);
+  }
+
+  /** 叫停后的那句话：这次停下的棒真改了文件才说「改到一半的内容还在」（同时做几步时副本没并回来、或者还没动手，就没有）。 */
+  private stoppedText(): string {
+    const v = loadLedger(this.root);
+    const half = v.stints.some((x) => this.state.stints.includes(x.id) && x.status === 'stopped' && (x.facts?.files ?? 0) > 0);
+    return `全自动已停止${half ? '：改到一半的内容还在文件夹里' : ''}`;
   }
 
   // ---- 全自动 ----
@@ -1436,7 +1443,7 @@ class GoRunner {
       requireInit(this.root);
       // 防止没完没了的保险：派活一棒一步，步数多时棒数也多
       for (let guard = 0; guard < Math.max(this.settings.maxStints, 50) * 3 + 10; guard++) {
-        if (this.stopRequested) return this.end('stopped', '全自动已停止：改到一半的内容还在文件夹里');
+        if (this.stopRequested) return this.end('stopped', this.stoppedText());
         // 对账：别人改到一半、已经停了的那一棒先结账，这一轮的待复核里就有它
         this.settleNative();
         // 边做边复核跑完了：趁两棒之间的空档记账（清单里可能多了一步去改）

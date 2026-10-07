@@ -724,6 +724,46 @@ test('派活指定谁指挥、活派给谁：同一个工具的大模型拆和�
   assert.deepEqual([...g.stints].sort((a, b) => a - b), st.map((x) => x.id), '边做边复核的棒也算进这次跑过的棒');
 });
 
+test('命令行 workers edit --tier：写明的强弱以你为准，列表和派活都照办；换了模型又没写强弱，改回按模型猜', () => {
+  const s = prepared('workers-tier');
+  const line = () => s.relay(['workers', 'list']).split('\n').find((l) => /^claude\s/.test(l)) ?? '';
+  s.relay(['workers', 'edit', 'claude', '--model', 'sonnet']);
+  assert.match(line(), /（终端，强，sonnet/, '认得的模型名：按名字猜成强');
+  s.relay(['workers', 'edit', 'claude', '--tier', 'weak']);
+  assert.match(line(), /（终端，弱，sonnet/, '写明了弱：以你为准');
+  setOrder(s, ['claude', 'codex'], { sideReview: false });
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  s.relay(['auto']);
+  assert.deepEqual([s.stints()[0].kind, s.stints()[0].who.member], ['plan', 'codex'], '排在前面、写明是弱的不拆解');
+  s.relay(['workers', 'edit', 'claude', '--model', 'opus']);
+  assert.match(line(), /（终端，强，opus/, '换了模型没写强弱：改回按模型猜');
+});
+
+test('派活指定一个弱模型指挥：这一次按强算（它的终审算数），成员名单里它还是弱；换回「强模型按顺序」就由强模型指挥', () => {
+  const s = prepared('dispatch-weak-lead');
+  const file = path.join(s.home, '.relay', 'agents.json');
+  const reg = JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: Record<string, unknown>[] };
+  const codex = reg.agents.find((a) => a.name === 'codex')!;
+  reg.agents.push({ ...codex, name: 'codex-mini', model: 'gpt-6-mini', tier: 'weak', tierSet: true });
+  fs.writeFileSync(file, JSON.stringify(reg));
+  setOrder(s, ['codex', 'codex-mini', 'claude'], { lead: 'claude', sideReview: false });
+  s.relay(['init']);
+  s.relay(['task', '--dispatch', '做一件大事']);
+  assert.match(s.relay(['auto']), /✓ 验收通过：清单 4\/4 全部打勾/, '弱模型指挥的终审算数');
+  const st = s.stints();
+  assert.deepEqual([st[0].kind, st[0].who.member, st.at(-1)!.kind, st.at(-1)!.who.member], ['plan', 'claude', 'final', 'claude']);
+  const after = JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: { name: string; tier?: string; tierSet?: boolean }[] };
+  assert.ok(!after.agents.find((a) => a.name === 'claude')!.tierSet, '成员名单里它的强弱没被改');
+  assert.match(s.relay(['workers', 'list']), /Claude Code[^\n]*弱/);
+  // 换回「强模型按顺序」：下一个派活由强模型（Codex）拆和终审
+  setOrder(s, ['codex', 'codex-mini', 'claude'], { sideReview: false });
+  s.relay(['task', '--dispatch', '再做一件']);
+  s.relay(['auto']);
+  const next = s.stints().filter((x) => x.id > st.at(-1)!.id);
+  assert.deepEqual([next[0].kind, next[0].who.member, next.at(-1)!.kind, next.at(-1)!.who.member], ['plan', 'codex', 'final', 'codex']);
+});
+
 test('派活：拆解时标了「可以同时做」的几步，几位弱模型各在一份项目副本里同时做，谁先做完谁先并回来、记成一棒，空出来的接着领下一步；并完副本删掉', () => {
   const s = prepared('dispatch-parallel', { FAKE_PLAN_PARALLEL: '1' });
   const file = path.join(s.home, '.relay', 'agents.json');

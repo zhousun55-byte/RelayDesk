@@ -104,7 +104,8 @@ export interface ProjectView {
 const summaryCache = new Map<string, { mtimeMs: number; summary: string }>();
 function liveSummary(root: string, s: Stint): string {
   // 派活的一棒做的是哪一步，接力台自己记着：比从交接里挑一句准（弱模型交接开头常是「只做第 3 步、没碰后面的」这种话）
-  if (s.step && (s.status === 'handed' || s.status === 'working')) return `第 ${s.step.index} 步：${s.step.text}`;
+  // 叫停的也写是哪一步：同时做几步时一次停下好几棒，靠这个和清单对上（以前写「交接里没写做了什么」，像是 AI 没写交接）
+  if (s.step && (s.status === 'handed' || s.status === 'working' || s.status === 'stopped')) return `第 ${s.step.index} 步：${s.step.text}`;
   const kept = s.summary ?? '';
   if (!s.handoff || s.ghost) return kept;
   const file = path.join(root, s.handoff);
@@ -141,7 +142,10 @@ function toView(s: Stint, rolledBack: ReadonlySet<number>, summary = s.summary ?
             ? s.factsError
               ? '读不到改动'
               : s.facts?.files
-                ? '强模型交接，不用复核'
+                ? // 弱模型做的、人标了不用复核：照实说（以前一律写「强模型交接」，和同一行的「弱」自相矛盾）
+                  s.who.tier === 'strong'
+                  ? '强模型交接，不用复核'
+                  : '标记为不用复核'
                 : '没改文件'
             : '';
   return {

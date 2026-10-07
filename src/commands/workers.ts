@@ -2,8 +2,10 @@ import { Command } from 'commander';
 import { RelayError } from '../core/errors';
 import { checkCommand } from '../core/launch';
 import { apiUsable, keyWhere } from '../core/llm';
+import { loadDetected, memberModel } from '../core/detect';
 import { findPreset, PRESETS } from '../core/presets';
 import { addAgent, agentKind, agentLabel, canTalk, findAgent, loadRegistry, registryPath, removeAgent, restoreAgent, trashedAgents, upsertAgent } from '../core/registry';
+import { memberTier } from '../core/tier';
 import type { AgentConfig } from '../core/types';
 import { info, ok, warn } from './print';
 
@@ -45,8 +47,16 @@ function merged(base: Partial<AgentConfig>, name: string, f: AgentFlags): Record
   if (f.label !== undefined) out.label = f.label;
   if (f.kind !== undefined) out.kind = f.kind;
   if (f.cmd !== undefined) out.cmd = f.cmd;
-  if (f.tier !== undefined) out.tier = f.tier;
-  if (f.model !== undefined) out.model = f.model;
+  // 你写明了强弱：以你为准（tierSet），不再按模型名去猜（以前只写 tier，认得的模型名照样按名字算，改了不生效）
+  if (f.tier !== undefined) {
+    out.tier = f.tier;
+    out.tierSet = true;
+  }
+  if (f.model !== undefined) {
+    out.model = f.model;
+    // 换了模型、没写强弱：强弱改回按新模型猜（和网页换模型一样）
+    if (f.tier === undefined) delete out.tierSet;
+  }
   if (f.ask !== undefined) out.ask = f.ask;
   if (f.note !== undefined) out.note = f.note;
   if (f.harness !== undefined) out.harness = f.harness;
@@ -67,7 +77,8 @@ function kindWord(a: AgentConfig): string {
 }
 
 function describe(a: AgentConfig): string {
-  const bits = [`${kindWord(a)}`, a.tier === 'weak' ? '弱' : '强'];
+  // 和网页、派活用的是同一个算法：写明了的以写明的为准，没写明的按模型名猜
+  const bits = [`${kindWord(a)}`, memberTier(a, memberModel(a, loadDetected())) === 'weak' ? '弱' : '强'];
   if (a.model) bits.push(a.model);
   if (a.effort) bits.push(`思考 ${a.effort}`);
   if (a.harness) bits.push(`全自动：${a.harness}`);

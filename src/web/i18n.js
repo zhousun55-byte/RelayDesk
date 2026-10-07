@@ -643,6 +643,7 @@ const SRV_WORD = {
   '已退回（作废）': 'Rolled back (void)',
   读不到改动: "Can't read changes",
   '强模型交接，不用复核': 'Strong model, no review needed',
+  标记为不用复核: 'Marked as not needing review',
   没改文件: 'No files changed',
   '只有弱模型复核过，不算数': "Only a weak model reviewed it, so it doesn't count",
   '认不出复核是谁写的，不算数': "The reviewer can't be identified, so it doesn't count",
