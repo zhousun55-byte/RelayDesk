@@ -9,6 +9,9 @@ import { ToolChat } from '../src/core/llm';
 import { runLlmAgent } from '../src/core/llm-agent';
 import type { ApiSpec } from '../src/core/types';
 
+// 系统确认框：测试里当点了允许，不弹框
+process.env.RELAY_CONFIRM = 'yes';
+
 /**
  * 接力台自带的小助手边生成边收（SSE）：Claude 协议、OpenAI 协议都拼得回文字和工具调用；
  * 一直在出字就不算卡住，停着不动才停；接口不支持流式、直接回整段 JSON 的照旧能读。

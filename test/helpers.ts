@@ -36,6 +36,8 @@ export function testEnv(home: string): NodeJS.ProcessEnv {
     RELAY_LOGIN_PATH: 'off',
     RELAY_SCAN_APPS: 'off',
     RELAY_AUTODETECT: 'off',
+    // 改成员命令、检查命令、权限时的系统确认框：测试里一律当点了允许（测拒绝的那项自己改成 no）
+    RELAY_CONFIRM: 'yes',
     // 派活前问额度（codex app-server）：只在测这件事的测试里开
     RELAY_LIVE_LIMITS: 'off',
     GIT_CONFIG_NOSYSTEM: '1',

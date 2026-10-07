@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { talkContext } from '../commands/talk';
 import { autoSettingsSafe, saveAutoSettings } from '../core/auto-settings';
-import { ensureGateOk, saveRelayConfig } from '../core/config';
+import { ensureGateOk, gateConfirmed, normalizeConfig, saveRelayConfig } from '../core/config';
+import { mustAllow } from '../core/confirm';
+import type { AgentConfig } from '../core/types';
 import { addModelMembers, canCheckApps, desktopApps, enableProvider, findAppBundle, loadDetected, memberModel, modelOptions, newerHints, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
 import { UPLOAD_MAX, UPLOAD_REL, projectFiles, projectPath, readProjectFile, saveUpload } from '../core/files';
@@ -20,7 +22,7 @@ import { appNameOf, llmName, toolName } from '../core/names';
 import { BRIEF_REL, TASK_REL, editTask, type TaskEdit } from '../core/notes';
 import { isInside } from '../core/paths';
 import { clearBlocked, noteLiveLimits, untilText } from '../core/quota';
-import { agentKind, agentLabel, findAgent, isOpenCommand, loadRegistry, removeAgent, restoreAgent, saveRegistry, trashedAgents, upsertAgent } from '../core/registry';
+import { agentKind, agentLabel, findAgent, isOpenCommand, loadRegistry, normalizeAgent, removeAgent, restoreAgent, saveRegistry, trashedAgents, upsertAgent } from '../core/registry';
 import { snapChanges, snapDiff, takeSnapshot } from '../core/snap';
 import { adoptSummary, archiveTalk, deleteTalk, readTalk, restoreTalk, resumeTalk, say, summarize, talkFile, talkPath, talkSessions, talkStatus } from '../core/talk';
 import { adoptOption, appendRule, castHumanVote, readVotes, startVote } from '../core/vote';
@@ -335,6 +337,20 @@ export interface ServerOptions {
   onQuit?: () => void;
 }
 
+/** 成员改了能让命令在沙箱外跑、或者把密钥发到别处的地方：返回给人看的一段（没改这些返回空）。 */
+function riskyAgentChange(next: AgentConfig, old: AgentConfig | undefined): string {
+  const lines: string[] = [];
+  const diff = (label: string, a: string | undefined, b: string | undefined) => {
+    if ((a ?? '') !== (b ?? '') && b) lines.push(`${label}：${b}`);
+  };
+  if (agentKind(next) === 'cli') diff('启动命令', old?.cmd, next.cmd);
+  diff('讨论命令', old?.ask, next.ask);
+  diff('接口地址', old?.api?.baseUrl, next.api?.baseUrl);
+  diff('密钥环境变量', old?.api?.apiKeyEnv, next.api?.apiKeyEnv);
+  diff('密钥来源', old?.api?.keyFrom, next.api?.keyFrom);
+  return lines.join('\n');
+}
+
 export function createServer(opts: ServerOptions): http.Server {
   if (opts.autoDetect) {
     // 名单里重复的先并成一位（旧名单里桌面程序和命令行各占一位）；识别完还会再看一次。
@@ -642,7 +658,12 @@ export function createServer(opts: ServerOptions): http.Server {
       const agent = enableProvider(report, str(b.id) ?? '');
       return { agent, members: memberViews() };
     },
-    '/api/settings': (_q, b) => {
+    '/api/settings': async (_q, b) => {
+      const want = b.settings && typeof b.settings === 'object' ? (b.settings as Record<string, unknown>) : {};
+      if (want.level === 'full' && autoSettingsSafe().settings.level !== 'full') {
+        const en = autoSettingsSafe().settings.lang === 'en';
+        await mustAllow(en ? 'Change permissions to "Unrestricted"? AI tools will no longer be stopped from anything.' : '把权限改成「不限制」？AI 工具做什么都不再拦。', en);
+      }
       // 选了谁指挥派活：派活时它按强算（见 go.ts 的 members()），这里不改它在成员名单里的强弱，换回别人也不留痕
       const settings = saveAutoSettings(b.settings);
       return { settings, members: memberViews() };
@@ -692,10 +713,15 @@ export function createServer(opts: ServerOptions): http.Server {
       return { members: memberViews() };
     },
     // 桌面程序：核实这台电脑上真有这个程序（程序包在、读得出标识）才收
-    '/api/workers/save': (_q, b) => {
+    '/api/workers/save': async (_q, b) => {
       const a = b.agent && typeof b.agent === 'object' ? (b.agent as Record<string, unknown>) : {};
       const app = a.kind === 'app' && typeof a.cmd === 'string' ? appNameOf(a.cmd) : undefined;
       if (app && canCheckApps() && !findAppBundle(app)) throw new RelayError(`这台电脑上找不到「${app}」`, 'no-app');
+      const risky = riskyAgentChange(normalizeAgent(b.agent), loadRegistry().agents.find((x) => x.name === (str(b.originalName) ?? a.name)));
+      if (risky) {
+        const en = autoSettingsSafe().settings.lang === 'en';
+        await mustAllow(en ? `Change member "${String(a.name)}"?\n\n${risky}` : `改成员「${String(a.name)}」？\n\n${risky}`, en);
+      }
       return { agent: upsertAgent(b.agent, str(b.originalName)) };
     },
     '/api/workers/delete': (_q, b) => {
@@ -707,9 +733,14 @@ export function createServer(opts: ServerOptions): http.Server {
       const a = restoreAgent(str(b.name) ?? '');
       return { name: a.name, members: memberViews(), trash: trashView() };
     },
-    '/api/config/save': (q, b) => {
+    '/api/config/save': async (q, b) => {
       const root = dirOf(q, b);
       requireProject(root);
+      const gate = normalizeConfig(b.config).gate.command?.trim() ?? '';
+      if (gate && !gateConfirmed(root, gate)) {
+        const en = autoSettingsSafe().settings.lang === 'en';
+        await mustAllow(en ? `Run this check command in ${root}?\nIt runs outside any sandbox.\n\n${gate}` : `在 ${root} 里跑这条检查命令？\n它不在沙箱里跑。\n\n${gate}`, en);
+      }
       const cfg = saveRelayConfig(root, b.config as never);
       refreshBrief(root);
       return { config: cfg };

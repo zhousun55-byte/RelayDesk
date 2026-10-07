@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { mockLlm } from './fakes';
 
+// 系统确认框：测试里当点了允许，不弹框
+process.env.RELAY_CONFIRM = 'yes';
+
 /**
  * 2026-09-25 全项目自查找出的问题（每一条都是当时在临时目录里复现过的反例）：
  * 复核记错了人、只打勾的弱模型不用复核、账本坏行被悄悄跳过、检查命令写的文件被当成有人在改、

@@ -12,6 +12,9 @@ import { pickModel } from '../src/core/providers';
 import { normalizeAgent } from '../src/core/registry';
 import { describeArgv, looksLikeNetworkBlip, makeParser, usageLine, usageTotal } from '../src/core/runner';
 
+// 系统确认框：测试里当点了允许，不弹框
+process.env.RELAY_CONFIRM = 'yes';
+
 test('工具调用参数：安全档 / 完全放开 / 只读，各家都按无人值守的方式调', () => {
   const loc: Located = { exec: ['/bin/x'], version: '1', where: '/bin/x' };
   const base = { cwd: '/wt', prompt: 'P', model: undefined, effort: undefined, outFile: '/tmp/o' };
