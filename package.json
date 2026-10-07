@@ -1,6 +1,6 @@
 {
   "name": "relaydesk",
-  "version": "2.0.8",
+  "version": "2.0.9",
   "private": true,
   "description": "接力台（RelayDesk）：额度会用完，活不会断。让 Claude Code、Codex、Cursor、DeepSeek 在同一个文件夹里接力写代码，弱一档的模型做完由强模型复核，改坏了能退回，拿不准就群聊投票。",
   "license": "MIT",
