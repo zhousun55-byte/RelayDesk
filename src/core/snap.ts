@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RelayError } from './errors';
 import { parseNameStatusZ, parseNumstatZ, sumChanges, type FileChange } from './status';
+import { writeProjectFile } from './safe-write';
 
 /**
  * 快照：整个项目文件夹的存档，存在项目里的 .relay/snapshots（接力台自己的 git 仓库）。
@@ -171,7 +172,7 @@ function tidySnapConfig(dir: string): void {
     if (kv && ok && ok.test(kv[2])) out.push(`\t${kv[1].toLowerCase()} = ${kv[2]}`);
   }
   const next = out.join('\n') + '\n';
-  if (next !== cur) fs.writeFileSync(p, next);
+  if (next !== cur) writeProjectFile(p, next);
 }
 
 /** HEAD 只该是「ref: refs/heads/某个分支」。被写坏了：指回已有的分支，快照和历史都还在，不用重建。 */
@@ -201,7 +202,7 @@ function repairSnapHead(dir: string): void {
   }
   for (const m of packed.matchAll(/ refs\/heads\/([A-Za-z0-9._-]+)$/gm)) branches.push(m[1]);
   const branch = ['main', 'master'].find((b) => branches.includes(b)) ?? branches[0] ?? 'main';
-  fs.writeFileSync(p, `ref: refs/heads/${branch}\n`);
+  writeProjectFile(p, `ref: refs/heads/${branch}\n`);
 }
 
 /** 建快照仓库（已经有了就只补排除规则，顺手把被改过的 config、HEAD 理回来）。 */
@@ -239,13 +240,13 @@ export function ensureSnapRepo(root: string): void {
   const attrs = path.join(dir, 'info', 'attributes');
   const want = '# 接力台：快照只存文件本身，不走 filter 和合并驱动\n* -filter -merge\n';
   fs.mkdirSync(path.dirname(attrs), { recursive: true });
-  if (!fs.existsSync(attrs) || fs.readFileSync(attrs, 'utf8') !== want) fs.writeFileSync(attrs, want);
+  if (!fs.existsSync(attrs) || fs.readFileSync(attrs, 'utf8') !== want) writeProjectFile(attrs, want);
   const ex = path.join(dir, 'info', 'exclude');
   fs.mkdirSync(path.dirname(ex), { recursive: true });
   const cur = fs.existsSync(ex) ? fs.readFileSync(ex, 'utf8') : '';
   const have = new Set(cur.split('\n').map((l) => l.trim()));
   const missing = DEFAULT_EXCLUDES.filter((l) => !have.has(l));
-  if (missing.length) fs.writeFileSync(ex, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
+  if (missing.length) writeProjectFile(ex, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
 }
 
 /** 最新一张快照；还没有返回 null。 */
@@ -279,7 +280,7 @@ function excludeBigFiles(root: string): void {
   const ex = path.join(snapDir(root), 'info', 'exclude');
   const cur = fs.readFileSync(ex, 'utf8');
   const lines = big.map((f) => `/${f.replace(/([*?[\\!#])/g, '\\$1')}`);
-  fs.writeFileSync(ex, `${cur}${cur.includes(BIG_MARK) ? '' : `${BIG_MARK}\n`}${lines.join('\n')}\n`);
+  writeProjectFile(ex, `${cur}${cur.includes(BIG_MARK) ? '' : `${BIG_MARK}\n`}${lines.join('\n')}\n`);
 }
 
 export interface SnapResult {

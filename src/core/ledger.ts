@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RelayError } from './errors';
 import { hiddenThreads } from './hidden';
+import { appendProjectFile } from './safe-write';
 
 /**
  * 账本 .relay/journal.jsonl：每一棒、每次退回、每次换任务，只追加不改写。
@@ -250,7 +251,7 @@ function endsWithNewline(p: string): boolean {
 export function appendLedger(root: string, ev: LedgerEvent): void {
   const p = ledgerPath(root);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.appendFileSync(p, `${endsWithNewline(p) ? '' : '\n'}${JSON.stringify(ev)}\n`);
+  appendProjectFile(p, `${endsWithNewline(p) ? '' : '\n'}${JSON.stringify(ev)}\n`);
 }
 
 /** 账本里读不出来的一行（第几行，从 1 数）。 */

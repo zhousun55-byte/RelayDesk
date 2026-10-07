@@ -10,6 +10,7 @@ import { findAgent } from './registry';
 import { memberTier } from './tier';
 import { appendTalkRaw, askAgent, checkSpeakers, inParallel, releaseThread, speakerName, talkPath, taskBackground, threadOf, type TalkContext, type Thread } from './talk';
 import { stampLocal } from './time';
+import { writeProjectFile } from './safe-write';
 
 /**
  * 投票：让弱模型也有话语权。
@@ -329,7 +330,7 @@ export function appendRule(root: string, line: string, how = '群聊投票定下
   const lines = raw.split('\n');
   const at = lines.findIndex((l) => /^##\s+.*(约定|规矩|备注|决定)/.test(l));
   if (at < 0) {
-    fs.writeFileSync(p, `${raw.trimEnd()}\n\n## 约定\n\n${item}\n`);
+    writeProjectFile(p, `${raw.trimEnd()}\n\n## 约定\n\n${item}\n`);
     return;
   }
   let end = lines.length;
@@ -342,7 +343,7 @@ export function appendRule(root: string, line: string, how = '群聊投票定下
   const body = lines.slice(at + 1, end).filter((l) => !/^（.*）$/.test(l.trim()));
   while (body.length && !body[body.length - 1].trim()) body.pop();
   const next = [...lines.slice(0, at + 1), ...(body.length ? body : ['']), item, '', ...lines.slice(end)];
-  fs.writeFileSync(p, next.join('\n').replace(/\n{3,}/g, '\n\n'));
+  writeProjectFile(p, next.join('\n').replace(/\n{3,}/g, '\n\n'));
 }
 
 /** 这个接力台进程里有没有投票在进行。 */

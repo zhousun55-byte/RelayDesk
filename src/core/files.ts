@@ -5,6 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import { RelayError } from './errors';
 import { isInside } from './paths';
 import { workFiles } from './snap';
+import { noLinkPath, writeProjectFile } from './safe-write';
 
 /**
  * 网页右边的项目树：列出项目里的文件、读一个文件给人看。只读，不改任何东西。
@@ -102,7 +103,8 @@ export const UPLOAD_MAX = 200 * 1024 * 1024;
 export async function saveUpload(root: string, name: string, body: Readable, max = UPLOAD_MAX): Promise<string> {
   const dir = path.join(root, UPLOAD_REL);
   fs.mkdirSync(dir, { recursive: true });
-  if (!fs.existsSync(path.join(dir, '.gitignore'))) fs.writeFileSync(path.join(dir, '.gitignore'), '*\n');
+  noLinkPath(path.join(dir, '.gitignore'), root);
+  if (!fs.existsSync(path.join(dir, '.gitignore'))) writeProjectFile(path.join(dir, '.gitignore'), '*\n', root);
   // Windows 上文件名不能带 <>:"|?*：一律换掉，别的电脑传上来的名字在哪都存得下
   const base = path.basename(String(name).replace(/\\/g, '/')).replace(/[\u0000-\u001f\u007f]/g, '').replace(/[<>:"|?*]/g, '-').trim() || '文件';
   const ext = path.extname(base).slice(0, 16);

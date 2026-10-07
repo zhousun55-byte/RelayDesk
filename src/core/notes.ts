@@ -4,6 +4,7 @@ import path from 'node:path';
 import { RelayError } from './errors';
 import type { Verdict } from './ledger';
 import { stampLocal } from './time';
+import { appendProjectFile, writeProjectFile } from './safe-write';
 
 /**
  * 项目里那几个「人和 AI 都会写」的文件：任务、交接、复核。
@@ -138,12 +139,12 @@ export function setTask(root: string, text: string, items: string[] = []): TaskD
   if (!old.empty) {
     const arch = path.join(root, DONE_TASKS_REL);
     const head = fs.existsSync(arch) ? '' : '# 做完的任务\n\n换任务时，旧任务存在这里。\n';
-    fs.appendFileSync(arch, `${head}\n---\n\n> 存档于 ${stampLocal(new Date())}\n\n${old.raw.trim()}\n`);
+    appendProjectFile(arch, `${head}\n---\n\n> 存档于 ${stampLocal(new Date())}\n\n${old.raw.trim()}\n`);
   }
   const lines = text.trim().split('\n');
   // 说明原样放在标题下面（不用字符串替换：说明里的 $$、$& 会被当成替换符号改掉）。
   const doc = taskTemplate(lines[0].trim(), items, lines.slice(1).join('\n'));
-  fs.writeFileSync(p, doc);
+  writeProjectFile(p, doc);
   return parseTask(doc);
 }
 
@@ -171,7 +172,7 @@ export function saveTaskCopy(root: string): string | undefined {
   try {
     if (!fs.existsSync(p)) {
       fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, raw);
+      writeProjectFile(p, raw);
     }
   } catch {
     return undefined;
@@ -215,7 +216,7 @@ export function restoreTaskChecks(root: string, oldRaw: string): { unchecked: st
       return `${a}${want ? 'x' : ' '}${b}${text}`;
     });
   }
-  if (unchecked.length || checked.length) fs.writeFileSync(p, lines.join(crlf ? '\r\n' : '\n'));
+  if (unchecked.length || checked.length) writeProjectFile(p, lines.join(crlf ? '\r\n' : '\n'));
   return { unchecked, checked };
 }
 
@@ -325,7 +326,7 @@ export function editTask(root: string, edit: TaskEdit): TaskDoc {
   }
   const out = `${lines.join('\n')}\n`;
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, out);
+  writeProjectFile(p, out);
   return parseTask(out);
 }
 

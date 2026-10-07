@@ -36,6 +36,7 @@ import { changeLine, generatedPath, headSnap, snapChanges, snapDiff, sumChanges,
 import { stampLocal } from '../core/time';
 import { needsReview, resolveWho, sameModel, UNKNOWN_WHO } from '../core/tier';
 import type { RelayConfig } from '../core/types';
+import { writeProjectFile } from '../core/safe-write';
 
 /**
  * 记账：把项目文件夹里发生的事对上账本。
@@ -219,7 +220,7 @@ export function writeReviewDiff(root: string, s: Stint): void {
     .filter((l, i) => l || i === 4)
     .join('\n');
   fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, `${head}\n${diff}`);
+  writeProjectFile(abs, `${head}\n${diff}`, root);
 }
 
 /** 它没留交接：接力台替它记一份（只有事实）。 */
@@ -242,7 +243,7 @@ export function writeGhostHandoff(root: string, s: Stint, lastWords?: string): s
   if (lastWords?.trim()) lines.push('## 它最后说的话', '', lastWords.trim().slice(0, 3000), '');
   lines.push('## 没做完 / 下一步', '', '- 不知道。先复核它改的东西，再对照任务清单看还差什么。', '');
   fs.mkdirSync(path.join(root, HANDOFF_DIR), { recursive: true });
-  fs.writeFileSync(path.join(root, rel), lines.join('\n'));
+  writeProjectFile(path.join(root, rel), lines.join('\n'), root);
   return rel;
 }
 
@@ -570,7 +571,7 @@ export function refreshBrief(root: string, now = new Date()): boolean {
   }
   if (strip(cur) === strip(text)) return false;
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(`${p}.tmp`, text);
+  writeProjectFile(`${p}.tmp`, text);
   fs.renameSync(`${p}.tmp`, p);
   return true;
 }
@@ -611,7 +612,7 @@ export function markRollback(root: string, ev: RollbackStart): { done: () => voi
   const token = crypto.randomBytes(6).toString('hex');
   const p = rollbackMarkPath(root);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify({ pid: process.pid, token, ev }));
+  writeProjectFile(p, JSON.stringify({ pid: process.pid, token, ev }), root);
   rollbacksNow.add(token);
   const drop = () => rollbacksNow.delete(token);
   return { drop, done: () => (drop(), fs.rmSync(p, { force: true })) };

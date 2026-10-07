@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeProjectFile } from './safe-write';
 
 /**
  * 左边删掉的对话（任务）：不再列出，里面的棒也不再算待复核（ledger.ts 的 deletedStintIds）；账本、交接、快照都不动，撤销删除就恢复。
@@ -24,5 +25,5 @@ export function setThreadHidden(root: string, key: string, hidden: boolean): voi
   if (hidden) all.add(key);
   else all.delete(key);
   fs.mkdirSync(path.dirname(file(root)), { recursive: true });
-  fs.writeFileSync(file(root), JSON.stringify({ threads: [...all] }, null, 2) + '\n');
+  writeProjectFile(file(root), JSON.stringify({ threads: [...all] }, null, 2) + '\n');
 }

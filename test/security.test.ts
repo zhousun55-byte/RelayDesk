@@ -239,3 +239,42 @@ test('上次打开的项目没了（删了、挪走了）：换成最近打开�
   const left = (memory.loadMemory().recents ?? []).filter((r) => fs.existsSync(r));
   assert.equal(memory.lastProject(), left[0] ?? null);
 });
+
+test('往 .relay 里写：仓库里预先放好的链接（文件或文件夹）不跟着写，家目录里的文件不会被换掉', () => {
+  // 2026-10-07 安全审查：.relay/复核/第1棒.diff 这种猜得到的名字做成指向 ~/.zshrc 的链接，
+  // 复核用的改动文件会把它整个换成 diff，diff 里以空格开头的一行就是下次开终端要执行的命令。
+  const { root } = project('link-write');
+  init.initProject(root);
+  const victim = path.join(tmpDir('link-victim'), 'zshrc');
+  fs.writeFileSync(victim, '原来的内容\n');
+  const diff = path.join(root, notes.reviewDiffFileFor(1));
+  fs.mkdirSync(path.dirname(diff), { recursive: true });
+  fs.symlinkSync(victim, diff);
+  assert.throws(() => track.writeReviewDiff(root, { id: 1, from: 'a'.repeat(40), to: 'b'.repeat(40), who: { label: 'x' } } as never), /链接/);
+  assert.equal(fs.readFileSync(victim, 'utf8'), '原来的内容\n');
+
+  // 账本：追加也不跟着链接
+  const outside = tmpDir('link-dir');
+  fs.writeFileSync(path.join(outside, 'journal.jsonl'), '');
+  const lp = ledger.ledgerPath(root);
+  fs.rmSync(lp, { force: true });
+  fs.symlinkSync(path.join(outside, 'journal.jsonl'), lp);
+  assert.throws(() => ledger.appendLedger(root, { type: 'note', ts: new Date().toISOString(), text: 'x' } as never), /链接/);
+  assert.equal(fs.readFileSync(path.join(outside, 'journal.jsonl'), 'utf8'), '');
+
+  // 整个文件夹是链接：交接文件夹指到外面，代写交接不写过去
+  const hd = path.join(root, notes.HANDOFF_DIR);
+  fs.rmSync(hd, { recursive: true, force: true });
+  fs.symlinkSync(outside, hd);
+  assert.throws(() => track.writeGhostHandoff(root, { id: 2, who: { label: 'x', tool: 'codex' }, facts: null } as never), /链接/);
+  assert.deepEqual(fs.readdirSync(outside), ['journal.jsonl']);
+
+  // AGENTS.md 是链接：写规矩时不改到链接指的文件
+  const agents = path.join(root, 'AGENTS.md');
+  fs.rmSync(agents, { force: true });
+  fs.symlinkSync(victim, agents);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const protocol = require('../src/core/protocol') as typeof import('../src/core/protocol');
+  assert.throws(() => protocol.upsertBlock(agents), /链接/);
+  assert.equal(fs.readFileSync(victim, 'utf8'), '原来的内容\n');
+});

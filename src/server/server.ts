@@ -32,6 +32,7 @@ import { rollbackBefore, undoRollback } from '../ops/rollback';
 import { refreshBrief, relayBusy, trackAndGate } from '../ops/track';
 import { projectView, readRunLog, stintDetail } from '../ops/view';
 import { unwatchAll, watchProject, watching } from '../ops/watch';
+import { writeProjectFile } from '../core/safe-write';
 
 const WEB = path.join(__dirname, '..', 'web');
 const VERSION = (() => {
@@ -512,7 +513,7 @@ export function createServer(opts: ServerOptions): http.Server {
       requireProject(root);
       const raw = str(b.raw) ?? '';
       if (!raw.trim()) throw new RelayError('任务不能是空的。', 'empty');
-      fs.writeFileSync(path.join(root, TASK_REL), raw.endsWith('\n') ? raw : `${raw}\n`);
+      writeProjectFile(path.join(root, TASK_REL), raw.endsWith('\n') ? raw : `${raw}\n`, root);
       refreshBrief(root);
       return {};
     },

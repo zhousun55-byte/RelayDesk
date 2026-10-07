@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { BRIEF_REL, HANDOFF_DIR, TASK_REL, VERDICT_CHOICES } from './notes';
+import { writeProjectFile } from './safe-write';
 
 /**
  * 接力规矩：写进项目的 AGENTS.md（Codex、Cursor、ZCode、MiMo、OpenCode……开工都会读）
@@ -37,7 +38,7 @@ function escape(s: string): string {
 }
 
 /** 把规矩写进（或更新）一个文件；返回是否改了。文件是 \r\n 换行的（Windows 上写的），规矩也用 \r\n。 */
-export function upsertBlock(file: string, plain = protocolBlock()): boolean {
+export function upsertBlock(file: string, plain = protocolBlock(), root = path.dirname(file)): boolean {
   const cur = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const eol = cur.includes('\r\n') ? '\r\n' : '\n';
   const block = plain.replace(/\n/g, eol);
@@ -46,7 +47,7 @@ export function upsertBlock(file: string, plain = protocolBlock()): boolean {
   else if (!cur.trim()) next = `${block}${eol}`;
   else next = `${cur}${cur.endsWith('\n') ? '' : eol}${eol}${block}${eol}`;
   if (next === cur) return false;
-  fs.writeFileSync(file, next);
+  writeProjectFile(file, next, root);
   return true;
 }
 
@@ -57,7 +58,7 @@ export function removeBlock(file: string): boolean {
   if (!BLOCK_RE.test(cur)) return false;
   const next = cur.replace(BLOCK_RE, '').replace(/\n{3,}$/, '\n\n').trimEnd();
   if (!next.trim()) fs.rmSync(file);
-  else fs.writeFileSync(file, `${next}\n`);
+  else writeProjectFile(file, `${next}\n`, path.dirname(file));
   return true;
 }
 

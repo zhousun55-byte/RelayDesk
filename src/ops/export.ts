@@ -6,6 +6,7 @@ import { ledgerPath, requireInit } from '../core/ledger';
 import { HANDOFF_DIR, REVIEW_DIR, TASK_REL } from '../core/notes';
 import { isInside } from '../core/paths';
 import { redactSecrets } from '../core/redact';
+import { noLinkPath } from '../core/safe-write';
 
 /**
  * 脱敏导出：任务、交接、复核结论、账本、配置复制到一个空文件夹，像密钥的都抹成 [REDACTED]。
@@ -34,6 +35,11 @@ export function exportRecords(root: string, dest: string): { dir: string; files:
   for (const p of picks) {
     const src = path.join(root, p);
     if (!fs.existsSync(src)) continue;
+    try {
+      noLinkPath(src, root);
+    } catch {
+      continue; // 链接：不顺着读（可能指到项目外面）
+    }
     const out = p.replace(/^\.relay\//, '');
     fs.mkdirSync(path.dirname(path.join(dir, out)), { recursive: true });
     fs.writeFileSync(path.join(dir, out), redactSecrets(fs.readFileSync(src, 'utf8')));

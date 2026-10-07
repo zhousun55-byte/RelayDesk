@@ -6,6 +6,7 @@ import type { Invocation, StreamFormat } from './harness';
 import { cause, looksOffline } from './cause';
 import { claudeLimits, type Limit } from './quota';
 import { stampLocal } from './time';
+import { appendProjectFile } from './safe-write';
 
 /**
  * 无人值守地跑一个 AI 工具：在项目文件夹里启动、把它吐出来的事件翻译成一行行中文日志、
@@ -539,18 +540,21 @@ export function describeArgv(argv: string[]): string {
 
 export function startRun(req: RunRequest): RunHandle {
   const inv = req.invocation;
+  // 日志在项目的 .relay 里（每一棒的）：不往链接里写；讨论的在系统临时目录，照旧
+  const inProject = path.resolve(req.logPath).split(path.sep).includes('.relay');
+  const append = (text: string) => (inProject ? appendProjectFile(req.logPath, text) : fs.appendFileSync(req.logPath, text));
   fs.mkdirSync(path.dirname(req.logPath), { recursive: true });
   const prefix = req.cwd.endsWith(path.sep) ? req.cwd : `${req.cwd}${path.sep}`;
   const write = (line: string) => {
     const full = `${hms()} ${line.split(prefix).join('')}`;
     try {
-      fs.appendFileSync(req.logPath, full + '\n');
+      append(full + '\n');
     } catch {
       /* 日志写不了不影响干活 */
     }
     req.onLine?.(full);
   };
-  fs.appendFileSync(req.logPath, `# ${req.title} · ${stampLocal(new Date())}\n$ ${describeArgv(inv.argv)}\n`);
+  append(`# ${req.title} · ${stampLocal(new Date())}\n$ ${describeArgv(inv.argv)}\n`);
 
   const parser = makeParser(inv.format);
   const started = Date.now();

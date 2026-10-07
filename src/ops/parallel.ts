@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { TaskDoc, TaskItem } from '../core/notes';
 import { relayHome } from '../core/paths';
 import { PARALLEL_MARK } from '../core/prompts';
+import { copyIntoProject, noLinkPath } from '../core/safe-write';
 
 /**
  * 派活时同时做几步：清单里写了「可以同时做」的几步，每一位在自己的一份项目副本里做，谁先做完谁先并回项目，
@@ -70,7 +71,8 @@ export function applyFiles(root: string, dir: string, files: { path: string; del
       continue;
     }
     fs.mkdirSync(path.dirname(to), { recursive: true });
+    noLinkPath(to, root);
     fs.rmSync(to, { force: true });
-    fs.copyFileSync(path.join(dir, f.path), to);
+    copyIntoProject(path.join(dir, f.path), to, root);
   }
 }

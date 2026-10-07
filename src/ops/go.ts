@@ -26,6 +26,7 @@ import { memberTier, sameModel, whoOfMember } from '../core/tier';
 import { acquireLock, runsDir } from './lock';
 import { applyFiles, cloneProject, dropClone, isParallel, stepOf, type Step } from './parallel';
 import { applyReviews, closeStint, gateStint, projectConfig, projectConfigSafe, refreshBrief, track } from './track';
+import { appendProjectFile, copyIntoProject, writeProjectFile } from '../core/safe-write';
 
 /**
  * 接力台调度：替你让某个 AI 接着做一棒；或者「全自动」一直接力下去——
@@ -184,7 +185,7 @@ export function stopGo(root: string): boolean {
   const s = loadGoState(root);
   if (s && (s.status === 'running' || s.status === 'waiting') && pidAlive(s.pid)) {
     fs.mkdirSync(runsDir(root), { recursive: true });
-    fs.writeFileSync(stopFlag(root), String(Date.now()));
+    writeProjectFile(stopFlag(root), String(Date.now()), root);
     return true;
   }
   return false;
@@ -471,7 +472,7 @@ class GoRunner {
     try {
       fs.mkdirSync(runsDir(this.root), { recursive: true });
       const p = goStatePath(this.root);
-      fs.writeFileSync(`${p}.tmp`, JSON.stringify(this.state, null, 2) + '\n');
+      writeProjectFile(`${p}.tmp`, JSON.stringify(this.state, null, 2) + '\n', this.root);
       fs.renameSync(`${p}.tmp`, p);
     } catch {
       /* 写不了不影响干活 */
@@ -507,7 +508,7 @@ class GoRunner {
       const full = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${line}`;
       try {
         fs.mkdirSync(path.dirname(logAbs), { recursive: true });
-        fs.appendFileSync(logAbs, full + '\n');
+        appendProjectFile(logAbs, full + '\n', this.root);
       } catch {
         /* 日志写不了不影响干活 */
       }
@@ -951,7 +952,7 @@ class GoRunner {
       const p2 = (x: number) => String(x).padStart(2, '0');
       try {
         fs.mkdirSync(path.dirname(logAbs), { recursive: true });
-        fs.appendFileSync(logAbs, `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())} ${line}\n`);
+        appendProjectFile(logAbs, `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())} ${line}\n`);
       } catch {
         /* 日志写不了不影响复核 */
       }
@@ -1066,7 +1067,7 @@ class GoRunner {
       if (v0 === 'fixed' || v0 === 'reverted') text = text.replace(/^(\s*[-*]?\s*结论\s*[:：]).*$/m, '$1有问题，还没修（只看不改，没有动文件）');
       try {
         fs.mkdirSync(path.join(root, REVIEW_DIR), { recursive: true });
-        fs.writeFileSync(path.join(root, reviewFileFor(tid)), text);
+        writeProjectFile(path.join(root, reviewFileFor(tid)), text, root);
       } catch {
         /* 写不了：这一棒还是待复核，终审会看 */
       }
@@ -1370,7 +1371,7 @@ class GoRunner {
       const h = path.join(j.dir, j.handoffTmp);
       if (fs.existsSync(h)) {
         fs.mkdirSync(path.dirname(path.join(root, handoff)), { recursive: true });
-        fs.copyFileSync(h, path.join(root, handoff));
+        copyIntoProject(h, path.join(root, handoff), root);
       }
       // 按原话找这一步（边做边复核可能在清单里插了一步，第几步会变）
       const mine = readTask(j.dir).items[j.step.index - 1];

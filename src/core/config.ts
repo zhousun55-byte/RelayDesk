@@ -4,6 +4,7 @@ import { RelayError } from './errors';
 import { loadMemory } from './memory';
 import { relayHome } from './paths';
 import type { RelayConfig } from './types';
+import { writeProjectFile } from './safe-write';
 
 export function relayConfigPath(repoRoot: string): string {
   return path.join(repoRoot, '.relay', 'config.json');
@@ -76,7 +77,7 @@ export function loadRelayConfig(repoRoot: string): RelayConfig {
 export function saveRelayConfig(repoRoot: string, cfg: RelayConfig): RelayConfig {
   const clean = normalizeConfig(cfg);
   fs.mkdirSync(path.dirname(relayConfigPath(repoRoot)), { recursive: true });
-  fs.writeFileSync(relayConfigPath(repoRoot), JSON.stringify(clean, null, 2) + '\n');
+  writeProjectFile(relayConfigPath(repoRoot), JSON.stringify(clean, null, 2) + '\n', repoRoot);
   confirmGateCommand(repoRoot, clean.gate.command);
   return clean;
 }

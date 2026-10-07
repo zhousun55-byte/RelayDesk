@@ -13,6 +13,7 @@ import { setThreadHidden } from './hidden';
 import { withLock } from './lock';
 import { markBase, refreshBrief } from './track';
 import { acceptanceNow } from './view';
+import { writeProjectFile } from '../core/safe-write';
 
 /**
  * 接入：让一个文件夹开始接力。可以重复执行（缺什么补什么）。
@@ -76,15 +77,15 @@ export function initProject(dir: string, opts: InitOptions = {}): InitResult {
   fs.mkdirSync(relayDir, { recursive: true });
   const gi = path.join(relayDir, '.gitignore');
   if (!fs.existsSync(gi) || fs.readFileSync(gi, 'utf8') === OLD_GITIGNORE) {
-    fs.writeFileSync(gi, RELAY_GITIGNORE);
+    writeProjectFile(gi, RELAY_GITIGNORE, root);
   }
   for (const d of [HANDOFF_DIR, REVIEW_DIR]) fs.mkdirSync(path.join(root, d), { recursive: true });
   if (!fs.existsSync(relayConfigPath(root))) {
-    fs.writeFileSync(relayConfigPath(root), JSON.stringify(defaultRelayConfig(), null, 2) + '\n');
+    writeProjectFile(relayConfigPath(root), JSON.stringify(defaultRelayConfig(), null, 2) + '\n', root);
   }
   if (!fs.existsSync(path.join(root, TASK_REL))) {
     if (opts.task?.trim()) setTask(root, opts.task);
-    else fs.writeFileSync(path.join(root, TASK_REL), taskTemplate());
+    else writeProjectFile(path.join(root, TASK_REL), taskTemplate(), root);
     actions.push(`建了任务清单 ${TASK_REL}`);
   } else if (opts.task?.trim()) {
     setTask(root, opts.task);
@@ -200,7 +201,7 @@ export function deleteTask(root: string): string {
     }
     const deleted = saveTaskCopy(root);
     if (!deleted) throw new RelayError('任务清单存不下来，没有删。', 'no-copy');
-    fs.writeFileSync(path.join(root, TASK_REL), taskTemplate());
+    writeProjectFile(path.join(root, TASK_REL), taskTemplate(), root);
     const ts = new Date().toISOString();
     const taskCopy = saveTaskCopy(root);
     appendLedger(root, { type: 'task', ts, title: '', snap: takeSnapshot(root, '删除任务').sha, prev: before.title, deleted, ...(taskCopy ? { taskCopy } : {}) });
@@ -218,7 +219,7 @@ export function restoreTask(root: string, id: string): void {
     if (!(del?.deleted || del?.blank) || del.ts !== id || !readTask(root).empty) throw new RelayError('删了之后已经写了新任务，撤销不了。', 'task-moved');
     const raw = del.deleted ? readTaskCopy(root, del.deleted) : readTask(root).raw;
     if (raw === null) throw new RelayError('删掉的任务清单找不到了。', 'no-copy');
-    if (del.deleted) fs.writeFileSync(path.join(root, TASK_REL), raw);
+    if (del.deleted) writeProjectFile(path.join(root, TASK_REL), raw, root);
     const taskCopy = saveTaskCopy(root);
     appendLedger(root, { type: 'task', ts: new Date().toISOString(), title: parseTask(raw).title, snap: takeSnapshot(root, '撤销删除任务').sha, undo: id, ...(taskCopy ? { taskCopy } : {}) });
     setThreadHidden(root, taskChanges(loadLedger(root).events).at(-1)?.ts ?? v.init!.ts, false);

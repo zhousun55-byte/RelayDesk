@@ -17,6 +17,7 @@ import { clip, lastError, logTail, looksLikeNetworkBlip, startRun, toolLines, ty
 import { cause, plain } from './cause';
 import { agentKind, agentLabel, canTalk, findAgent, loadRegistry, OUT_PLACEHOLDER } from './registry';
 import type { AgentConfig } from './types';
+import { appendProjectFile, writeProjectFile } from './safe-write';
 
 /**
  * 讨论：人问一句，选中的几个 AI 依次发言，每个都看得到前面的全部内容。
@@ -108,7 +109,7 @@ export function readTalk(root: string, limit = 400, p = talkPath(root)): TalkRow
 /** 往一段群聊的记录里追加任意一行（投票也存在这里）。 */
 export function appendTalkRaw(file: string, row: object): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, JSON.stringify(row) + '\n');
+  appendProjectFile(file, JSON.stringify(row) + '\n');
 }
 
 export function appendTalk(root: string, row: Omit<TalkRow, 'ts'> & { ts?: string }, file = talkPath(root)): TalkRow {
@@ -441,7 +442,7 @@ function keepFailLog(cwd: string, name: string, text: string): string {
     if (!text.trim() || !fs.existsSync(path.join(cwd, '.relay'))) return '';
     const rel = `.relay/runs/讨论-${name.replace(/[\\/:*?"<>|\s]+/g, '-')}.log`;
     fs.mkdirSync(path.join(cwd, '.relay', 'runs'), { recursive: true });
-    fs.writeFileSync(path.join(cwd, rel), redactSecrets(text));
+    writeProjectFile(path.join(cwd, rel), redactSecrets(text));
     return rel;
   } catch {
     return '';
