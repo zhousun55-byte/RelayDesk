@@ -71,6 +71,8 @@ def main():
         'RELAY_LOGIN_PATH': 'off',
         'RELAY_SCAN_APPS': 'off',
         'RELAY_AUTODETECT': 'off',
+        # 改成员命令、检查命令、权限时的系统确认框：测试里当点了允许，不在屏幕上弹
+        'RELAY_CONFIRM': 'yes',
         'RELAY_NO_BROWSER': '1',
         'RELAY_CLIPBOARD': 'off',
         'RELAY_TERMINAL': 'off',

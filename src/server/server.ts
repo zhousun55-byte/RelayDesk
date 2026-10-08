@@ -6,7 +6,7 @@ import path from 'node:path';
 import { talkContext } from '../commands/talk';
 import { autoSettingsSafe, saveAutoSettings } from '../core/auto-settings';
 import { ensureGateOk, gateConfirmed, normalizeConfig, saveRelayConfig } from '../core/config';
-import { mustAllow } from '../core/confirm';
+import { mustAllow, shownValue } from '../core/confirm';
 import type { AgentConfig } from '../core/types';
 import { addModelMembers, canCheckApps, desktopApps, enableProvider, findAppBundle, loadDetected, memberModel, modelOptions, newerHints, setCrew, setMemberModel, tidyRegistry, type DetectReport } from '../core/detect';
 import { RelayError, errorMessage } from '../core/errors';
@@ -341,7 +341,7 @@ export interface ServerOptions {
 function riskyAgentChange(next: AgentConfig, old: AgentConfig | undefined): string {
   const lines: string[] = [];
   const diff = (label: string, a: string | undefined, b: string | undefined) => {
-    if ((a ?? '') !== (b ?? '') && b) lines.push(`${label}：${b}`);
+    if ((a ?? '') !== (b ?? '') && b) lines.push(`${label}：${shownValue(b)}`);
   };
   if (agentKind(next) === 'cli') diff('启动命令', old?.cmd, next.cmd);
   diff('讨论命令', old?.ask, next.ask);
@@ -717,10 +717,12 @@ export function createServer(opts: ServerOptions): http.Server {
       const a = b.agent && typeof b.agent === 'object' ? (b.agent as Record<string, unknown>) : {};
       const app = a.kind === 'app' && typeof a.cmd === 'string' ? appNameOf(a.cmd) : undefined;
       if (app && canCheckApps() && !findAppBundle(app)) throw new RelayError(`这台电脑上找不到「${app}」`, 'no-app');
-      const risky = riskyAgentChange(normalizeAgent(b.agent), loadRegistry().agents.find((x) => x.name === (str(b.originalName) ?? a.name)));
+      const next = normalizeAgent(b.agent);
+      const old = loadRegistry().agents.find((x) => x.name === (str(b.originalName) ?? next.name));
+      const risky = riskyAgentChange(next, old);
       if (risky) {
         const en = autoSettingsSafe().settings.lang === 'en';
-        await mustAllow(en ? `Change member "${String(a.name)}"?\n\n${risky}` : `改成员「${String(a.name)}」？\n\n${risky}`, en);
+        await mustAllow(en ? `${old ? 'Change' : 'Add'} member "${next.name}"?\n\n${risky}` : `${old ? '改' : '加'}成员「${next.name}」？\n\n${risky}`, en);
       }
       return { agent: upsertAgent(b.agent, str(b.originalName)) };
     },
@@ -739,7 +741,7 @@ export function createServer(opts: ServerOptions): http.Server {
       const gate = normalizeConfig(b.config).gate.command?.trim() ?? '';
       if (gate && !gateConfirmed(root, gate)) {
         const en = autoSettingsSafe().settings.lang === 'en';
-        await mustAllow(en ? `Run this check command in ${root}?\nIt runs outside any sandbox.\n\n${gate}` : `在 ${root} 里跑这条检查命令？\n它不在沙箱里跑。\n\n${gate}`, en);
+        await mustAllow(en ? `Run this check command in ${shownValue(root)}?\nIt runs outside any sandbox.\n\n${shownValue(gate)}` : `在 ${shownValue(root)} 里跑这条检查命令？\n它不在沙箱里跑。\n\n${shownValue(gate)}`, en);
       }
       const cfg = saveRelayConfig(root, b.config as never);
       refreshBrief(root);

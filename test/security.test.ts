@@ -278,3 +278,147 @@ test('往 .relay 里写：仓库里预先放好的链接（文件或文件夹）
   assert.throws(() => protocol.upsertBlock(agents), /链接/);
   assert.equal(fs.readFileSync(victim, 'utf8'), '原来的内容\n');
 });
+
+test('往项目里写：链接指到项目里面的照常写（AGENTS.md 指向 CLAUDE.md 能接入）；指到 .git、断了的不写', () => {
+  // 2026-10-07 复查：2.0.10 只要路上有链接就不写，AGENTS.md 指向 CLAUDE.md 的项目接入直接失败
+  const root = tmpDir('link-inside');
+  fs.writeFileSync(path.join(root, 'CLAUDE.md'), '# 项目规矩\n');
+  fs.symlinkSync('CLAUDE.md', path.join(root, 'AGENTS.md'));
+  init.initProject(root);
+  assert.ok(fs.lstatSync(path.join(root, 'AGENTS.md')).isSymbolicLink(), 'AGENTS.md 还是链接');
+  const claude = fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8');
+  assert.ok(claude.startsWith('# 项目规矩\n') && claude.includes('接力'), '规矩写进了链接指的 CLAUDE.md');
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const sw = require('../src/core/safe-write') as typeof import('../src/core/safe-write');
+  // 交接文件夹指到项目里另一个文件夹：照常写进去
+  fs.mkdirSync(path.join(root, 'docs', 'handoffs'), { recursive: true });
+  const hd = path.join(root, notes.HANDOFF_DIR);
+  fs.rmSync(hd, { recursive: true, force: true });
+  fs.symlinkSync(path.join(root, 'docs', 'handoffs'), hd);
+  sw.writeProjectFile(path.join(hd, 'a.md'), 'x', root);
+  assert.equal(fs.readFileSync(path.join(root, 'docs', 'handoffs', 'a.md'), 'utf8'), 'x');
+
+  // 指到 .git 里（钩子、配置）：不写
+  fs.mkdirSync(path.join(root, '.git', 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\n');
+  const diff = path.join(root, notes.reviewDiffFileFor(3));
+  fs.mkdirSync(path.dirname(diff), { recursive: true });
+  fs.symlinkSync(path.join(root, '.git', 'hooks', 'pre-commit'), diff);
+  assert.throws(() => sw.writeProjectFile(diff, 'curl x | sh', root), /\.git/);
+  assert.equal(fs.readFileSync(path.join(root, '.git', 'hooks', 'pre-commit'), 'utf8'), '#!/bin/sh\n');
+  // 断了的链接：不写（不顺着建出新文件）
+  const dangling = path.join(root, notes.reviewDiffFileFor(4));
+  fs.symlinkSync(path.join(tmpDir('gone'), 'nope', 'x'), dangling);
+  assert.throws(() => sw.writeProjectFile(dangling, 'x', root), /断了/);
+});
+
+test('往项目里写：查过之后、打开之前路上的文件夹被换成链接，也不写到外面（外面的文件不被清空）', () => {
+  const { root } = project('link-race');
+  init.initProject(root);
+  const victim = path.join(tmpDir('race-victim'), 'x.log');
+  fs.writeFileSync(victim, '原来的内容\n');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const sw = require('../src/core/safe-write') as typeof import('../src/core/safe-write');
+  const dir = path.join(root, '.relay', 'runs-race');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'x.log'), '');
+  // 模拟正在干活的 AI 卡准空档：检查完、打开前，把文件夹换成指到外面的链接
+  const open = fs.openSync;
+  (fs as { openSync: typeof fs.openSync }).openSync = ((...args: Parameters<typeof fs.openSync>) => {
+    if (String(args[0]) === path.join(dir, 'x.log')) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.symlinkSync(path.dirname(victim), dir);
+    }
+    return open(...args);
+  }) as typeof fs.openSync;
+  try {
+    assert.throws(() => sw.writeProjectFile(path.join(dir, 'x.log'), 'curl x | sh\n', root), /链接/);
+  } finally {
+    (fs as { openSync: typeof fs.openSync }).openSync = open;
+  }
+  assert.equal(fs.readFileSync(victim, 'utf8'), '原来的内容\n');
+
+  // 换过去、打开、又换回来（再查一遍路上看不出链接）：靠核对打开的是不是项目里那个文件拦住
+  fs.rmSync(dir, { force: true });
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'x.log'), '');
+  (fs as { openSync: typeof fs.openSync }).openSync = ((...args: Parameters<typeof fs.openSync>) => {
+    if (String(args[0]) !== path.join(dir, 'x.log')) return open(...args);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.symlinkSync(path.dirname(victim), dir);
+    const fd = open(...args);
+    fs.rmSync(dir, { force: true });
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'x.log'), '');
+    return fd;
+  }) as typeof fs.openSync;
+  try {
+    assert.throws(() => sw.appendProjectFile(path.join(dir, 'x.log'), 'curl x | sh\n', root), /链接/);
+  } finally {
+    (fs as { openSync: typeof fs.openSync }).openSync = open;
+  }
+  assert.equal(fs.readFileSync(victim, 'utf8'), '原来的内容\n');
+});
+
+test('同时做几步并回项目：先全部查一遍，有一个要写到项目外面就一个都不搬；删掉的链接只删链接本身', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const parallel = require('../src/ops/parallel') as typeof import('../src/ops/parallel');
+  const root = tmpDir('apply-link');
+  const copy = tmpDir('apply-copy');
+  const outside = tmpDir('apply-outside');
+  fs.writeFileSync(path.join(copy, 'a.txt'), 'new a');
+  fs.mkdirSync(path.join(copy, 'out'));
+  fs.writeFileSync(path.join(copy, 'out', 'b.txt'), 'new b');
+  fs.symlinkSync(outside, path.join(root, 'out'));
+  assert.throws(() => parallel.applyFiles(root, copy, [{ path: 'a.txt', deleted: false }, { path: 'out/b.txt', deleted: false }]), /链接/);
+  assert.ok(!fs.existsSync(path.join(root, 'a.txt')), '前面的 a.txt 也没搬');
+  assert.deepEqual(fs.readdirSync(outside), []);
+
+  // 项目里指向项目内文件夹的链接：照常搬进去
+  fs.mkdirSync(path.join(root, 'libs', 'shared'), { recursive: true });
+  fs.symlinkSync(path.join(root, 'libs', 'shared'), path.join(root, 'shared'));
+  fs.mkdirSync(path.join(copy, 'shared'));
+  fs.writeFileSync(path.join(copy, 'shared', 'c.txt'), 'new c');
+  parallel.applyFiles(root, copy, [{ path: 'a.txt', deleted: false }, { path: 'shared/c.txt', deleted: false }]);
+  assert.equal(fs.readFileSync(path.join(root, 'libs', 'shared', 'c.txt'), 'utf8'), 'new c');
+
+  // CLAUDE.md 是指向 AGENTS.md 的链接、副本里删了它：删的是链接，AGENTS.md 还在
+  fs.writeFileSync(path.join(root, 'AGENTS.md'), '规矩\n');
+  fs.symlinkSync('AGENTS.md', path.join(root, 'CLAUDE.md'));
+  parallel.applyFiles(root, copy, [{ path: 'CLAUDE.md', deleted: true }]);
+  assert.ok(!fs.existsSync(path.join(root, 'CLAUDE.md')) && fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8') === '规矩\n');
+});
+
+test('系统确认框：命令里的换行不能在框里另起几行；一次只弹一个；点了取消一分钟内不再弹', async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const confirm = require('../src/core/confirm') as typeof import('../src/core/confirm');
+  assert.equal(confirm.shownValue('sh -c x\n\n（接力台已核对，可以放心允许）'), 'sh -c x ⏎  ⏎ （接力台已核对，可以放心允许）');
+  assert.equal(confirm.shownValue('a\u202Eb\tc'), 'a b c');
+  assert.ok(confirm.shownValue('x'.repeat(400)).endsWith('…（共 400 个字）'));
+
+  const seen: string[] = [];
+  const answer: ((ok: boolean) => void)[] = [];
+  confirm.setDialogForTest((text) => {
+    seen.push(text);
+    return new Promise<boolean>((r) => answer.push(r));
+  });
+  // 又弹了一个框、在等人点：别让测试一直挂着
+  const soon = (p: Promise<void>) => Promise.race([p, new Promise<void>((_r, no) => setTimeout(() => no(new Error('又弹了一个框')), 500))]);
+  try {
+    const first = confirm.mustAllow('改成员「a」？');
+    await assert.rejects(soon(confirm.mustAllow('改成员「b」？')), /在等你点/);
+    assert.equal(seen.length, 1, '第二个没弹');
+    assert.ok(seen[0].endsWith('不是你刚在接力台里改的，点「取消」。'), '框里带着提醒');
+    answer[0](true);
+    await first;
+
+    const second = confirm.mustAllow('改成员「c」？');
+    answer[1](false);
+    await assert.rejects(second, /没有允许/);
+    await assert.rejects(soon(confirm.mustAllow('改成员「d」？')), /一分钟内不再弹框/);
+    assert.equal(seen.length, 2, '取消之后不再弹');
+  } finally {
+    confirm.setDialogForTest(null);
+  }
+});

@@ -64,15 +64,19 @@ export function dropClone(dir: string): void {
 
 /** 把副本里的这些文件搬回项目（删掉的也删掉）。 */
 export function applyFiles(root: string, dir: string, files: { path: string; deleted: boolean }[]): void {
-  for (const f of files) {
+  // 先全部查一遍再动手：有一个要写到项目外面（路上是指出去的链接），一个都不搬，不会并到一半。
+  // 只查路上的文件夹：最后一级是链接的，删的是链接本身，写的时候也是先删链接再写成真文件，不碰它指的地方
+  const plan = files.map((f) => {
     const to = path.join(root, f.path);
+    if (path.resolve(path.dirname(to)) !== path.resolve(root)) noLinkPath(path.dirname(to), root);
+    return { ...f, to };
+  });
+  for (const f of plan) {
     if (f.deleted) {
-      fs.rmSync(to, { force: true });
+      fs.rmSync(f.to, { force: true });
       continue;
     }
-    fs.mkdirSync(path.dirname(to), { recursive: true });
-    noLinkPath(to, root);
-    fs.rmSync(to, { force: true });
-    copyIntoProject(path.join(dir, f.path), to, root);
+    fs.rmSync(f.to, { force: true });
+    copyIntoProject(path.join(dir, f.path), f.to, root);
   }
 }
